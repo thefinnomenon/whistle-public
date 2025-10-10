@@ -10,15 +10,15 @@ const getAppName = () => {
 }
 
 const getAppSlug = () => {
-  if (IS_DEV) return 'app-starter-dev'
-  if (IS_STAGING) return 'app-starter-staging'
-  return 'app-starter'
+  if (IS_DEV) return 'whistle-dev'
+  if (IS_STAGING) return 'whistle-staging'
+  return 'whistle'
 }
 
 const getAppScheme = () => {
-  if (IS_DEV) return 'appstarter-dev'
-  if (IS_STAGING) return 'appstarter-staging'
-  return 'appstarter'
+  if (IS_DEV) return 'whistle-dev'
+  if (IS_STAGING) return 'whistle-staging'
+  return 'whistle'
 }
 
 const getAppIcon = () => {
@@ -27,15 +27,15 @@ const getAppIcon = () => {
 }
 
 const getBundleIdentifier = () => {
-  if (IS_DEV) return 'com.appstarter.dev'
-  if (IS_STAGING) return 'com.appstarter.staging'
-  return 'com.appstarter'
+  if (IS_DEV) return 'com.whistle.dev'
+  if (IS_STAGING) return 'com.whistle.staging'
+  return 'com.whistle'
 }
 
 const getAndroidPackage = () => {
-  if (IS_DEV) return 'com.appstarter.dev'
-  if (IS_STAGING) return 'com.appstarter.staging'
-  return 'com.appstarter'
+  if (IS_DEV) return 'com.whistle.dev'
+  if (IS_STAGING) return 'com.whistle.staging'
+  return 'com.whistle'
 }
 
 export default {
@@ -92,7 +92,7 @@ export default {
         '@sentry/react-native/expo',
         {
           url: 'https://sentry.io/',
-          project: 'app-starter',
+          project: 'whistle',
           organization: 'the-finnternet',
         },
       ],
