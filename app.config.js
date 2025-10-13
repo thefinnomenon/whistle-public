@@ -46,6 +46,11 @@ export default {
     orientation: 'portrait',
     icon: getAppIcon(),
     scheme: getAppScheme(),
+    splash: {
+      image: './assets/images/splash.png',
+      resizeMode: 'contain',
+      backgroundColor: '#ffffff',
+    },
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     runtimeVersion: {
@@ -56,20 +61,25 @@ export default {
     },
     ios: {
       supportsTablet: true,
+      usesAppleSignIn: true,
       bundleIdentifier: 'com.finnternet.whistle',
       googleServicesFile: './GoogleService-Info.plist',
       config: {
         usesNonExemptEncryption: false,
+      },
+      entitlements: {
+        'aps-environment': 'production',
+      },
+      infoPlist: {
+        UIBackgroundModes: ['remote-notification'],
       },
     },
     android: {
       package: 'com.finnternet.whistle',
       googleServicesFile: './google-services.json',
       adaptiveIcon: {
-        backgroundColor: '#E6F4FE',
-        foregroundImage: './assets/images/android-icon-foreground.png',
-        backgroundImage: './assets/images/android-icon-background.png',
-        monochromeImage: './assets/images/android-icon-monochrome.png',
+        foregroundImage: './assets/images/adaptive-icon.png',
+        backgroundColor: '#ffffff',
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -84,7 +94,7 @@ export default {
       [
         'expo-splash-screen',
         {
-          image: './assets/images/splash-icon.png',
+          image: './assets/images/splash.png',
           imageWidth: 200,
           resizeMode: 'contain',
           backgroundColor: '#ffffff',
@@ -104,6 +114,8 @@ export default {
       '@react-native-firebase/app',
       '@react-native-firebase/auth',
       '@react-native-firebase/messaging',
+      '@react-native-google-signin/google-signin',
+      'expo-apple-authentication',
       [
         'expo-build-properties',
         {

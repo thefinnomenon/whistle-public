@@ -76,6 +76,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { analytics } from '@/lib/analytics'
+import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { getLatestGame } from '@/lib/firebase'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -122,6 +123,7 @@ export default function HomeScreen() {
   >()
   const [latestGame, setLatestGame] = useState<Game | null>(null)
   const { theme, setTheme, colorScheme } = useTheme()
+  const { user, signOut } = useAuth()
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined
@@ -194,6 +196,42 @@ export default function HomeScreen() {
           </View>
 
           <Separator />
+
+          {/* Auth Status Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Authentication Status</CardTitle>
+              <CardDescription>Current user information</CardDescription>
+            </CardHeader>
+            <CardContent className="gap-2">
+              <Text className="font-semibold">User ID: {user?.uid}</Text>
+              <Text>Email: {user?.email || 'N/A'}</Text>
+              <Text>Display Name: {user?.displayName || 'N/A'}</Text>
+              <Text>
+                Provider:{' '}
+                {user?.providerData.some((pd) => pd.providerId === 'apple.com')
+                  ? 'Apple'
+                  : 'Google'}
+              </Text>
+            </CardContent>
+            <CardFooter>
+              <Button
+                variant="destructive"
+                onPress={async () => {
+                  try {
+                    await signOut()
+                    toast.success('Signed out successfully')
+                  } catch (error) {
+                    console.error('Sign out error:', error)
+                    toast.error('Failed to sign out')
+                  }
+                }}
+                className="w-full"
+              >
+                <Text>Sign Out</Text>
+              </Button>
+            </CardFooter>
+          </Card>
 
           {/* Firebase Integration */}
           <Card>
