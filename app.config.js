@@ -4,9 +4,9 @@ const IS_DEV = process.env.APP_ENV === 'development'
 const IS_STAGING = process.env.APP_ENV === 'staging'
 
 const getAppName = () => {
-  if (IS_DEV) return 'App Starter (Dev)'
-  if (IS_STAGING) return 'App Starter (Staging)'
-  return 'App Starter'
+  if (IS_DEV) return 'Whistle (Dev)'
+  if (IS_STAGING) return 'Whistle (Staging)'
+  return 'Whistle'
 }
 
 const getAppSlug = () => {
@@ -27,21 +27,21 @@ const getAppIcon = () => {
 }
 
 const getBundleIdentifier = () => {
-  if (IS_DEV) return 'com.whistle.dev'
-  if (IS_STAGING) return 'com.whistle.staging'
-  return 'com.whistle'
+  if (IS_DEV) return 'com.finnternet.whistle.dev'
+  if (IS_STAGING) return 'com.finnternet.whistle.staging'
+  return 'com.finnternet.whistle'
 }
 
 const getAndroidPackage = () => {
-  if (IS_DEV) return 'com.whistle.dev'
-  if (IS_STAGING) return 'com.whistle.staging'
-  return 'com.whistle'
+  if (IS_DEV) return 'com.finnternet.whistle.dev'
+  if (IS_STAGING) return 'com.finnternet.whistle.staging'
+  return 'com.finnternet.whistle'
 }
 
 export default {
   expo: {
     name: getAppName(),
-    slug: getAppSlug(),
+    slug: 'whistle',
     version: '1.0.0',
     orientation: 'portrait',
     icon: getAppIcon(),
@@ -56,10 +56,15 @@ export default {
     },
     ios: {
       supportsTablet: true,
-      bundleIdentifier: getBundleIdentifier(),
+      bundleIdentifier: 'com.finnternet.whistle',
+      googleServicesFile: './GoogleService-Info.plist',
+      config: {
+        usesNonExemptEncryption: false,
+      },
     },
     android: {
-      package: getAndroidPackage(),
+      package: 'com.finnternet.whistle',
+      googleServicesFile: './google-services.json',
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
         foregroundImage: './assets/images/android-icon-foreground.png',
@@ -94,6 +99,23 @@ export default {
           url: 'https://sentry.io/',
           project: 'whistle',
           organization: 'the-finnternet',
+        },
+      ],
+      '@react-native-firebase/app',
+      '@react-native-firebase/auth',
+      '@react-native-firebase/messaging',
+      [
+        'expo-build-properties',
+        {
+          ios: {
+            useFrameworks: 'static',
+            forceStaticLinking: [
+              'RNFBApp',
+              'RNFBAuth',
+              'RNFBFirestore',
+              'RNFBMessaging',
+            ],
+          },
         },
       ],
     ],

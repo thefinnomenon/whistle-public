@@ -77,10 +77,11 @@ import {
 } from '@/components/ui/tooltip'
 import { analytics } from '@/lib/analytics'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { getLatestGame } from '@/lib/firebase'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as Sentry from '@sentry/react-native'
 import { AlertCircle, ChevronDown, Moon, Sun } from 'lucide-react-native'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { ScrollView, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -119,7 +120,20 @@ export default function HomeScreen() {
   const [selectValue, setSelectValue] = useState<
     { value: string; label: string } | undefined
   >()
+  const [latestGame, setLatestGame] = useState<Game | null>(null)
   const { theme, setTheme, colorScheme } = useTheme()
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined
+    getLatestGame((game) => {
+      setLatestGame(game)
+    }).then((unsub) => {
+      unsubscribe = unsub
+    })
+    return () => {
+      if (unsubscribe) unsubscribe()
+    }
+  }, [])
 
   const {
     control,
@@ -180,6 +194,28 @@ export default function HomeScreen() {
           </View>
 
           <Separator />
+
+          {/* Firebase Integration */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Firebase Integration</CardTitle>
+              <CardDescription>Latest game from Firestore</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {latestGame ? (
+                <View className="gap-2">
+                  <Text className="font-semibold">
+                    Game ID: {latestGame.id}
+                  </Text>
+                  <Text>Home Team: {latestGame.homeTeam}</Text>
+                  <Text>Away Team: {latestGame.awayTeam}</Text>
+                  <Text>Status: {latestGame.state}</Text>
+                </View>
+              ) : (
+                <Text className="text-muted-foreground">Loading game...</Text>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Buttons */}
           <Card>

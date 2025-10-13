@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+  	// Default deny all
+  	match /{document=**} {
+      allow read, write: if false;
+    }
+    
+  	// CRUD for user's own record
+  	match /users/{userId}/{document=**} {
+      allow read, write: if isSignedIn() && isUser(userId);
+    }
+
+    // User can create a username entry with user = uid
+    match /usernames/{username} {
+    	allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.user == request.auth.uid;
+    }
+    
+    // Admins can CRUD games
+    match /games/{game=**} {
+    	allow read, write: if isAdmin();
+    }
+    
+    // All users can read game info
+    	// Users in game can read questions
+    		// Users can read their predictions
+    		// Users can create their prediction with userId as docId if question is open
+      // Users can read, delete, and create their user record (score = 0)
+    match /games/{gameId} {
+      allow read: if isSignedIn();
+        match /questions/{questionId} {
+          allow read: if isSignedIn() && userIsInGame(gameId);
+          match /predictions/{userId} {
+            allow create: if isSignedIn() && isUser(userId) && userIsInGame(gameId) && isQuestionOpen(gameId, questionId);
+          }
+        }
+        match /users/{userId} {
+          allow read, delete: if isSignedIn() && isUser(userId);
+          allow create: if isSignedIn() && isUser(userId) && request.resource.data.score == 0 && isUsername();
+        }
+    }
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isUser(uid) {
+      return uid == request.auth.uid;
+    }
+
+    function isAdmin() {
+    	return request.auth.uid == 'CONFIGURE_ADMIN_UID';
+    }
+
+    function isUsername() {
+    	return get(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.user == request.auth.uid; 
+    }
+    
+    function isGameScheduled() {
+    	return resource.data.state == 'scheduled';
+    }
+    
+    function userIsInGame(gameId) {
+    	return exists(/databases/$(database)/documents/games/$(gameId)/users/$(request.auth.uid))
+    }
+    
+    function isQuestionOpen(gameId, questionId) {
+    	return get(/databases/$(database)/documents/games/$(gameId)/questions/$(questionId)).data.state == 'open';
+    }
+  }
+}

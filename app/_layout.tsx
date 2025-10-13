@@ -18,23 +18,18 @@ import React, { useEffect } from 'react'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-}
-
 const navigationIntegration = Sentry.reactNavigationIntegration({
   enableTimeToInitialDisplay: !isRunningInExpoGo(),
 })
 
 Sentry.init({
+  enabled: env.APP_ENV === 'production',
   dsn: env.SENTRY_DSN,
   tracesSampleRate: 0.5,
   integrations: [navigationIntegration],
   enableNativeFramesTracking: !isRunningInExpoGo(),
   enableAppStartTracking: true,
 })
-
-console.log('Sentry DSN:', env.SENTRY_DSN)
 
 function ThemedApp() {
   const { theme, colorScheme } = useTheme()
