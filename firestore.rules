@@ -6,7 +6,20 @@ service cloud.firestore {
       allow read, write: if false;
     }
     
-  	// CRUD for user's own record
+  	// Users can read their own user document
+  	match /users/{userId} {
+      allow read: if isSignedIn() && isUser(userId);
+      // Users can create their own user document with their UID and auth email
+      allow create: if isSignedIn()
+        && isUser(userId)
+        && request.resource.data.id == request.auth.uid
+        && (!('email' in request.resource.data) || request.resource.data.email == request.auth.token.email);
+      // Users can only update tokens and updatedAt fields
+      allow update: if isSignedIn() && isUser(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tokens', 'updatedAt']);
+    }
+
+  	// CRUD for user's subcollections
   	match /users/{userId}/{document=**} {
       allow read, write: if isSignedIn() && isUser(userId);
     }

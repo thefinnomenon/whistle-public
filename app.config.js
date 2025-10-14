@@ -90,6 +90,7 @@ export default {
       bundler: 'metro',
     },
     plugins: [
+      'expo-video',
       'expo-router',
       [
         'expo-splash-screen',

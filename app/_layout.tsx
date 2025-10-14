@@ -5,9 +5,9 @@ import {
 } from '@react-navigation/native'
 import { isRunningInExpoGo } from 'expo'
 import {
+  router,
   Slot,
   useNavigationContainerRef,
-  router,
   useSegments,
 } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
@@ -51,15 +51,23 @@ function AuthGate() {
     if (loading) return
 
     const inAuthGroup = pathname.startsWith('sign-in')
+    const inOnboarding = pathname.startsWith('onboarding')
 
     if (!user && !inAuthGroup) {
       // Redirect to sign-in if not authenticated and not already on sign-in page
       router.replace('/sign-in')
-    } else if (user && inAuthGroup) {
-      // Redirect to home if authenticated and on sign-in page
+    } else if (user && !hasCompletedOnboarding && !inOnboarding) {
+      // Redirect to onboarding if authenticated but hasn't completed onboarding
+      router.replace('/onboarding')
+    } else if (
+      user &&
+      hasCompletedOnboarding &&
+      (inAuthGroup || inOnboarding)
+    ) {
+      // Redirect to home if authenticated, completed onboarding, and on sign-in/onboarding page
       router.replace('/')
     }
-  }, [user, loading, pathname])
+  }, [user, loading, hasCompletedOnboarding, pathname])
 
   if (loading) {
     return (

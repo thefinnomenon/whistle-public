@@ -32,6 +32,7 @@ type User = {
   id: string
   email?: string
   username?: string
+  loginMethod?: LoginType
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   tokens: { [tokenId: string]: Token | FieldValue }

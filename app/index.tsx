@@ -214,7 +214,24 @@ export default function HomeScreen() {
                   : 'Google'}
               </Text>
             </CardContent>
-            <CardFooter>
+            <CardFooter className="gap-2 flex-col">
+              <Button
+                variant="outline"
+                onPress={async () => {
+                  const AsyncStorage = (
+                    await import('@react-native-async-storage/async-storage')
+                  ).default
+                  const { router } = await import('expo-router')
+                  await AsyncStorage.removeItem(
+                    `hasCompletedOnboarding_${user?.uid}`
+                  )
+                  toast.success('Onboarding reset!')
+                  router.replace('/onboarding')
+                }}
+                className="w-full"
+              >
+                <Text>Reset Onboarding</Text>
+              </Button>
               <Button
                 variant="destructive"
                 onPress={async () => {

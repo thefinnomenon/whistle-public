@@ -370,7 +370,11 @@ const sendNotificationsToGameUsers = async (
 
   const playerTokens = playerTokensPromisesRes
     .filter(
-      (playerTokenPromiseRes) => playerTokenPromiseRes.status === 'fulfilled'
+      (
+        playerTokenPromiseRes
+      ): playerTokenPromiseRes is PromiseFulfilledResult<{
+        [tokenId: string]: Token
+      }> => playerTokenPromiseRes.status === 'fulfilled'
     )
     .map((playerTokenPromiseRes) => flattenObject(playerTokenPromiseRes.value))
 
