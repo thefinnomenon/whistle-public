@@ -13,6 +13,7 @@ interface AuthContextType {
   userRecord: User | null
   loading: boolean
   hasCompletedOnboarding: boolean
+  hasUsername: boolean
   signOut: () => Promise<void>
   completeOnboarding: () => Promise<void>
 }
@@ -24,6 +25,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userRecord, setUserRecord] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false)
+  const [hasUsername, setHasUsername] = useState(false)
 
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (user) => {
@@ -39,6 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (userDoc.exists()) {
           const userData = userDoc.data() as User
           setUserRecord(userData)
+          setHasUsername(!!userData.username)
 
           // Track login event in Mixpanel
           analytics.identify(user.uid)
@@ -86,9 +89,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
             console.log('User record created successfully')
             setUserRecord(userCreated)
+            setHasUsername(false)
           } catch (error) {
             console.error('Failed to create user record:', error)
             setUserRecord(null)
+            setHasUsername(false)
           }
         }
 
@@ -100,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setUserRecord(null)
         setHasCompletedOnboarding(false)
+        setHasUsername(false)
       }
 
       setLoading(false)
@@ -121,6 +127,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user) {
       await AsyncStorage.setItem(`${ONBOARDING_KEY}_${user.uid}`, 'true')
       setHasCompletedOnboarding(true)
+
+      // Refresh user record to check for username
+      const userDoc = await firestore().collection('users').doc(user.uid).get()
+
+      if (userDoc.exists()) {
+        const userData = userDoc.data() as User
+        setUserRecord(userData)
+        setHasUsername(!!userData.username)
+      }
     }
   }
 
@@ -131,6 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userRecord,
         loading,
         hasCompletedOnboarding,
+        hasUsername,
         signOut,
         completeOnboarding,
       }}

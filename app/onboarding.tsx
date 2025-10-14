@@ -227,7 +227,7 @@ export default function OnboardingScreen() {
 
   const handleFinish = async () => {
     await completeOnboarding()
-    router.replace('/')
+    router.replace('/username')
   }
 
   if (step === 'intro') {

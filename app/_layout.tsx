@@ -43,7 +43,7 @@ Sentry.init({
 configureGoogleSignIn()
 
 function AuthGate() {
-  const { user, loading, hasCompletedOnboarding } = useAuth()
+  const { user, loading, hasCompletedOnboarding, hasUsername } = useAuth()
   const segments = useSegments()
   const pathname = segments.join('/')
 
@@ -52,6 +52,7 @@ function AuthGate() {
 
     const inAuthGroup = pathname.startsWith('sign-in')
     const inOnboarding = pathname.startsWith('onboarding')
+    const inUsername = pathname.startsWith('username')
 
     if (!user && !inAuthGroup) {
       // Redirect to sign-in if not authenticated and not already on sign-in page
@@ -59,15 +60,19 @@ function AuthGate() {
     } else if (user && !hasCompletedOnboarding && !inOnboarding) {
       // Redirect to onboarding if authenticated but hasn't completed onboarding
       router.replace('/onboarding')
+    } else if (user && hasCompletedOnboarding && !hasUsername && !inUsername) {
+      // Redirect to username if authenticated, completed onboarding, but no username
+      router.replace('/username')
     } else if (
       user &&
       hasCompletedOnboarding &&
-      (inAuthGroup || inOnboarding)
+      hasUsername &&
+      (inAuthGroup || inOnboarding || inUsername)
     ) {
-      // Redirect to home if authenticated, completed onboarding, and on sign-in/onboarding page
+      // Redirect to home if authenticated, completed onboarding, has username, and on sign-in/onboarding/username page
       router.replace('/')
     }
-  }, [user, loading, hasCompletedOnboarding, pathname])
+  }, [user, loading, hasCompletedOnboarding, hasUsername, pathname])
 
   if (loading) {
     return (

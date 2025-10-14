@@ -77,11 +77,12 @@ export const usernamesCollection = createCollection<Username>('usernames')
 export const setUsername = async (user: string, rawUsername: string) => {
   const username = rawUsername.trim().toLowerCase()
   console.log(`Trying to save username ${username} for user ${user}`)
-  if (username.length <= 3 && username.length >= 15)
-    throw Error('Username length must be between 3 and 15 characters.')
+  if (username.length <= 3 || username.length >= 20)
+    throw Error('Username length must be between 3 and 20 characters.')
   if (username.includes(' ')) throw Error('Username cannot contain a space.')
   const usernameSnap = await usernamesCollection.doc(username).get()
-  if (usernameSnap.exists)
+  /* @ts-ignore */
+  if (usernameSnap.exists())
     throw Error('Username not available. Please try another.')
   else {
     console.log('Setting username to ', username)
