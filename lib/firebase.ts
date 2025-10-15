@@ -1,10 +1,27 @@
-import { CollectionReference, DocumentData } from '@google-cloud/firestore'
-import firestore from '@react-native-firebase/firestore'
+import { DocumentData } from '@google-cloud/firestore'
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getFirestore,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  writeBatch,
+} from '@react-native-firebase/firestore'
 
-const createCollection = <T = DocumentData>(collectionName: string) => {
-  return firestore().collection(
-    collectionName
-  ) as unknown as CollectionReference<T>
+const db = getFirestore()
+
+export { db }
+
+const createCollection = <T = any>(collectionName: string) => {
+  return collection<T, DocumentData>(db, collectionName)
 }
 
 /********************
@@ -12,28 +29,26 @@ const createCollection = <T = DocumentData>(collectionName: string) => {
 *********************/
 export const usersCollection = createCollection<User>('users')
 export const addUser = async (user: Omit<User, 'createdAt' | 'updatedAt'>) => {
-  await usersCollection
-    .doc(user.id)
-    .set({ ...user, createdAt: firestore.FieldValue.serverTimestamp() })
+  await setDoc(doc(db, 'users', user.id), {
+    ...user,
+    createdAt: serverTimestamp(),
+  })
 }
-export const getUser = async (userId: string) =>
-  (await usersCollection.doc(userId).get()).data()
+export const getUser = async (userId: string): Promise<User | undefined> =>
+  (await getDoc(doc(db, 'users', userId))).data() as User | undefined
 export const updateUser = async (userId: string, update: Partial<User>) => {
-  await usersCollection
-    .doc(userId)
-    .set(
-      { ...update, updatedAt: firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    )
+  await setDoc(
+    doc(db, 'users', userId),
+    { ...update, updatedAt: serverTimestamp() },
+    { merge: true }
+  )
 }
 
 /***********************
   USER GAMES COLLECTION
 ************************/
 export const createUserGamesCollection = (userId: string) => {
-  return firestore().collection(
-    `users/${userId}/games`
-  ) as unknown as CollectionReference<UserGame>
+  return collection<UserGame, DocumentData>(db, `users/${userId}/games`)
 }
 
 export const updateUserGame = async (
@@ -41,12 +56,11 @@ export const updateUserGame = async (
   gameId: string,
   update: Partial<UserGame>
 ) => {
-  await createUserGamesCollection(userId)
-    .doc(gameId)
-    .set(
-      { ...update, updatedAt: firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    )
+  await setDoc(
+    doc(db, `users/${userId}/games`, gameId),
+    { ...update, updatedAt: serverTimestamp() },
+    { merge: true }
+  )
 }
 
 export const updateUserGamePrediction = async (
@@ -54,10 +68,10 @@ export const updateUserGamePrediction = async (
   gameId: string,
   update: Partial<UserGame>
 ) => {
-  await createUserGamesCollection(userId)
-    .doc(gameId)
-    /* @ts-ignore */
-    .update({ ...update, updatedAt: firestore.FieldValue.serverTimestamp() })
+  await updateDoc(doc(db, `users/${userId}/games`, gameId), {
+    ...update,
+    updatedAt: serverTimestamp(),
+  })
 }
 
 export const getUserGameStream = async (
@@ -65,9 +79,9 @@ export const getUserGameStream = async (
   gameId: string,
   setUserGame: (userGame?: UserGame) => void
 ): Promise<any> => {
-  await createUserGamesCollection(userId)
-    .doc(gameId)
-    .onSnapshot((userGame) => setUserGame(userGame.data()))
+  return onSnapshot(doc(db, `users/${userId}/games`, gameId), (snapshot) =>
+    setUserGame(snapshot.data() as UserGame | undefined)
+  )
 }
 
 /**********************
@@ -80,23 +94,15 @@ export const setUsername = async (user: string, rawUsername: string) => {
   if (username.length <= 3 || username.length >= 20)
     throw Error('Username length must be between 3 and 20 characters.')
   if (username.includes(' ')) throw Error('Username cannot contain a space.')
-  const usernameSnap = await usernamesCollection.doc(username).get()
-  /* @ts-ignore */
+  const usernameRef = doc(db, 'usernames', username)
+  const usernameSnap = await getDoc(usernameRef)
   if (usernameSnap.exists())
     throw Error('Username not available. Please try another.')
   else {
     console.log('Setting username to ', username)
-    const batch = firestore().batch()
-    /* @ts-ignore */
-    batch.set(usernameSnap.ref, { user })
-    batch.set(
-      /* @ts-ignore */
-      usersCollection.doc(user),
-      {
-        username,
-      },
-      { merge: true }
-    )
+    const batch = writeBatch(db)
+    batch.set(usernameRef, { user })
+    batch.set(doc(db, 'users', user), { username }, { merge: true })
     await batch.commit()
   }
 }
@@ -107,83 +113,90 @@ export const setUsername = async (user: string, rawUsername: string) => {
 export const gamesCollection = createCollection<Game>('games')
 
 export const addGame = async (game: Omit<Game, 'id' | 'createdAt'>) => {
-  const ref = gamesCollection.doc()
-  await gamesCollection.doc(ref.id).set({
+  const ref = doc(collection(db, 'games'))
+  await setDoc(ref, {
     id: ref.id,
     ...game,
-    createdAt: firestore.FieldValue.serverTimestamp(),
+    createdAt: serverTimestamp(),
   })
 }
-export const getGame = async (gameId: string) =>
-  (await gamesCollection.doc(gameId).get()).data()
+export const getGame = async (gameId: string): Promise<Game | undefined> =>
+  (await getDoc(doc(db, 'games', gameId))).data() as Game | undefined
 export const getGames = async (setGames: (games: Game[]) => void) => {
-  return await gamesCollection
-    .orderBy('createdAt', 'asc')
-    .onSnapshot((gamesSnap) => {
-      setGames(
-        gamesSnap.docs.map((gameSnap) => {
-          return {
-            ...(gameSnap.data() as Game),
-            startTime: gameSnap.data().startTime,
-            id: gameSnap.id,
-          }
-        })
-      )
-    })
+  const q = query(collection(db, 'games'), orderBy('createdAt', 'asc'))
+  return onSnapshot(q, (gamesSnap) => {
+    if (!gamesSnap) {
+      setGames([])
+      return
+    }
+    setGames(
+      gamesSnap.docs.map((gameSnap: any) => {
+        return {
+          ...(gameSnap.data() as Game),
+          startTime: gameSnap.data().startTime,
+          id: gameSnap.id,
+        }
+      })
+    )
+  })
 }
 
 export const getLatestGame = async (setGame: (game: Game) => void) => {
-  return await gamesCollection
-    .orderBy('createdAt', 'desc')
-    .limit(1)
-    .onSnapshot(
-      (gamesSnap) => {
-        const game = gamesSnap.docs.map((gameSnap) => {
-          return {
-            ...(gameSnap.data() as Game),
-            startTime: gameSnap.data().startTime,
-            id: gameSnap.id,
-          }
-        })[0]
-        setGame(game)
-      },
-      (error) => {
-        console.error('Error getting latest game:', error)
+  const q = query(
+    collection(db, 'games'),
+    orderBy('createdAt', 'desc'),
+    limit(1)
+  )
+  return onSnapshot(
+    q,
+    (gamesSnap) => {
+      if (!gamesSnap || gamesSnap.empty) {
+        console.log('No games found')
+        return
       }
-    )
+      const game = gamesSnap.docs.map((gameSnap: any) => {
+        return {
+          ...(gameSnap.data() as Game),
+          startTime: gameSnap.data().startTime,
+          id: gameSnap.id,
+        }
+      })[0]
+      setGame(game)
+    },
+    (error) => {
+      console.error('Error getting latest game:', error)
+    }
+  )
 }
 
 export const updateGame = async (gameId: string, updates: Partial<Game>) => {
-  await gamesCollection
-    .doc(gameId)
-    .set(
-      { ...updates, updatedAt: firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    )
+  await setDoc(
+    doc(db, 'games', gameId),
+    { ...updates, updatedAt: serverTimestamp() },
+    { merge: true }
+  )
 }
 
 export const deleteGame = async (gameId: string) => {
-  await gamesCollection.doc(gameId).delete()
+  await deleteDoc(doc(db, 'games', gameId))
 }
 
 /***********
   QUESTIONS
 ************/
 export const createQuestionsCollection = (gameId: string) => {
-  return firestore().collection(
-    `games/${gameId}/questions`
-  ) as unknown as CollectionReference<Question>
+  return collection<Question, DocumentData>(db, `games/${gameId}/questions`)
 }
 
 export const addQuestion = async (
   gameId: string,
   question: Omit<Question, 'id' | 'createdAt'>
 ) => {
-  const ref = gamesCollection.doc()
-  await createQuestionsCollection(gameId).add({
+  const ref = doc(collection(db, 'games'))
+  await addDoc(collection(db, `games/${gameId}/questions`), {
     id: ref.id,
     ...question,
-    createdAt: firestore.FieldValue.serverTimestamp(),
+    createdAt: serverTimestamp(),
   })
 }
 
@@ -191,18 +204,24 @@ export const getQuestionsStream = async (
   gameId: string,
   setQuestions: (questions: Question[]) => void
 ): Promise<any> => {
-  return await createQuestionsCollection(gameId)
-    .orderBy('createdAt', 'asc')
-    .onSnapshot((questionsSnap) => {
-      setQuestions(
-        questionsSnap.docs.map((questionSnap) => {
-          return {
-            ...(questionSnap.data() as Question),
-            id: questionSnap.id,
-          }
-        })
-      )
-    })
+  const q = query(
+    collection(db, `games/${gameId}/questions`),
+    orderBy('createdAt', 'asc')
+  )
+  return onSnapshot(q, (questionsSnap) => {
+    if (!questionsSnap || questionsSnap.empty) {
+      setQuestions([])
+      return
+    }
+    setQuestions(
+      questionsSnap.docs.map((questionSnap: any) => {
+        return {
+          ...(questionSnap.data() as Question),
+          id: questionSnap.id,
+        }
+      })
+    )
+  })
 }
 
 export const updateQuestion = async (
@@ -210,21 +229,18 @@ export const updateQuestion = async (
   questionId: string,
   updates: Partial<Question>
 ) => {
-  await createQuestionsCollection(gameId)
-    .doc(questionId)
-    .set(
-      { ...updates, updatedAt: firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    )
+  await setDoc(
+    doc(db, `games/${gameId}/questions`, questionId),
+    { ...updates, updatedAt: serverTimestamp() },
+    { merge: true }
+  )
 }
 
 /*********
   PLAYERS
 **********/
 export const createPlayersCollection = (gameId: string) => {
-  return firestore().collection(
-    `games/${gameId}/users`
-  ) as unknown as CollectionReference<GamePlayer>
+  return collection<GamePlayer, DocumentData>(db, `games/${gameId}/users`)
 }
 
 export const updateGamePlayer = async (
@@ -232,12 +248,11 @@ export const updateGamePlayer = async (
   playerId: string,
   update: Partial<GamePlayer>
 ) => {
-  await createPlayersCollection(gameId)
-    .doc(playerId)
-    .set(
-      { ...update, updatedAt: firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    )
+  await setDoc(
+    doc(db, `games/${gameId}/users`, playerId),
+    { ...update, updatedAt: serverTimestamp() },
+    { merge: true }
+  )
 }
 
 export const getGamePlayerStream = async (
@@ -245,13 +260,13 @@ export const getGamePlayerStream = async (
   playerId: string,
   setGamePlayer: (gamePlayer?: GamePlayer) => void
 ): Promise<any> => {
-  await createPlayersCollection(gameId)
-    .doc(playerId)
-    .onSnapshot((gamePlayer) => setGamePlayer(gamePlayer.data()))
+  return onSnapshot(doc(db, `games/${gameId}/users`, playerId), (snapshot) =>
+    setGamePlayer(snapshot.data() as GamePlayer | undefined)
+  )
 }
 
 export const deleteGamePlayer = async (gameId: string, playerId: string) => {
-  await createPlayersCollection(gameId).doc(playerId).delete()
+  await deleteDoc(doc(db, `games/${gameId}/users`, playerId))
 }
 
 /*************
@@ -263,8 +278,8 @@ export const addPrediction = async (
   userId: string,
   prediction: Omit<Prediction, 'createdAt'>
 ) => {
-  await firestore()
-    .collection(`games/${gameId}/questions/${questionId}/predictions`)
-    .doc(userId)
-    .set({ ...prediction, createdAt: firestore.FieldValue.serverTimestamp() })
+  await setDoc(
+    doc(db, `games/${gameId}/questions/${questionId}/predictions`, userId),
+    { ...prediction, createdAt: serverTimestamp() }
+  )
 }

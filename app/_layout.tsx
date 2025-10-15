@@ -69,8 +69,16 @@ function AuthGate() {
       hasUsername &&
       (inAuthGroup || inOnboarding || inUsername)
     ) {
-      // Redirect to home if authenticated, completed onboarding, has username, and on sign-in/onboarding/username page
-      router.replace('/')
+      // Redirect to game lobby after completing onboarding
+      router.replace('/game/lobby')
+    } else if (
+      user &&
+      hasCompletedOnboarding &&
+      hasUsername &&
+      pathname === ''
+    ) {
+      // Redirect root path to game lobby
+      router.replace('/game/lobby')
     }
   }, [user, loading, hasCompletedOnboarding, hasUsername, pathname])
 

@@ -33,6 +33,7 @@ type User = {
   email?: string
   username?: string
   loginMethod?: LoginType
+  isAdmin?: boolean
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   tokens: { [tokenId: string]: Token | FieldValue }

@@ -1,8 +1,15 @@
-import auth from '@react-native-firebase/auth'
+import {
+  getAuth,
+  signInWithCredential,
+  AppleAuthProvider,
+  GoogleAuthProvider,
+} from '@react-native-firebase/auth'
 import { GoogleSignin } from '@react-native-google-signin/google-signin'
 import * as AppleAuthentication from 'expo-apple-authentication'
 import * as Crypto from 'expo-crypto'
 import { toast } from 'sonner-native'
+
+const auth = getAuth()
 
 // Configure Google Sign-In
 export const configureGoogleSignIn = () => {
@@ -34,8 +41,8 @@ export const signInWithApple = async () => {
       throw new Error('No identity token returned from Apple')
     }
 
-    const credential = auth.AppleAuthProvider.credential(identityToken, nonce)
-    await auth().signInWithCredential(credential)
+    const credential = AppleAuthProvider.credential(identityToken, nonce)
+    await signInWithCredential(auth, credential)
   } catch (error: any) {
     // User cancelled the sign-in flow
     if (
@@ -61,8 +68,8 @@ export const signInWithGoogle = async () => {
 
     if (!res.data.idToken) throw new Error('No ID token returned from Google')
 
-    const credential = auth.GoogleAuthProvider.credential(res.data.idToken)
-    await auth().signInWithCredential(credential)
+    const credential = GoogleAuthProvider.credential(res.data.idToken)
+    await signInWithCredential(auth, credential)
   } catch (error) {
     console.error('Google sign-in error:', error)
     toast.error('Failed to sign in with Google')

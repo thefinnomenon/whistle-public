@@ -78,6 +78,7 @@
     "@rn-primitives/toggle-group": "^1.2.0",
     "@rn-primitives/tooltip": "^1.2.0",
     "@sentry/react-native": "~7.2.0",
+    "@shopify/flash-list": "^2.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.2",
@@ -144,7 +145,12 @@
     "*.{json,md}": [
       "prettier --write"
     ],
-    "*.{ts,tsx}": "bash -c 'tsc --noEmit'"
+    "*.{ts,tsx}": "bash -c 'tsc --noEmit'",
+    "admin/**/*.{ts,tsx}": "bash -c 'cd admin && tsc --noEmit'",
+    "admin/**/*.{js,jsx,ts,tsx}": [
+      "cd admin && eslint --fix",
+      "cd admin && prettier --write"
+    ]
   },
   "private": true,
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e",

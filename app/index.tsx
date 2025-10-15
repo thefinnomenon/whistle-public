@@ -123,7 +123,7 @@ export default function HomeScreen() {
   >()
   const [latestGame, setLatestGame] = useState<Game | null>(null)
   const { theme, setTheme, colorScheme } = useTheme()
-  const { user, signOut } = useAuth()
+  const { firebaseUser, signOut } = useAuth()
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined
@@ -204,12 +204,16 @@ export default function HomeScreen() {
               <CardDescription>Current user information</CardDescription>
             </CardHeader>
             <CardContent className="gap-2">
-              <Text className="font-semibold">User ID: {user?.uid}</Text>
-              <Text>Email: {user?.email || 'N/A'}</Text>
-              <Text>Display Name: {user?.displayName || 'N/A'}</Text>
+              <Text className="font-semibold">
+                User ID: {firebaseUser?.uid}
+              </Text>
+              <Text>Email: {firebaseUser?.email || 'N/A'}</Text>
+              <Text>Display Name: {firebaseUser?.displayName || 'N/A'}</Text>
               <Text>
                 Provider:{' '}
-                {user?.providerData.some((pd) => pd.providerId === 'apple.com')
+                {firebaseUser?.providerData.some(
+                  (pd: any) => pd.providerId === 'apple.com'
+                )
                   ? 'Apple'
                   : 'Google'}
               </Text>
@@ -223,7 +227,7 @@ export default function HomeScreen() {
                   ).default
                   const { router } = await import('expo-router')
                   await AsyncStorage.removeItem(
-                    `hasCompletedOnboarding_${user?.uid}`
+                    `hasCompletedOnboarding_${firebaseUser?.uid}`
                   )
                   toast.success('Onboarding reset!')
                   router.replace('/onboarding')

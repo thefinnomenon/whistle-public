@@ -9,7 +9,7 @@ import { ActivityIndicator, Image, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 export default function UsernameScreen() {
-  const { user, completeOnboarding } = useAuth()
+  const { firebaseUser, completeOnboarding } = useAuth()
   const [username, setUsernameInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -20,11 +20,11 @@ export default function UsernameScreen() {
   }
 
   const handleSubmit = async () => {
-    if (!user) return
+    if (!firebaseUser) return
 
     setLoading(true)
     try {
-      await setUsername(user.uid, username)
+      await setUsername(firebaseUser.uid, username)
       await completeOnboarding()
       router.replace('/')
     } catch (error: any) {

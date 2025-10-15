@@ -63,7 +63,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-    	return request.auth.uid == 'CONFIGURE_ADMIN_UID';
+    	return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
     }
 
     function isUsername() {

@@ -4,6 +4,9 @@ const expoConfig = require('eslint-config-expo/flat')
 const prettierConfig = require('eslint-config-prettier')
 
 module.exports = defineConfig([
+  {
+    ignores: ['dist/*', 'node_modules/*', '.expo/*', 'admin/**/*'],
+  },
   expoConfig,
   prettierConfig,
   {
@@ -13,6 +16,5 @@ module.exports = defineConfig([
     rules: {
       'prettier/prettier': 'error',
     },
-    ignores: ['dist/*', 'node_modules/*', '.expo/*'],
   },
 ])

@@ -1,16 +1,25 @@
-import { addUser, getUser } from '@/firebase'
+import { addUser, getUser } from '@/lib/firebase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth'
-import firestore from '@react-native-firebase/firestore'
+import {
+  getAuth,
+  onAuthStateChanged,
+  signOut,
+} from '@react-native-firebase/auth'
+import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
+import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore'
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { toast } from 'sonner-native'
 import { analytics } from '../analytics'
 
+type FirebaseUser = FirebaseAuthTypes.User
+
 const ONBOARDING_KEY = 'hasCompletedOnboarding'
+const auth = getAuth()
+const db = getFirestore()
 
 interface AuthContextType {
-  user: FirebaseAuthTypes.User | null
-  userRecord: User | null
+  firebaseUser: FirebaseUser | null
+  user: User | null
   loading: boolean
   hasCompletedOnboarding: boolean
   hasUsername: boolean
@@ -21,41 +30,38 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<FirebaseAuthTypes.User | null>(null)
-  const [userRecord, setUserRecord] = useState<User | null>(null)
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false)
   const [hasUsername, setHasUsername] = useState(false)
 
   useEffect(() => {
-    const unsubscribe = auth().onAuthStateChanged(async (user) => {
-      setUser(user)
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseUser(fbUser)
 
-      if (user) {
+      if (fbUser) {
         // Fetch user record from Firestore
-        const userDoc = await firestore()
-          .collection('users')
-          .doc(user.uid)
-          .get()
+        const userDoc = await getDoc(doc(db, 'users', fbUser.uid))
 
         if (userDoc.exists()) {
           const userData = userDoc.data() as User
-          setUserRecord(userData)
+          setUser(userData)
           setHasUsername(!!userData.username)
 
           // Track login event in Mixpanel
-          analytics.identify(user.uid)
+          analytics.identify(fbUser.uid)
           analytics.track('User Signed In', {
             login_method: userData.loginMethod,
             email: userData.email,
-            user_id: user.uid,
+            user_id: fbUser.uid,
           })
         } else {
           // Create user record if it doesn't exist
           console.log('User record not found, creating...')
 
           // Determine login method from provider
-          const providers = user.providerData
+          const providers = fbUser.providerData
           let loginMethod: LoginType | undefined
           if (providers.some((p) => p.providerId === 'apple.com')) {
             loginMethod = 'Apple'
@@ -64,15 +70,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
 
           const newUserDoc: Omit<User, 'createdAt' | 'updatedAt'> = {
-            id: user.uid,
-            email: user.email || undefined,
+            id: fbUser.uid,
+            email: fbUser.email || undefined,
             loginMethod,
             tokens: {},
           }
 
           try {
             await addUser(newUserDoc)
-            const userCreated = await getUser(user.uid)
+            const userCreated = await getUser(fbUser.uid)
 
             if (!userCreated) {
               console.error('User creation failed')
@@ -81,29 +87,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
 
             // Track user creation in Mixpanel
-            analytics.identify(user.uid)
+            analytics.identify(fbUser.uid)
             analytics.track('User Created', {
               login_method: loginMethod,
-              email: user.email,
+              email: fbUser.email,
             })
 
             console.log('User record created successfully')
-            setUserRecord(userCreated)
+            setUser(userCreated)
             setHasUsername(false)
           } catch (error) {
             console.error('Failed to create user record:', error)
-            setUserRecord(null)
+            setUser(null)
             setHasUsername(false)
           }
         }
 
         // Check if user has completed onboarding
         const onboardingStatus = await AsyncStorage.getItem(
-          `${ONBOARDING_KEY}_${user.uid}`
+          `${ONBOARDING_KEY}_${fbUser.uid}`
         )
         setHasCompletedOnboarding(onboardingStatus === 'true')
       } else {
-        setUserRecord(null)
+        setUser(null)
         setHasCompletedOnboarding(false)
         setHasUsername(false)
       }
@@ -114,9 +120,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe
   }, [])
 
-  const signOut = async () => {
+  const handleSignOut = async () => {
     try {
-      await auth().signOut()
+      await signOut(auth)
     } catch (error) {
       console.error('Sign out error:', error)
       throw error
@@ -124,16 +130,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const completeOnboarding = async () => {
-    if (user) {
-      await AsyncStorage.setItem(`${ONBOARDING_KEY}_${user.uid}`, 'true')
+    if (firebaseUser) {
+      await AsyncStorage.setItem(
+        `${ONBOARDING_KEY}_${firebaseUser.uid}`,
+        'true'
+      )
       setHasCompletedOnboarding(true)
 
       // Refresh user record to check for username
-      const userDoc = await firestore().collection('users').doc(user.uid).get()
+      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
 
       if (userDoc.exists()) {
         const userData = userDoc.data() as User
-        setUserRecord(userData)
+        setUser(userData)
         setHasUsername(!!userData.username)
       }
     }
@@ -142,12 +151,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
+        firebaseUser,
         user,
-        userRecord,
         loading,
         hasCompletedOnboarding,
         hasUsername,
-        signOut,
+        signOut: handleSignOut,
         completeOnboarding,
       }}
     >
