@@ -285,6 +285,7 @@ exports.calculateScores = onDocumentUpdated(
     // Build new leaderboard
     const newLeaderboard = leaderboardQueryRes.docs.map((doc, index) => ({
       place: places[index],
+      userId: doc.id,
       ...doc.data(),
     }))
 
@@ -371,14 +372,125 @@ exports.handleGameEnd = onDocumentUpdated(
 
       const expo = new Expo({ accessToken: expoAccessToken.value() })
 
-      // Send out end of game notifications
+      // Calculate and distribute winnings
+      const winnerNotifications = await distributeWinnings(gameId, game)
+
+      // Notify winners
+      await notifyWinners(winnerNotifications, game, expo)
+
+      // Send end of game notification to all players
       const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
       await sendNotificationsToGameUsers(expo, gameId, message)
-
-      // TODO: Handle payouts to 1st place winners
     }
   }
 )
+
+const distributeWinnings = async (
+  gameId: string,
+  game: Game
+): Promise<{ userId: string; amount: number }[]> => {
+  console.log('Calculating winnings for game', gameId)
+
+  if (!game.leaderboard || game.leaderboard.length === 0) {
+    console.log('No leaderboard to distribute winnings from')
+    return []
+  }
+
+  // Get the top score
+  const topScore = game.leaderboard[0].score
+
+  // Query ALL users with the top score (these are all first place winners)
+  const winnerDocs = await admin
+    .firestore()
+    .collection(`games/${gameId}/users`)
+    .where('score', '==', topScore)
+    .get()
+
+  if (winnerDocs.empty) {
+    console.log('No winners found')
+    return []
+  }
+
+  const numWinners = winnerDocs.size
+  const prizePerWinner = game.prize / numWinners
+
+  console.log(
+    `Distributing $${game.prize} to ${numWinners} first place winner(s) with score ${topScore}: $${prizePerWinner.toFixed(2)} each`
+  )
+
+  // Update winnings for each winner (batch write)
+  const batch = admin.firestore().batch()
+  const winnerNotifications: { userId: string; amount: number }[] = []
+
+  winnerDocs.docs.forEach((winnerDoc) => {
+    const userId = winnerDoc.id
+    const userRef = admin.firestore().doc(`users/${userId}`)
+
+    // Increment winnings
+    batch.update(userRef, {
+      winnings: admin.firestore.FieldValue.increment(prizePerWinner),
+    })
+
+    winnerNotifications.push({ userId, amount: prizePerWinner })
+  })
+
+  await batch.commit()
+  console.log('Winnings distributed successfully')
+
+  return winnerNotifications
+}
+
+const notifyWinners = async (
+  winnerNotifications: { userId: string; amount: number }[],
+  game: Game,
+  expo: Expo
+) => {
+  if (winnerNotifications.length > 0) {
+    console.log('No winners to notify...')
+    return
+  }
+
+  console.log(`Notifying ${winnerNotifications.length} winners`)
+
+  await Promise.all(
+    winnerNotifications.map(async ({ userId, amount }) => {
+      const userData = (
+        await admin.firestore().collection('users').doc(userId).get()
+      ).data() as { tokens?: { [tokenId: string]: Token } }
+
+      if (!userData?.tokens) {
+        console.error(`No tokens found for user ${userId}`)
+        return
+      }
+
+      const tokens = Object.values(userData.tokens)
+      const messages: any[] = []
+
+      tokens.forEach(({ token }) => {
+        if (!Expo.isExpoPushToken(token)) {
+          console.error(`Invalid push token for user ${userId}`)
+          return
+        }
+
+        messages.push({
+          to: token,
+          sound: 'default',
+          title: '🎉 You Won!',
+          body: `Congratulations! You won $${amount.toFixed(2)} in ${game.homeTeam} vs. ${game.awayTeam}!`,
+          data: { gameId: game.id, winnings: amount },
+          priority: 'high',
+        })
+      })
+
+      if (messages.length > 0) {
+        const chunks = expo.chunkPushNotifications(messages)
+        await Promise.allSettled(
+          chunks.map((chunk) => expo.sendPushNotificationsAsync(chunk))
+        )
+      }
+    })
+  )
+}
 
 const sendNotificationsToGameUsers = async (
   expo: Expo,

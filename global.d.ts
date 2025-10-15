@@ -25,6 +25,7 @@ type UserGame = {
 type GamePlayer = {
   score: number
   username: string
+  place?: number
   updatedAt: FirestoreTimestamp
 }
 
@@ -34,6 +35,7 @@ type User = {
   username?: string
   loginMethod?: LoginType
   isAdmin?: boolean
+  winnings?: number
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   tokens: { [tokenId: string]: Token | FieldValue }
@@ -83,6 +85,7 @@ type Prediction = {
 }
 
 type LeaderboardItem = {
+  userId: string
   username: string
   score: number
   place: number

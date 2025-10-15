@@ -1,6 +1,11 @@
 import { Feather, FontAwesome5, Ionicons } from '@expo/vector-icons'
 import { FlashList } from '@shopify/flash-list'
-import { router, useLocalSearchParams, useNavigation } from 'expo-router'
+import {
+  router,
+  useLocalSearchParams,
+  useNavigation,
+  useSegments,
+} from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
@@ -10,6 +15,7 @@ import {
   View,
   useColorScheme,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
@@ -24,6 +30,8 @@ import { NFL } from '../../logos'
 
 export default function GameScreen() {
   const navigation = useNavigation()
+  const segments = useSegments()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { game, setGame } = useGame()
   const { gameId } = useLocalSearchParams<{ gameId: string }>()
@@ -78,7 +86,7 @@ export default function GameScreen() {
   }, [handleLeaveGame, navigation])
 
   useEffect(() => {
-    if (!gameId || !user) return
+    if (!gameId || !user?.id) return
 
     console.log('Subscribing to Game Info for Game: ', gameId)
     let unsubscribeGame: () => void
@@ -106,7 +114,7 @@ export default function GameScreen() {
       if (unsubscribeUserGame) unsubscribeUserGame()
       if (unsubscribeGamePlayer) unsubscribeGamePlayer()
     }
-  }, [gameId, setGame, user])
+  }, [gameId, setGame, user?.id])
 
   if (!gameId) return
 
@@ -117,16 +125,27 @@ export default function GameScreen() {
   if (!game || !userGame) return null
 
   return (
-    <View className="flex flex-1 pt-10">
-      <View className="flex flex-row items-center justify-center h-16 border-b border-gray-300 dark:border-gray-700 relative">
+    <View className="flex flex-1">
+      <View
+        className="flex flex-row items-center justify-center border-b border-gray-300 dark:border-gray-800 relative"
+        style={{ paddingTop: insets.top, height: 64 + insets.top }}
+      >
         {game.state === 'open' && (
           <TouchableOpacity
             className="absolute left-4 z-50"
+            style={{ top: insets.top + 18 }}
             onPress={() => handleLeaveGame()}
           >
             <Feather name="x" size={28} color="slategray" />
           </TouchableOpacity>
         )}
+        <TouchableOpacity
+          className="absolute right-4 z-50"
+          style={{ top: insets.top + 20 }}
+          onPress={() => router.push('/settings')}
+        >
+          <Ionicons name="settings-outline" size={24} color="slategray" />
+        </TouchableOpacity>
         <View className="flex flex-row items-center gap-3">
           <Image
             className="h-12 w-12"

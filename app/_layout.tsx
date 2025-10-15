@@ -6,7 +6,7 @@ import {
 import { isRunningInExpoGo } from 'expo'
 import {
   router,
-  Slot,
+  Stack,
   useNavigationContainerRef,
   useSegments,
 } from 'expo-router'
@@ -67,17 +67,9 @@ function AuthGate() {
       user &&
       hasCompletedOnboarding &&
       hasUsername &&
-      (inAuthGroup || inOnboarding || inUsername)
+      (inAuthGroup || inOnboarding || inUsername || pathname === '')
     ) {
-      // Redirect to game lobby after completing onboarding
-      router.replace('/game/lobby')
-    } else if (
-      user &&
-      hasCompletedOnboarding &&
-      hasUsername &&
-      pathname === ''
-    ) {
-      // Redirect root path to game lobby
+      // Redirect to game lobby after completing onboarding or from root index
       router.replace('/game/lobby')
     }
   }, [user, loading, hasCompletedOnboarding, hasUsername, pathname])
@@ -90,7 +82,16 @@ function AuthGate() {
     )
   }
 
-  return <Slot />
+  return (
+    <Stack>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+      <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+      <Stack.Screen name="username" options={{ headerShown: false }} />
+      <Stack.Screen name="game" options={{ headerShown: false }} />
+      <Stack.Screen name="settings" options={{ headerShown: false }} />
+    </Stack>
+  )
 }
 
 function ThemedApp() {

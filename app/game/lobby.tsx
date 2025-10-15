@@ -109,6 +109,13 @@ export default function GameLobbyScreen() {
 
   return (
     <View className="flex-1 items-center justify-start px-4">
+      {/* Header with Settings Icon */}
+      <View className="w-full flex-row justify-end pt-12 px-4 absolute top-0 right-0 z-10">
+        <TouchableOpacity onPress={() => router.push('/settings')}>
+          <Ionicons name="settings-outline" size={28} color="slategray" />
+        </TouchableOpacity>
+      </View>
+
       {/* Team Logos - Top Third */}
       <View className="w-full h-1/3 flex-row items-center justify-center pt-12">
         <View className="flex-1 items-center justify-center">

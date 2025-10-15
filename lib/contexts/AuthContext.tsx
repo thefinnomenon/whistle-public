@@ -1,12 +1,17 @@
 import { addUser, getUser } from '@/lib/firebase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
 import {
   getAuth,
   onAuthStateChanged,
   signOut,
 } from '@react-native-firebase/auth'
-import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
-import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore'
+import {
+  doc,
+  getDoc,
+  getFirestore,
+  onSnapshot,
+} from '@react-native-firebase/firestore'
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { toast } from 'sonner-native'
 import { analytics } from '../analytics'
@@ -37,17 +42,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [hasUsername, setHasUsername] = useState(false)
 
   useEffect(() => {
+    let userUnsubscribe: (() => void) | null = null
+
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser)
 
+      // Unsubscribe from previous user listener
+      if (userUnsubscribe) {
+        userUnsubscribe()
+        userUnsubscribe = null
+      }
+
       if (fbUser) {
-        // Fetch user record from Firestore
+        // Subscribe to real-time user updates
+        userUnsubscribe = onSnapshot(
+          doc(db, 'users', fbUser.uid),
+          (userDoc) => {
+            if (userDoc.exists()) {
+              const userData = userDoc.data() as User
+              setUser(userData)
+              setHasUsername(!!userData.username)
+            }
+          },
+          (error) => {
+            console.error('Error listening to user updates:', error)
+          }
+        )
+
+        // Fetch initial user record for analytics
         const userDoc = await getDoc(doc(db, 'users', fbUser.uid))
 
         if (userDoc.exists()) {
           const userData = userDoc.data() as User
-          setUser(userData)
-          setHasUsername(!!userData.username)
 
           // Track login event in Mixpanel
           analytics.identify(fbUser.uid)
@@ -117,7 +143,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
     })
 
-    return unsubscribe
+    return () => {
+      unsubscribe()
+      if (userUnsubscribe) {
+        userUnsubscribe()
+      }
+    }
   }, [])
 
   const handleSignOut = async () => {
