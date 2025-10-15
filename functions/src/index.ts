@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import type { ExpoPushMessage } from 'expo-server-sdk'
 import { Expo } from 'expo-server-sdk'
 import admin from 'firebase-admin'
@@ -165,23 +166,29 @@ const updateScores = async (
   users: string[],
   value: number
 ) => {
-  return await Promise.allSettled(
-    users.map(async (user) => {
-      try {
-        console.log(
-          `${value > 0 ? 'In' : 'De'}crementing score for user ${user}`
-        )
-        await admin
-          .firestore()
-          .doc(`games/${gameId}/users/${user}`)
-          .update({
-            score: admin.firestore.FieldValue.increment(value),
-          })
-      } catch (error) {
-        console.error(`Failed to increment score for user ${user}`, error)
-      }
-    })
+  // Firestore batch limit is 500 operations
+  const BATCH_SIZE = 500
+  const batches = []
+
+  console.log(
+    `${value > 0 ? 'In' : 'De'}crementing score for ${users.length} users`
   )
+
+  for (let i = 0; i < users.length; i += BATCH_SIZE) {
+    const batch = admin.firestore().batch()
+    const batchUsers = users.slice(i, i + BATCH_SIZE)
+
+    batchUsers.forEach((user) => {
+      const userRef = admin.firestore().doc(`games/${gameId}/users/${user}`)
+      batch.update(userRef, {
+        score: admin.firestore.FieldValue.increment(value),
+      })
+    })
+
+    batches.push(batch.commit())
+  }
+
+  return await Promise.allSettled(batches)
 }
 
 type LeaderboardDoc =
@@ -253,37 +260,53 @@ exports.calculateScores = onDocumentUpdated(
       console.log(
         'Question answer was changed! Reverting and updating scores...'
       )
-      const oldCorrectUsers = await getCorrectUsers(
-        gameId,
-        questionId,
-        oldQuestion
-      )
-      await updateScores(gameId, questionId, oldCorrectUsers, -1)
-      const correctUsers = await getCorrectUsers(gameId, questionId, question)
-      await updateScores(gameId, questionId, correctUsers, 1)
+      const [oldCorrectUsers, correctUsers] = await Promise.all([
+        getCorrectUsers(gameId, questionId, oldQuestion),
+        getCorrectUsers(gameId, questionId, question),
+      ])
+      await Promise.all([
+        updateScores(gameId, questionId, oldCorrectUsers, -1),
+        updateScores(gameId, questionId, correctUsers, 1),
+      ])
     }
 
-    // Retrieve top 100 users
+    // Retrieve top 100 users (sorted by score desc, then username asc for stable tie-breaking)
     const leaderboardQueryRes = await admin
       .firestore()
       .collection(`games/${gameId}/users`)
       .orderBy('score', 'desc')
+      .orderBy('username', 'asc')
       .limit(100)
       .get()
 
     // Calculate places
     const places = calculatePlaces(leaderboardQueryRes.docs)
 
-    // Updating leaderboard
-    await admin
-      .firestore()
-      .doc(`games/${gameId}`)
-      .update({
-        leaderboard: leaderboardQueryRes.docs.map((doc, index) => ({
-          place: places[index],
-          ...doc.data(),
-        })),
+    // Build new leaderboard
+    const newLeaderboard = leaderboardQueryRes.docs.map((doc, index) => ({
+      place: places[index],
+      ...doc.data(),
+    }))
+
+    // Calculate hash of new leaderboard
+    const newLeaderboardHash = createHash('sha256')
+      .update(JSON.stringify(newLeaderboard))
+      .digest('hex')
+
+    // Get current game to compare leaderboard hash
+    const gameDoc = await admin.firestore().doc(`games/${gameId}`).get()
+    const currentLeaderboardHash = gameDoc.data()?.leaderboardHash
+
+    // Only update if leaderboard changed
+    if (currentLeaderboardHash !== newLeaderboardHash) {
+      console.log('Leaderboard changed, updating...')
+      await admin.firestore().doc(`games/${gameId}`).update({
+        leaderboard: newLeaderboard,
+        leaderboardHash: newLeaderboardHash,
       })
+    } else {
+      console.log('Leaderboard unchanged, skipping update')
+    }
   }
 )
 
@@ -291,29 +314,44 @@ exports.calculateScores = onDocumentUpdated(
 exports.updatePlayerCountForGames = onSchedule('every 1 minutes', async () => {
   console.log('Updating game user counts for open and scheduled games!')
 
-  const scheduledGames = await admin
-    .firestore()
-    .collection('games')
-    .where('state', '==', 'scheduled')
-    .get()
-
-  const openGames = await admin
-    .firestore()
-    .collection('games')
-    .where('state', '==', 'open')
-    .get()
+  const [scheduledGames, openGames] = await Promise.all([
+    admin
+      .firestore()
+      .collection('games')
+      .where('state', '==', 'scheduled')
+      .get(),
+    admin.firestore().collection('games').where('state', '==', 'open').get(),
+  ])
 
   const games = scheduledGames.docs.concat(openGames.docs)
-  games.forEach(async (game) => {
-    console.log(`Getting count for game ${game.id}`)
-    const { count } = (
-      await admin.firestore().collection(`games/${game.id}/users`).count().get()
-    ).data()
-    console.log(`Updating count to ${count} for game ${game.id}`)
-    await admin.firestore().doc(`games/${game.id}`).update({
-      userCount: count,
+
+  await Promise.all(
+    games.map(async (game) => {
+      console.log(`Getting count for game ${game.id}`)
+      const { count } = (
+        await admin
+          .firestore()
+          .collection(`games/${game.id}/users`)
+          .count()
+          .get()
+      ).data()
+
+      const currentCount = game.data().userCount
+
+      if (currentCount !== count) {
+        console.log(
+          `Updating count from ${currentCount} to ${count} for game ${game.id}`
+        )
+        await admin.firestore().doc(`games/${game.id}`).update({
+          userCount: count,
+        })
+      } else {
+        console.log(
+          `Count unchanged (${count}) for game ${game.id}, skipping update`
+        )
+      }
     })
-  })
+  )
 })
 
 exports.handleGameEnd = onDocumentUpdated(

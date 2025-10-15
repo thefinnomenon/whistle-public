@@ -16,7 +16,7 @@ import { useGame } from '@/lib/contexts/GameContext'
 import {
   deleteGamePlayer,
   getGamePlayerStream,
-  getLatestGame,
+  getGameStream,
   getQuestionsStream,
   getUserGameStream,
 } from '@/lib/firebase'
@@ -86,7 +86,7 @@ export default function GameScreen() {
     let unsubscribeUserGame: () => void
     let unsubscribeGamePlayer: () => void
     ;(async () => {
-      unsubscribeGame = await getLatestGame(setGame)
+      unsubscribeGame = await getGameStream(gameId, setGame)
       unsubscribeQuestions = await getQuestionsStream(gameId, setQuestions)
       unsubscribeUserGame = await getUserGameStream(
         user.id,

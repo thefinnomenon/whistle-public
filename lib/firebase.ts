@@ -141,6 +141,29 @@ export const getGames = async (setGames: (games: Game[]) => void) => {
   })
 }
 
+export const getGameStream = async (
+  gameId: string,
+  setGame: (game: Game) => void
+) => {
+  return onSnapshot(
+    doc(db, 'games', gameId),
+    (gameSnap) => {
+      if (!gameSnap.exists()) {
+        console.log('Game not found')
+        return
+      }
+      const game = {
+        ...(gameSnap.data() as Game),
+        id: gameSnap.id,
+      }
+      setGame(game)
+    },
+    (error) => {
+      console.error('Error getting game:', error)
+    }
+  )
+}
+
 export const getLatestGame = async (setGame: (game: Game) => void) => {
   const q = query(
     collection(db, 'games'),
