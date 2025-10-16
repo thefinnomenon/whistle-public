@@ -1,8 +1,11 @@
+import { deleteUser } from '@/lib/firebase'
 import { Ionicons } from '@expo/vector-icons'
 import * as Linking from 'expo-linking'
 import { router } from 'expo-router'
+import { getAuth } from '@react-native-firebase/auth'
 import { Alert, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { toast } from 'sonner-native'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
@@ -82,11 +85,36 @@ Thank you!`
           text: 'Delete Account',
           style: 'destructive',
           onPress: async () => {
-            // TODO: Implement account deletion
-            Alert.alert(
-              'Account Deletion',
-              'Account deletion is not yet implemented. Please contact support.'
-            )
+            try {
+              const auth = getAuth()
+              const currentUser = auth.currentUser
+
+              if (!currentUser) {
+                toast.error('No user logged in')
+                return
+              }
+
+              // Delete user data from Firestore
+              await deleteUser(currentUser.uid, user?.username)
+
+              // Delete Firebase Auth account
+              await currentUser.delete()
+
+              toast.success('Account deleted successfully')
+              router.replace('/')
+            } catch (error: any) {
+              console.error('Account deletion error:', error)
+
+              // If re-authentication is required
+              if (error.code === 'auth/requires-recent-login') {
+                Alert.alert(
+                  'Re-authentication Required',
+                  'For security reasons, please sign out and sign back in before deleting your account.'
+                )
+              } else {
+                toast.error('Failed to delete account. Please try again.')
+              }
+            }
           },
         },
       ]

@@ -7,6 +7,14 @@
         { "fieldPath": "score", "order": "DESCENDING" },
         { "fieldPath": "username", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "predictions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "prediction", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

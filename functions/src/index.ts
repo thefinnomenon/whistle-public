@@ -19,14 +19,16 @@ admin.initializeApp()
 // https://stackoverflow.com/a/55251598/6775987
 const flattenObject = (obj: any) => {
   const flattened: { [key: string]: any } = {}
-
-  if (!obj) return
+  if (!obj) return flattened
 
   Object.keys(obj).forEach((key) => {
     const value = obj[key]
 
-    // updatedAt is a TimeStamp object so we shouldn't flatten it
-    if (key === 'updatedAt') return value
+    // Skip flattening updatedAt since it's a Firestore Timestamp
+    if (key === 'updatedAt') {
+      flattened[key] = value // keep it unflattened
+      return // continue to next key
+    }
 
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
       Object.assign(flattened, flattenObject(value))
@@ -140,24 +142,23 @@ const getCorrectUsers = async (
   questionId: string,
   question: Question
 ) => {
+  if (!question.closedAt) {
+    console.error(
+      'Trying to get get correct users but question has no closedAt timestamp'
+    )
+    return []
+  }
+
   const correctPredictions = await admin
     .firestore()
     .collection(`games/${gameId}/questions/${questionId}/predictions`)
     .where('prediction', '==', question.answer)
+    .where('createdAt', '<', question.closedAt)
     .get()
 
-  console.log('Found correct users: ', correctPredictions.docs)
+  console.log('Found correct users: ', correctPredictions.docs.length)
 
-  return correctPredictions.docs
-    .filter((prediction) => {
-      console.log(prediction)
-      console.log(
-        'Filtered: ',
-        question.closedAt && question.closedAt > prediction.createTime
-      )
-      return question.closedAt && question.closedAt > prediction.createTime
-    })
-    .map((p) => p.id)
+  return correctPredictions.docs.map((p) => p.id)
 }
 
 const updateScores = async (
@@ -241,6 +242,7 @@ exports.calculateScores = onDocumentUpdated(
     if (question.state === 'resolved' && oldQuestion.state !== 'resolved') {
       console.log('Question was resolved! Updating scores...')
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
+      if (correctUsers.length === 0) return
       await updateScores(gameId, questionId, correctUsers, 1)
     }
 
@@ -248,6 +250,7 @@ exports.calculateScores = onDocumentUpdated(
     if (question.state === 'cancelled' && oldQuestion.state === 'resolved') {
       console.log('Question was cancelled! Reverting scores...')
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
+      if (correctUsers.length === 0) return
       await updateScores(gameId, questionId, correctUsers, -1)
     }
 
@@ -264,6 +267,9 @@ exports.calculateScores = onDocumentUpdated(
         getCorrectUsers(gameId, questionId, oldQuestion),
         getCorrectUsers(gameId, questionId, question),
       ])
+
+      if (oldCorrectUsers.length === 0 && correctUsers.length === 0) return
+
       await Promise.all([
         updateScores(gameId, questionId, oldCorrectUsers, -1),
         updateScores(gameId, questionId, correctUsers, 1),
@@ -445,7 +451,7 @@ const notifyWinners = async (
   game: Game,
   expo: Expo
 ) => {
-  if (winnerNotifications.length > 0) {
+  if (winnerNotifications.length === 0) {
     console.log('No winners to notify...')
     return
   }

@@ -43,6 +43,19 @@ export const updateUser = async (userId: string, update: Partial<User>) => {
     { merge: true }
   )
 }
+export const deleteUser = async (userId: string, username?: string) => {
+  const batch = writeBatch(db)
+
+  // Delete user document
+  batch.delete(doc(db, 'users', userId))
+
+  // Delete username document if it exists
+  if (username) {
+    batch.delete(doc(db, 'usernames', username.toLowerCase()))
+  }
+
+  await batch.commit()
+}
 
 /***********************
   USER GAMES COLLECTION
