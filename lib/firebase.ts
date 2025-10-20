@@ -1,4 +1,5 @@
 import { DocumentData } from '@google-cloud/firestore'
+import { getAuth } from '@react-native-firebase/auth'
 import {
   addDoc,
   collection,
@@ -17,6 +18,7 @@ import {
 } from '@react-native-firebase/firestore'
 
 const db = getFirestore()
+const auth = getAuth()
 
 export { db }
 
@@ -55,6 +57,12 @@ export const deleteUser = async (userId: string, username?: string) => {
   }
 
   await batch.commit()
+
+  // Delete Firebase Auth account
+  const currentUser = auth.currentUser
+  if (currentUser && currentUser.uid === userId) {
+    await currentUser.delete()
+  }
 }
 
 /***********************
@@ -92,9 +100,13 @@ export const getUserGameStream = async (
   gameId: string,
   setUserGame: (userGame?: UserGame) => void
 ): Promise<any> => {
-  return onSnapshot(doc(db, `users/${userId}/games`, gameId), (snapshot) =>
-    setUserGame(snapshot.data() as UserGame | undefined)
-  )
+  return onSnapshot(doc(db, `users/${userId}/games`, gameId), (snapshot) => {
+    if (snapshot.exists()) {
+      setUserGame(snapshot.data() as UserGame | undefined)
+    } else {
+      setUserGame(undefined)
+    }
+  })
 }
 
 /**********************
@@ -296,9 +308,13 @@ export const getGamePlayerStream = async (
   playerId: string,
   setGamePlayer: (gamePlayer?: GamePlayer) => void
 ): Promise<any> => {
-  return onSnapshot(doc(db, `games/${gameId}/users`, playerId), (snapshot) =>
-    setGamePlayer(snapshot.data() as GamePlayer | undefined)
-  )
+  return onSnapshot(doc(db, `games/${gameId}/users`, playerId), (snapshot) => {
+    if (snapshot.exists()) {
+      setGamePlayer(snapshot.data() as GamePlayer | undefined)
+    } else {
+      setGamePlayer(undefined)
+    }
+  })
 }
 
 export const deleteGamePlayer = async (gameId: string, playerId: string) => {

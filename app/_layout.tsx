@@ -53,9 +53,10 @@ function AuthGate() {
     const inAuthGroup = pathname.startsWith('sign-in')
     const inOnboarding = pathname.startsWith('onboarding')
     const inUsername = pathname.startsWith('username')
+    const inSignout = pathname.startsWith('signout')
 
-    if (!user && !inAuthGroup) {
-      // Redirect to sign-in if not authenticated and not already on sign-in page
+    if (!user && !inAuthGroup && !inSignout) {
+      // Redirect to sign-in if not authenticated and not already on sign-in page or signout
       router.replace('/sign-in')
     } else if (user && !hasCompletedOnboarding && !inOnboarding) {
       // Redirect to onboarding if authenticated but hasn't completed onboarding
@@ -86,6 +87,7 @@ function AuthGate() {
     <Stack>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+      <Stack.Screen name="signout" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
       <Stack.Screen name="username" options={{ headerShown: false }} />
       <Stack.Screen name="game" options={{ headerShown: false }} />

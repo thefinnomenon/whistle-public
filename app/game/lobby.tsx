@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons'
-import { router } from 'expo-router'
-import { useEffect, useState } from 'react'
-import { Image, Text, TouchableOpacity, View } from 'react-native'
-import { toast } from 'sonner-native'
 import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore'
+import { router, useFocusEffect } from 'expo-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AppState, Image, Text, TouchableOpacity, View } from 'react-native'
+import { toast } from 'sonner-native'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
@@ -18,6 +18,15 @@ export default function GameLobbyScreen() {
   const [canJoin, setCanJoin] = useState(true)
   const [hasUserJoined, setHasUserJoined] = useState<boolean | null>(null)
   const [hasRedirected, setHasRedirected] = useState(false)
+  const unsubscribeRef = useRef<(() => void) | undefined>(null)
+  const userRef = useRef(user)
+  const setGameRef = useRef(setGame)
+
+  // Keep refs updated
+  useEffect(() => {
+    userRef.current = user
+    setGameRef.current = setGame
+  }, [user, setGame])
 
   const hasAlreadyJoined = async (userId: string, gameId: string) => {
     const playerDoc = await getDoc(doc(db, `games/${gameId}/users`, userId))
@@ -44,14 +53,57 @@ export default function GameLobbyScreen() {
     checkNofiticationPermissions()
   }, [])
 
+  // Handle app state changes (background/foreground)
   useEffect(() => {
-    let unsubscribe: () => void
-    ;(async () => {
-      unsubscribe = await getLatestGame(setGame)
-    })()
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        console.log('[Lobby] App backgrounded - unsubscribing')
+        if (unsubscribeRef.current) {
+          unsubscribeRef.current()
+          unsubscribeRef.current = undefined
+        }
+      } else if (nextAppState === 'active') {
+        // Check if we should resubscribe (only if we have a user and no active subscription)
+        if (userRef.current && !unsubscribeRef.current) {
+          console.log('[Lobby] App foregrounded - resubscribing')
+          getLatestGame(setGameRef.current).then((unsub) => {
+            unsubscribeRef.current = unsub
+            console.log('[Lobby] Successfully resubscribed to latest game')
+          })
+        }
+      }
+    })
 
-    return () => unsubscribe && unsubscribe()
-  }, [setGame])
+    return () => {
+      subscription.remove()
+    }
+  }, [])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) {
+        console.log('[Lobby] No user, skipping subscription')
+        return
+      }
+
+      console.log('[Lobby] Screen focused - subscribing to latest game')
+
+      const subscribe = async () => {
+        unsubscribeRef.current = await getLatestGame(setGame)
+        console.log('[Lobby] Successfully subscribed to latest game')
+      }
+
+      subscribe()
+
+      return () => {
+        console.log('[Lobby] Screen unfocused - unsubscribing from latest game')
+        if (unsubscribeRef.current) {
+          unsubscribeRef.current()
+          unsubscribeRef.current = undefined
+        }
+      }
+    }, [setGame, user])
+  )
 
   useEffect(() => {
     if (!game || !user || hasRedirected) return

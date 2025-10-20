@@ -2,13 +2,14 @@ import { Feather, FontAwesome5, Ionicons } from '@expo/vector-icons'
 import { FlashList } from '@shopify/flash-list'
 import {
   router,
+  useFocusEffect,
   useLocalSearchParams,
   useNavigation,
-  useSegments,
 } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
+  AppState,
   Image,
   Text,
   TouchableOpacity,
@@ -30,7 +31,6 @@ import { NFL } from '../../logos'
 
 export default function GameScreen() {
   const navigation = useNavigation()
-  const segments = useSegments()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { game, setGame } = useGame()
@@ -39,6 +39,28 @@ export default function GameScreen() {
   const [userGame, setUserGame] = useState<UserGame>()
   const [gamePlayer, setGamePlayer] = useState<GamePlayer>()
   const isLeavingRef = useRef(false)
+  const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
+  const unsubscribeQuestionsRef = useRef<(() => void) | undefined>(null)
+  const unsubscribeUserGameRef = useRef<(() => void) | undefined>(null)
+  const unsubscribeGamePlayerRef = useRef<(() => void) | undefined>(null)
+
+  // Refs to track current values for AppState listener
+  const gameIdRef = useRef(gameId)
+  const userIdRef = useRef(user?.id)
+  const setGameRef = useRef(setGame)
+  const setQuestionsRef = useRef(setQuestions)
+  const setUserGameRef = useRef(setUserGame)
+  const setGamePlayerRef = useRef(setGamePlayer)
+
+  // Keep refs updated
+  useEffect(() => {
+    gameIdRef.current = gameId
+    userIdRef.current = user?.id
+    setGameRef.current = setGame
+    setQuestionsRef.current = setQuestions
+    setUserGameRef.current = setUserGame
+    setGamePlayerRef.current = setGamePlayer
+  }, [gameId, user?.id, setGame, setQuestions, setUserGame, setGamePlayer])
 
   const handleLeaveGame = useCallback(() => {
     Alert.alert(
@@ -85,36 +107,102 @@ export default function GameScreen() {
     return () => listener()
   }, [handleLeaveGame, navigation])
 
+  // Handle app state changes (background/foreground)
   useEffect(() => {
-    if (!gameId || !user?.id) return
-
-    console.log('Subscribing to Game Info for Game: ', gameId)
-    let unsubscribeGame: () => void
-    let unsubscribeQuestions: () => void
-    let unsubscribeUserGame: () => void
-    let unsubscribeGamePlayer: () => void
-    ;(async () => {
-      unsubscribeGame = await getGameStream(gameId, setGame)
-      unsubscribeQuestions = await getQuestionsStream(gameId, setQuestions)
-      unsubscribeUserGame = await getUserGameStream(
-        user.id,
-        gameId,
-        setUserGame
-      )
-      unsubscribeGamePlayer = await getGamePlayerStream(
-        gameId,
-        user.id,
-        setGamePlayer
-      )
-    })()
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        console.log('[Game] App backgrounded - unsubscribing')
+        if (unsubscribeGameRef.current) unsubscribeGameRef.current()
+        if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
+        if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
+        if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
+        unsubscribeGameRef.current = undefined
+        unsubscribeQuestionsRef.current = undefined
+        unsubscribeUserGameRef.current = undefined
+        unsubscribeGamePlayerRef.current = undefined
+      } else if (nextAppState === 'active') {
+        // Only resubscribe if we have gameId and userId and no active subscriptions
+        const currentGameId = gameIdRef.current
+        const currentUserId = userIdRef.current
+        if (currentGameId && currentUserId && !unsubscribeGameRef.current) {
+          console.log('[Game] App foregrounded - resubscribing')
+          Promise.all([
+            getGameStream(currentGameId, setGameRef.current),
+            getQuestionsStream(currentGameId, setQuestionsRef.current),
+            getUserGameStream(
+              currentUserId,
+              currentGameId,
+              setUserGameRef.current
+            ),
+            getGamePlayerStream(
+              currentGameId,
+              currentUserId,
+              setGamePlayerRef.current
+            ),
+          ]).then(
+            ([gameUnsub, questionsUnsub, userGameUnsub, gamePlayerUnsub]) => {
+              unsubscribeGameRef.current = gameUnsub
+              unsubscribeQuestionsRef.current = questionsUnsub
+              unsubscribeUserGameRef.current = userGameUnsub
+              unsubscribeGamePlayerRef.current = gamePlayerUnsub
+              console.log(
+                `[Game] Successfully resubscribed to game ${currentGameId} (4 subscriptions)`
+              )
+            }
+          )
+        }
+      }
+    })
 
     return () => {
-      if (unsubscribeGame) unsubscribeGame()
-      if (unsubscribeQuestions) unsubscribeQuestions()
-      if (unsubscribeUserGame) unsubscribeUserGame()
-      if (unsubscribeGamePlayer) unsubscribeGamePlayer()
+      subscription.remove()
     }
-  }, [gameId, setGame, user?.id])
+  }, [])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!gameId || !user?.id) {
+        console.log('[Game] No gameId or user, skipping subscriptions')
+        return
+      }
+
+      console.log(`[Game] Screen focused - subscribing to game ${gameId}`)
+
+      const subscribe = async () => {
+        const [gameUnsub, questionsUnsub, userGameUnsub, gamePlayerUnsub] =
+          await Promise.all([
+            getGameStream(gameId, setGame),
+            getQuestionsStream(gameId, setQuestions),
+            getUserGameStream(user.id, gameId, setUserGame),
+            getGamePlayerStream(gameId, user.id, setGamePlayer),
+          ])
+
+        unsubscribeGameRef.current = gameUnsub
+        unsubscribeQuestionsRef.current = questionsUnsub
+        unsubscribeUserGameRef.current = userGameUnsub
+        unsubscribeGamePlayerRef.current = gamePlayerUnsub
+        console.log(
+          `[Game] Successfully subscribed to game ${gameId} (4 subscriptions)`
+        )
+      }
+
+      subscribe()
+
+      return () => {
+        console.log(
+          `[Game] Screen unfocused - unsubscribing from game ${gameId}`
+        )
+        if (unsubscribeGameRef.current) unsubscribeGameRef.current()
+        if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
+        if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
+        if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
+        unsubscribeGameRef.current = undefined
+        unsubscribeQuestionsRef.current = undefined
+        unsubscribeUserGameRef.current = undefined
+        unsubscribeGamePlayerRef.current = undefined
+      }
+    }, [gameId, setGame, user?.id])
+  )
 
   if (!gameId) return
 

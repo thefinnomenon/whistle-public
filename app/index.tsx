@@ -126,16 +126,30 @@ export default function HomeScreen() {
   const { firebaseUser, signOut } = useAuth()
 
   useEffect(() => {
+    if (!firebaseUser) return
+
     let unsubscribe: (() => void) | undefined
-    getLatestGame((game) => {
-      setLatestGame(game)
-    }).then((unsub) => {
-      unsubscribe = unsub
-    })
+    let mounted = true
+
+    const subscribe = async () => {
+      const unsub = await getLatestGame((game) => {
+        setLatestGame(game)
+      })
+      if (mounted) {
+        unsubscribe = unsub
+      } else {
+        // If component unmounted before subscription completed, clean up immediately
+        unsub()
+      }
+    }
+
+    subscribe()
+
     return () => {
+      mounted = false
       if (unsubscribe) unsubscribe()
     }
-  }, [])
+  }, [firebaseUser])
 
   const {
     control,
