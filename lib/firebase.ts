@@ -6,6 +6,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   getFirestore,
   limit,
   onSnapshot,
@@ -45,7 +46,44 @@ export const updateUser = async (userId: string, update: Partial<User>) => {
     { merge: true }
   )
 }
+export const leaveAllActiveGames = async (userId: string) => {
+  // Get all games the user has joined (from users/{userId}/games)
+  const userGamesQuery = query(collection(db, `users/${userId}/games`))
+  const userGamesSnapshot = await getDocs(userGamesQuery)
+
+  if (userGamesSnapshot.empty) {
+    console.log(`[Firebase] User ${userId} has no games to leave`)
+    return
+  }
+
+  const batch = writeBatch(db)
+
+  for (const userGameDoc of userGamesSnapshot.docs) {
+    const gameId = userGameDoc.id
+
+    // Get the game to check if it's active
+    const gameDoc = await getDoc(doc(db, 'games', gameId))
+    if (!gameDoc.exists()) continue
+
+    const gameState = gameDoc.data()?.state
+    if (gameState === 'scheduled' || gameState === 'open') {
+      console.log(
+        `[Firebase] Removing user ${userId} from active game ${gameId}`
+      )
+
+      // Delete from games/{gameId}/users/{userId}
+      batch.delete(doc(db, `games/${gameId}/users`, userId))
+    }
+  }
+
+  await batch.commit()
+  console.log(`[Firebase] User ${userId} removed from all active games`)
+}
+
 export const deleteUser = async (userId: string, username?: string) => {
+  // First, leave all active games
+  await leaveAllActiveGames(userId)
+
   const batch = writeBatch(db)
 
   // Delete user document

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/contexts/AuthContext'
-import { deleteUser } from '@/lib/firebase'
+import { deleteUser, leaveAllActiveGames } from '@/lib/firebase'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Text, View } from 'react-native'
