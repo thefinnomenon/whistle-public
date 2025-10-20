@@ -1,5 +1,5 @@
 import { DocumentData } from '@google-cloud/firestore'
-import { getAuth } from '@react-native-firebase/auth'
+import { getAuth, signOut } from '@react-native-firebase/auth'
 import {
   addDoc,
   collection,
@@ -84,7 +84,20 @@ export const deleteUser = async (userId: string, username?: string) => {
   // First, leave all active games
   await leaveAllActiveGames(userId)
 
+  // Delete user's games subcollection
+  console.log(`[Firebase] Deleting games subcollection for user ${userId}`)
+  const userGamesQuery = query(collection(db, `users/${userId}/games`))
+  const userGamesSnapshot = await getDocs(userGamesQuery)
+
   const batch = writeBatch(db)
+
+  // Delete all documents in users/{userId}/games subcollection
+  userGamesSnapshot.docs.forEach((gameDoc: any) => {
+    console.log(
+      `[Firebase] Deleting game ${gameDoc.id} from user subcollection`
+    )
+    batch.delete(gameDoc.ref)
+  })
 
   // Delete user document
   batch.delete(doc(db, 'users', userId))
@@ -95,12 +108,16 @@ export const deleteUser = async (userId: string, username?: string) => {
   }
 
   await batch.commit()
+  console.log(`[Firebase] User ${userId} and all subcollections deleted`)
 
   // Delete Firebase Auth account
-  const currentUser = auth.currentUser
-  if (currentUser && currentUser.uid === userId) {
-    await currentUser.delete()
-  }
+  // const currentUser = auth.currentUser
+  // if (currentUser && currentUser.uid === userId) {
+  //   await currentUser.delete()
+  // }
+
+  // Sign the user out
+  await signOut(auth)
 }
 
 /***********************

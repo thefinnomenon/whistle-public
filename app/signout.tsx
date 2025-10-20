@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/contexts/AuthContext'
-import { deleteUser, leaveAllActiveGames } from '@/lib/firebase'
+import { deleteUser } from '@/lib/firebase'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Text, View } from 'react-native'
@@ -70,7 +70,7 @@ export default function SignOutScreen() {
     }
 
     handleSignOut()
-  }, [])
+  }, [shouldDeleteAccount, signOut, user])
 
   return (
     <View className="flex-1 bg-white dark:bg-black items-center justify-center">
