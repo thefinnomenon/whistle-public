@@ -8,6 +8,7 @@ import {
   onDocumentCreated,
   onDocumentUpdated,
 } from 'firebase-functions/v2/firestore'
+import { onCall } from 'firebase-functions/v2/https'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 
 const expoAccessToken = defineSecret('EXPO_ACCESS_TOKEN')
@@ -40,6 +41,120 @@ const flattenObject = (obj: any) => {
   return flattened
 }
 
+// Test function to send a notification to the app_notifications topic
+exports.testPushNotification = onCall(async (request) => {
+  const topic = 'app_notifications'
+
+  try {
+    console.log('[Test] Sending test notification to topic:', topic)
+    console.log('[Test] Request auth:', request.auth)
+
+    const message = {
+      topic,
+      notification: {
+        title: '🧪 Test Notification',
+        body: 'This is a test push notification!',
+      },
+      android: {
+        priority: 'high' as const,
+        notification: {
+          channelId: 'default',
+          priority: 'high' as const,
+          sound: 'whistle',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: '🧪 Test Notification',
+              body: 'This is a test push notification!',
+            },
+            contentAvailable: true,
+            sound: 'whistle.wav',
+          },
+        },
+      },
+    }
+
+    console.log('[Test] Message to send:', JSON.stringify(message, null, 2))
+
+    const response = await admin.messaging().send(message)
+    console.log(
+      '[Test] Successfully sent test notification. Message ID:',
+      response
+    )
+
+    return { success: true, messageId: response }
+  } catch (error) {
+    console.error('[Test] Failed to send test notification:', error)
+    throw error
+  }
+})
+
+// Send notification to game topic when game starts (state changes to "open")
+exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
+  const { gameId } = event.params
+  const game = event.data?.after.data() as Game
+  const oldGame = event.data?.before.data() as Game
+
+  if (!game || !oldGame) {
+    console.error('No data associated with event', { event })
+    return
+  }
+
+  // Check if game state changed to "open"
+  if (game.state === 'open' && oldGame.state !== 'open') {
+    console.log(`Game ${gameId} started, notifying all app users`)
+
+    const topic = 'app_notifications'
+
+    try {
+      // Send FCM message to main app topic
+      const message = {
+        topic,
+        notification: {
+          title: '🏈 Game Started!',
+          body: `${game.homeTeam} vs ${game.awayTeam} is now live. Get ready to predict!`,
+        },
+        data: {
+          gameId,
+          homeTeam: game.homeTeam,
+          awayTeam: game.awayTeam,
+        },
+        android: {
+          priority: 'high' as const,
+          notification: {
+            channelId: 'default',
+            priority: 'high' as const,
+            sound: 'whistle',
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              contentAvailable: true,
+              sound: 'whistle.wav',
+            },
+          },
+        },
+      }
+
+      const response = await admin.messaging().send(message)
+      console.log(
+        `Successfully sent game start notification to topic ${topic}:`,
+        response
+      )
+    } catch (error) {
+      console.error(
+        `Failed to send game start notification to topic ${topic}:`,
+        error
+      )
+    }
+  }
+})
+
+// Send notification to game topic when new question is created
 exports.pushNewQuestion = onDocumentCreated(
   {
     document: 'games/{gameId}/questions/{questionId}',
@@ -55,85 +170,40 @@ exports.pushNewQuestion = onDocumentCreated(
       return
     }
 
-    const expo = new Expo({ accessToken: expoAccessToken.value() })
+    const topic = `game_${gameId}`
 
-    const players = await admin
-      .firestore()
-      .collection(`games/${gameId}/users`)
-      .get()
-    const playerTokensPromisesRes = await Promise.allSettled(
-      players.docs.map(async (player) => {
-        try {
-          const { tokens } = (
-            await admin.firestore().collection('users').doc(player.id).get()
-          ).data() as { tokens: { [tokenId: string]: Token } }
-          if (!tokens) {
-            console.error(`Failed to find any tokens for Player ${player.id}`)
-            return Promise.reject(
-              new Error(`Failed to find any tokens for Player ${player.id}`)
-            )
-          }
-          console.log(`Found tokens for ${player.id}: `, tokens)
-          return Promise.resolve(tokens)
-        } catch (error) {
-          console.error(
-            `Failed to retrieve document for user ${player.id}: `,
-            error
-          )
-          return Promise.reject(error)
-        }
-      })
-    )
-
-    const playerTokens = playerTokensPromisesRes
-      .filter(
-        (
-          playerTokenPromiseRes
-        ): playerTokenPromiseRes is PromiseFulfilledResult<{
-          [tokenId: string]: Token
-        }> => playerTokenPromiseRes.status === 'fulfilled'
-      )
-      .map((playerTokenPromiseRes) =>
-        flattenObject(playerTokenPromiseRes.value)
-      )
-
-    const messages: ExpoPushMessage[] = []
-    playerTokens.map(({ token }: any) => {
-      if (!Expo.isExpoPushToken(token)) {
-        console.error(`Push token ${token} is not a valid Expo push token`)
-        return
+    try {
+      // Send data-only FCM message to topic (so background handler can add action buttons)
+      const message = {
+        topic,
+        data: {
+          gameId,
+          questionId,
+          question: question.question,
+          title: '🏈 New Question!',
+          body: question.question,
+        },
+        android: {
+          priority: 'high' as const,
+        },
+        apns: {
+          payload: {
+            aps: {
+              contentAvailable: true,
+              sound: 'whistle.wav',
+            },
+          },
+          headers: {
+            'apns-priority': '10',
+          },
+        },
       }
 
-      messages.push({
-        to: token,
-        channelId: 'default',
-        body: question.question,
-        data: { gameId, questionId },
-        priority: 'high',
-        categoryId: 'YESNO',
-      })
-    })
-
-    const chunks = expo.chunkPushNotifications(messages)
-    let numSent = 0,
-      numFailed = 0
-    await Promise.allSettled(
-      chunks.map(async (chunk) => {
-        try {
-          const ticketChunk = await expo.sendPushNotificationsAsync(chunk)
-          numSent += chunk.length
-          return Promise.resolve(ticketChunk)
-        } catch (error) {
-          console.error('Failed to send push notification', error)
-          numFailed += chunk.length
-          return Promise.reject(error)
-        }
-      })
-    )
-
-    console.log(
-      `Successfully sent ${numSent} push notifications for question ${questionId} in game ${gameId}! Failed to send ${numFailed} push notifications.`
-    )
+      const response = await admin.messaging().send(message)
+      console.log(`Successfully sent notification to topic ${topic}:`, response)
+    } catch (error) {
+      console.error(`Failed to send notification to topic ${topic}:`, error)
+    }
   }
 )
 
@@ -144,21 +214,52 @@ const getCorrectUsers = async (
 ) => {
   if (!question.closedAt) {
     console.error(
-      'Trying to get get correct users but question has no closedAt timestamp'
+      'Trying to get correct users but question has no closedAt timestamp'
     )
     return []
   }
 
-  const correctPredictions = await admin
+  console.log(
+    '[getCorrectUsers] Question answer:',
+    question.answer,
+    typeof question.answer
+  )
+  console.log('[getCorrectUsers] Question closedAt:', question.closedAt)
+
+  // Get all predictions that match the answer
+  const allPredictions = await admin
     .firestore()
     .collection(`games/${gameId}/questions/${questionId}/predictions`)
     .where('prediction', '==', question.answer)
-    .where('createdAt', '<', question.closedAt)
     .get()
 
-  console.log('Found correct users: ', correctPredictions.docs.length)
+  console.log(
+    '[getCorrectUsers] All matching predictions:',
+    allPredictions.docs.length
+  )
 
-  return correctPredictions.docs.map((p) => p.id)
+  // Filter by document createTime (metadata) to ensure prediction was made before question closed
+  const correctPredictions = allPredictions.docs.filter((doc) => {
+    const createTime = doc.createTime?.toDate()
+    const closedAt = question.closedAt?.toDate()
+    const isBeforeClose = createTime && closedAt && createTime < closedAt
+
+    console.log(`[getCorrectUsers] Prediction ${doc.id}:`, {
+      prediction: doc.data().prediction,
+      createTime: createTime?.toISOString(),
+      closedAt: closedAt?.toISOString(),
+      isBeforeClose,
+    })
+
+    return isBeforeClose
+  })
+
+  console.log(
+    '[getCorrectUsers] Found correct users (before close):',
+    correctPredictions.length
+  )
+
+  return correctPredictions.map((p) => p.id)
 }
 
 const updateScores = async (

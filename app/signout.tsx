@@ -1,5 +1,6 @@
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { deleteUser } from '@/lib/firebase'
+import { clearFCMToken, unsubscribeFromAllTopics } from '@/lib/fcm'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
@@ -26,10 +27,18 @@ export default function SignOutScreen() {
           shouldDeleteAccount,
         })
 
-        // Clear onboarding flag for this user
+        // Clear onboarding flag and FCM token for this user
         if (user) {
           console.log('[SignOut] Clearing onboarding flag for user', user.id)
           await AsyncStorage.removeItem(`${ONBOARDING_KEY}_${user.id}`)
+
+          // Unsubscribe from all topics for this device
+          console.log('[SignOut] Unsubscribing from all topics')
+          await unsubscribeFromAllTopics(user.id)
+
+          // Clear FCM token from this device (for both signout and delete)
+          console.log('[SignOut] Clearing FCM token')
+          await clearFCMToken(user.id)
         }
 
         if (shouldDeleteAccount && user) {

@@ -46,6 +46,61 @@ export const updateUser = async (userId: string, update: Partial<User>) => {
     { merge: true }
   )
 }
+
+export const saveFCMToken = async (
+  userId: string,
+  deviceId: string,
+  token: string,
+  deviceInfo: {
+    platform: 'ios' | 'android'
+    model?: string
+    osVersion?: string
+  }
+) => {
+  console.log(
+    `[Firebase] Saving FCM token for user ${userId}, device ${deviceId} (${deviceInfo.platform})`
+  )
+  await setDoc(
+    doc(db, 'users', userId),
+    {
+      tokens: {
+        [deviceId]: {
+          token,
+          platform: deviceInfo.platform,
+          model: deviceInfo.model,
+          osVersion: deviceInfo.osVersion,
+          updatedAt: serverTimestamp(),
+        },
+      },
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  )
+}
+
+export const removeFCMToken = async (userId: string, deviceId: string) => {
+  console.log(
+    `[Firebase] Removing FCM token for user ${userId}, device ${deviceId}`
+  )
+  const userRef = doc(db, 'users', userId)
+  const userDoc = await getDoc(userRef)
+
+  if (userDoc.exists()) {
+    const userData = userDoc.data()
+    const tokens = { ...userData?.tokens }
+    delete tokens[deviceId]
+
+    await setDoc(
+      userRef,
+      {
+        tokens,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    )
+  }
+}
+
 export const leaveAllActiveGames = async (userId: string) => {
   // Get all games the user has joined (from users/{userId}/games)
   const userGamesQuery = query(collection(db, `users/${userId}/games`))
@@ -389,4 +444,32 @@ export const addPrediction = async (
     doc(db, `games/${gameId}/questions/${questionId}/predictions`, userId),
     { ...prediction, createdAt: serverTimestamp() }
   )
+}
+
+export const getUserPredictionsStream = async (
+  gameId: string,
+  userId: string,
+  setPredictions: (predictions: Map<string, boolean>) => void
+): Promise<any> => {
+  const q = query(
+    collection(db, `users/${userId}/games/${gameId}/predictions`),
+    orderBy('createdAt', 'asc')
+  )
+
+  return onSnapshot(q, (predictionsSnap) => {
+    const predictionsMap = new Map<string, boolean>()
+
+    if (!predictionsSnap || predictionsSnap.empty) {
+      setPredictions(predictionsMap)
+      return
+    }
+
+    predictionsSnap.docs.forEach((predictionDoc: any) => {
+      const questionId = predictionDoc.id
+      const data = predictionDoc.data()
+      predictionsMap.set(questionId, data.prediction as boolean)
+    })
+
+    setPredictions(predictionsMap)
+  })
 }

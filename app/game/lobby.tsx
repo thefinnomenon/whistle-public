@@ -7,6 +7,7 @@ import { toast } from 'sonner-native'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
+import { subscribeToGameTopic } from '@/lib/fcm'
 import { getLatestGame, updateGamePlayer, updateUserGame } from '@/lib/firebase'
 import { NFL } from '@/logos'
 
@@ -142,6 +143,10 @@ export default function GameLobbyScreen() {
         score: 0,
         username: user.username,
       })
+
+      // Subscribe to game topic for notifications
+      await subscribeToGameTopic(game.id)
+
       setHasUserJoined(true)
       if (game?.state === 'open') {
         setHasRedirected(true)

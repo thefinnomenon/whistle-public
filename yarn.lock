@@ -3059,6 +3059,11 @@
   dependencies:
     react-native-url-polyfill "2.0.0"
 
+"@react-native-firebase/functions@^23.4.1":
+  version "23.4.1"
+  resolved "https://registry.yarnpkg.com/@react-native-firebase/functions/-/functions-23.4.1.tgz#9cb4d250e47160cdef2824a9a01eb187d882917d"
+  integrity sha512-FkUGNv1gzyntIEn54j1W+3Oy8rDMDhxuGTAM10i74eIHjyk+J7T6ua/HfqkBxkX7A1AM1B/yTPxIuK497USaCQ==
+
 "@react-native-firebase/messaging@^23.4.0":
   version "23.4.0"
   resolved "https://registry.yarnpkg.com/@react-native-firebase/messaging/-/messaging-23.4.0.tgz#dd667f3ef6e84cdf63cdf263d0a51318336061da"
@@ -6060,6 +6065,11 @@ expo-apple-authentication@~8.0.7:
   resolved "https://registry.yarnpkg.com/expo-apple-authentication/-/expo-apple-authentication-8.0.7.tgz#8918f66229ae003177ca5048b9edc97f9f780db1"
   integrity sha512-KHLKecxwlPm42W/JYEefcFcXu5BW88wlgKSoikOFwRoWpzzryJxsNacMJRqrzAP3lFecPAK+ATgyJYvFkp10kw==
 
+expo-application@~7.0.7:
+  version "7.0.7"
+  resolved "https://registry.yarnpkg.com/expo-application/-/expo-application-7.0.7.tgz#8b2802650381042baa3b74297cdeb5f9628b7c6c"
+  integrity sha512-Jt1/qqnoDUbZ+bK91+dHaZ1vrPDtRBOltRa681EeedkisqguuEeUx4UHqwVyDK2oHWsK6lO3ojetoA4h8OmNcg==
+
 expo-asset@~12.0.9:
   version "12.0.9"
   resolved "https://registry.yarnpkg.com/expo-asset/-/expo-asset-12.0.9.tgz#e5b06b793bfc45a76b70a2253862351effa42e73"
@@ -6121,6 +6131,13 @@ expo-dev-menu@7.0.14:
   integrity sha512-nWyzSztFWfnhDOiKJ6DuZLjIbq+tG9e5y4TDmW6wYlSKKPBXbdOn2UdxaknhSqZrw6NwWMcjyhS+QG4MoDGD8w==
   dependencies:
     expo-dev-menu-interface "2.0.0"
+
+expo-device@~8.0.9:
+  version "8.0.9"
+  resolved "https://registry.yarnpkg.com/expo-device/-/expo-device-8.0.9.tgz#def4fcc2f2bd99c2f009424610c298acc1c01eb6"
+  integrity sha512-XqRpaljDNAYZGZzMpC+b9KZfzfydtkwx3pJAp6ODDH+O/5wjAw+mLc5wQMGJCx8/aqVmMsAokec7iebxDPFZDA==
+  dependencies:
+    ua-parser-js "^0.7.33"
 
 expo-file-system@~19.0.17:
   version "19.0.17"
@@ -9279,7 +9296,7 @@ prompts@2.4.2, prompts@^2.3.2:
     kleur "^3.0.3"
     sisteransi "^1.0.5"
 
-prop-types@^15.7.2, prop-types@^15.8.1:
+prop-types@^15.8.1:
   version "15.8.1"
   resolved "https://registry.yarnpkg.com/prop-types/-/prop-types-15.8.1.tgz#67d87bf1a694f48435cf332c24af10214a3140b5"
   integrity sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==
@@ -9471,13 +9488,6 @@ react-native-is-edge-to-edge@^1.1.6, react-native-is-edge-to-edge@^1.2.1:
   version "1.2.1"
   resolved "https://registry.yarnpkg.com/react-native-is-edge-to-edge/-/react-native-is-edge-to-edge-1.2.1.tgz#64e10851abd9d176cbf2b40562f751622bde3358"
   integrity sha512-FLbPWl/MyYQWz+KwqOZsSyj2JmLKglHatd3xLZWskXOpRaio4LfEDEz8E/A6uD8QoTHW6Aobw1jbEwK7KMgR7Q==
-
-react-native-modal-datetime-picker@^18.0.0:
-  version "18.0.0"
-  resolved "https://registry.yarnpkg.com/react-native-modal-datetime-picker/-/react-native-modal-datetime-picker-18.0.0.tgz#0555b2c9ab34318629a251f250de68a0e3b3980d"
-  integrity sha512-0jdvhhraZQlRACwr7pM6vmZ2kxgzJ4CpnmV6J3TVA6MrXMXK6Zo/upRBKkRp0+fTOiKuNblzesA2U59rYo6SGA==
-  dependencies:
-    prop-types "^15.7.2"
 
 react-native-reanimated@~4.1.1:
   version "4.1.3"
@@ -10894,6 +10904,11 @@ typescript@~5.9.2:
   version "5.9.3"
   resolved "https://registry.yarnpkg.com/typescript/-/typescript-5.9.3.tgz#5b4f59e15310ab17a216f5d6cf53ee476ede670f"
   integrity sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==
+
+ua-parser-js@^0.7.33:
+  version "0.7.41"
+  resolved "https://registry.yarnpkg.com/ua-parser-js/-/ua-parser-js-0.7.41.tgz#9f6dee58c389e8afababa62a4a2dc22edb69a452"
+  integrity sha512-O3oYyCMPYgNNHuO7Jjk3uacJWZF8loBgwrfd/5LE/HyZ3lUIOdniQ7DNXJcIgZbwioZxk0fLfI4EVnetdiX5jg==
 
 ua-parser-js@^1.0.35:
   version "1.0.41"

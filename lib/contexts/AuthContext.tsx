@@ -1,4 +1,9 @@
 import { addUser, getUser } from '@/lib/firebase'
+import {
+  clearFCMToken,
+  initializeFCMToken,
+  setupTokenRefreshListener,
+} from '@/lib/fcm'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
 import {
@@ -43,14 +48,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let userUnsubscribe: (() => void) | null = null
+    let tokenRefreshUnsubscribe: (() => void) | null = null
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser)
 
-      // Unsubscribe from previous user listener
+      // Unsubscribe from previous user listener and token refresh
       if (userUnsubscribe) {
         userUnsubscribe()
         userUnsubscribe = null
+      }
+      if (tokenRefreshUnsubscribe) {
+        tokenRefreshUnsubscribe()
+        tokenRefreshUnsubscribe = null
       }
 
       if (fbUser) {
@@ -82,6 +92,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             email: userData.email,
             user_id: fbUser.uid,
           })
+
+          // Initialize FCM token
+          await initializeFCMToken(fbUser.uid)
+
+          // Setup token refresh listener
+          tokenRefreshUnsubscribe = setupTokenRefreshListener(fbUser.uid)
         } else {
           // Create user record if it doesn't exist
           console.log('User record not found, creating...')
@@ -122,6 +138,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.log('User record created successfully')
             setUser(userCreated)
             setHasUsername(false)
+
+            // Initialize FCM token for new user
+            await initializeFCMToken(fbUser.uid)
+
+            // Setup token refresh listener
+            tokenRefreshUnsubscribe = setupTokenRefreshListener(fbUser.uid)
           } catch (error) {
             console.error('Failed to create user record:', error)
             setUser(null)

@@ -18,6 +18,8 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
+import { unsubscribeFromGameTopic } from '@/lib/fcm'
+
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import {
@@ -26,6 +28,7 @@ import {
   getGameStream,
   getQuestionsStream,
   getUserGameStream,
+  getUserPredictionsStream,
 } from '@/lib/firebase'
 import { NFL } from '../../logos'
 
@@ -38,11 +41,15 @@ export default function GameScreen() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [userGame, setUserGame] = useState<UserGame>()
   const [gamePlayer, setGamePlayer] = useState<GamePlayer>()
+  const [predictions, setPredictions] = useState<Map<string, boolean>>(
+    new Map()
+  )
   const isLeavingRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeQuestionsRef = useRef<(() => void) | undefined>(null)
   const unsubscribeUserGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeGamePlayerRef = useRef<(() => void) | undefined>(null)
+  const unsubscribePredictionsRef = useRef<(() => void) | undefined>(null)
 
   // Refs to track current values for AppState listener
   const gameIdRef = useRef(gameId)
@@ -51,6 +58,7 @@ export default function GameScreen() {
   const setQuestionsRef = useRef(setQuestions)
   const setUserGameRef = useRef(setUserGame)
   const setGamePlayerRef = useRef(setGamePlayer)
+  const setPredictionsRef = useRef(setPredictions)
 
   // Keep refs updated
   useEffect(() => {
@@ -60,7 +68,16 @@ export default function GameScreen() {
     setQuestionsRef.current = setQuestions
     setUserGameRef.current = setUserGame
     setGamePlayerRef.current = setGamePlayer
-  }, [gameId, user?.id, setGame, setQuestions, setUserGame, setGamePlayer])
+    setPredictionsRef.current = setPredictions
+  }, [
+    gameId,
+    user?.id,
+    setGame,
+    setQuestions,
+    setUserGame,
+    setGamePlayer,
+    setPredictions,
+  ])
 
   const handleLeaveGame = useCallback(() => {
     Alert.alert(
@@ -82,6 +99,11 @@ export default function GameScreen() {
             }
             try {
               isLeavingRef.current = true
+
+              // Unsubscribe from game topic
+              await unsubscribeFromGameTopic(id)
+
+              // Delete player from game
               await deleteGamePlayer(id, user.id)
               router.replace('/game/lobby')
             } catch (error) {
@@ -116,10 +138,13 @@ export default function GameScreen() {
         if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
         if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
         if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
+        if (unsubscribePredictionsRef.current)
+          unsubscribePredictionsRef.current()
         unsubscribeGameRef.current = undefined
         unsubscribeQuestionsRef.current = undefined
         unsubscribeUserGameRef.current = undefined
         unsubscribeGamePlayerRef.current = undefined
+        unsubscribePredictionsRef.current = undefined
       } else if (nextAppState === 'active') {
         // Only resubscribe if we have gameId and userId and no active subscriptions
         const currentGameId = gameIdRef.current
@@ -139,14 +164,26 @@ export default function GameScreen() {
               currentUserId,
               setGamePlayerRef.current
             ),
+            getUserPredictionsStream(
+              currentGameId,
+              currentUserId,
+              setPredictionsRef.current
+            ),
           ]).then(
-            ([gameUnsub, questionsUnsub, userGameUnsub, gamePlayerUnsub]) => {
+            ([
+              gameUnsub,
+              questionsUnsub,
+              userGameUnsub,
+              gamePlayerUnsub,
+              predictionsUnsub,
+            ]) => {
               unsubscribeGameRef.current = gameUnsub
               unsubscribeQuestionsRef.current = questionsUnsub
               unsubscribeUserGameRef.current = userGameUnsub
               unsubscribeGamePlayerRef.current = gamePlayerUnsub
+              unsubscribePredictionsRef.current = predictionsUnsub
               console.log(
-                `[Game] Successfully resubscribed to game ${currentGameId} (4 subscriptions)`
+                `[Game] Successfully resubscribed to game ${currentGameId} (5 subscriptions)`
               )
             }
           )
@@ -169,20 +206,27 @@ export default function GameScreen() {
       console.log(`[Game] Screen focused - subscribing to game ${gameId}`)
 
       const subscribe = async () => {
-        const [gameUnsub, questionsUnsub, userGameUnsub, gamePlayerUnsub] =
-          await Promise.all([
-            getGameStream(gameId, setGame),
-            getQuestionsStream(gameId, setQuestions),
-            getUserGameStream(user.id, gameId, setUserGame),
-            getGamePlayerStream(gameId, user.id, setGamePlayer),
-          ])
+        const [
+          gameUnsub,
+          questionsUnsub,
+          userGameUnsub,
+          gamePlayerUnsub,
+          predictionsUnsub,
+        ] = await Promise.all([
+          getGameStream(gameId, setGame),
+          getQuestionsStream(gameId, setQuestions),
+          getUserGameStream(user.id, gameId, setUserGame),
+          getGamePlayerStream(gameId, user.id, setGamePlayer),
+          getUserPredictionsStream(gameId, user.id, setPredictions),
+        ])
 
         unsubscribeGameRef.current = gameUnsub
         unsubscribeQuestionsRef.current = questionsUnsub
         unsubscribeUserGameRef.current = userGameUnsub
         unsubscribeGamePlayerRef.current = gamePlayerUnsub
+        unsubscribePredictionsRef.current = predictionsUnsub
         console.log(
-          `[Game] Successfully subscribed to game ${gameId} (4 subscriptions)`
+          `[Game] Successfully subscribed to game ${gameId} (5 subscriptions)`
         )
       }
 
@@ -196,10 +240,13 @@ export default function GameScreen() {
         if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
         if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
         if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
+        if (unsubscribePredictionsRef.current)
+          unsubscribePredictionsRef.current()
         unsubscribeGameRef.current = undefined
         unsubscribeQuestionsRef.current = undefined
         unsubscribeUserGameRef.current = undefined
         unsubscribeGamePlayerRef.current = undefined
+        unsubscribePredictionsRef.current = undefined
       }
     }, [gameId, setGame, user?.id])
   )
@@ -252,7 +299,7 @@ export default function GameScreen() {
       </View>
       <View className="flex flex-row items-center justify-between h-12 border-b border-gray-300 dark:border-gray-700 px-4">
         <View className="flex flex-row items-center gap-2">
-          <Ionicons name="star" size={22} color="gold" />
+          <Ionicons name="star" size={22} color="slategray" />
           <Text className="text-gray-900 dark:text-white">
             {gamePlayer?.score || 0}
           </Text>
@@ -274,7 +321,7 @@ export default function GameScreen() {
           </Text>
         </View>
         <TouchableOpacity onPress={() => showLeaderboard()}>
-          <Ionicons name="trophy-sharp" size={24} color="gold" />
+          <Ionicons name="trophy-sharp" size={24} color="slategray" />
         </TouchableOpacity>
       </View>
       <FlashList
@@ -282,10 +329,10 @@ export default function GameScreen() {
         renderItem={({ item }) => (
           <QuestionListItem
             question={item}
-            prediction={userGame.predictions && userGame.predictions[item.id]}
+            prediction={predictions.get(item.id)}
           />
         )}
-        extraData={userGame.predictions}
+        extraData={predictions}
       />
     </View>
   )
@@ -293,18 +340,24 @@ export default function GameScreen() {
 
 type Props = {
   question: Question
-  prediction?: { prediction: string; createdAt: FirestoreTimestamp }
+  prediction?: boolean
 }
 
 const QuestionListItem = ({ question, prediction }: Props) => {
   const colorScheme = useColorScheme()
   const isDark = colorScheme === 'dark'
 
+  console.log('Rendering QuestionListItem:', {
+    state: question.state,
+    answer: question.answer,
+    prediction,
+  })
+
   let questionState: UserQuestionState = question.state
-  if (question.state === 'resolved' && !prediction) questionState = 'incorrect'
-  else if (question.state === 'resolved' && prediction)
-    questionState =
-      prediction.prediction === question.answer ? 'correct' : 'incorrect'
+  if (question.state === 'resolved' && prediction === undefined)
+    questionState = 'incorrect'
+  else if (question.state === 'resolved' && prediction !== undefined)
+    questionState = prediction === question.answer ? 'correct' : 'incorrect'
 
   let questionStyling = { bg: '', text: '', icon: '', iconColor: '' }
   switch (questionState) {
@@ -360,9 +413,11 @@ const QuestionListItem = ({ question, prediction }: Props) => {
         <Text className={`ml-4 ${questionStyling.text}`}>
           {question.question}
         </Text>
-        <Text className={`${questionStyling.text} text-md text-bold`}>
-          {prediction?.prediction || ''}
-        </Text>
+        {prediction !== undefined && (
+          <Text className={`${questionStyling.text} text-md font-bold ml-2`}>
+            {prediction ? 'Yes' : 'No'}
+          </Text>
+        )}
       </View>
     </View>
   )

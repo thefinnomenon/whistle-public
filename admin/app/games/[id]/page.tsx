@@ -89,7 +89,7 @@ export default function GamePage() {
     }
   }
 
-  const resolveQuestion = async (questionId: string, answer: string) => {
+  const resolveQuestion = async (questionId: string, answer: boolean) => {
     try {
       await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
         state: 'resolved',
@@ -518,7 +518,7 @@ export default function GamePage() {
                       </div>
                       {question.answer && (
                         <div className="text-sm text-green-600 mt-1">
-                          Answer: {question.answer}
+                          Answer: {question.answer === true ? 'Yes' : 'No'}
                         </div>
                       )}
                       <div className="text-xs text-gray-500 mt-1">
@@ -548,13 +548,13 @@ export default function GamePage() {
                             Reopen
                           </button>
                           <button
-                            onClick={() => resolveQuestion(question.id, 'Yes')}
+                            onClick={() => resolveQuestion(question.id, true)}
                             className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700"
                           >
                             ✓ Yes
                           </button>
                           <button
-                            onClick={() => resolveQuestion(question.id, 'No')}
+                            onClick={() => resolveQuestion(question.id, false)}
                             className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
                           >
                             ✗ No

@@ -26,6 +26,12 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && isUser(userId);
     }
 
+    // Users can read/write their own predictions for games they're in
+    match /users/{userId}/games/{gameId}/predictions/{questionId} {
+      allow read: if isSignedIn() && isUser(userId);
+      allow write: if isSignedIn() && isUser(userId) && userIsInGame(gameId);
+    }
+
     // User can create a username entry with user = uid
     match /usernames/{username} {
     	allow read: if isSignedIn();
@@ -49,7 +55,13 @@ service cloud.firestore {
         match /questions/{questionId} {
           allow read: if isSignedIn() && userIsInGame(gameId);
           match /predictions/{userId} {
-            allow create: if isSignedIn() && isUser(userId) && userIsInGame(gameId) && isQuestionOpen(gameId, questionId);
+            allow read: if isSignedIn() && isUser(userId) && userIsInGame(gameId);
+            allow create: if isSignedIn()
+              && isUser(userId)
+              && userIsInGame(gameId)
+              && isQuestionOpen(gameId, questionId)
+              && request.resource.data.keys().hasOnly(['prediction'])
+              && request.resource.data.prediction is bool;
           }
         }
         match /users/{userId} {

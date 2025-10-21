@@ -1,4 +1,6 @@
 import { Ionicons } from '@expo/vector-icons'
+import { getApp } from '@react-native-firebase/app'
+import { getFunctions, httpsCallable } from '@react-native-firebase/functions'
 import * as Linking from 'expo-linking'
 import { router } from 'expo-router'
 import { Alert, Text, TouchableOpacity, View } from 'react-native'
@@ -86,6 +88,19 @@ Thank you!`
         },
       ]
     )
+  }
+
+  const handleTestNotification = async () => {
+    try {
+      const app = getApp()
+      const functions = getFunctions(app, 'us-east1')
+      const testPush = httpsCallable(functions, 'testPushNotification')
+      await testPush()
+      Alert.alert('Success', 'Test notification sent! Check your device.')
+    } catch (error) {
+      console.error('Failed to send test notification:', error)
+      Alert.alert('Error', 'Failed to send test notification')
+    }
   }
 
   return (
@@ -206,13 +221,28 @@ Thank you!`
           <Text className="text-sm font-semibold text-muted-foreground mb-3">
             ACTIONS
           </Text>
-          <TouchableOpacity
-            onPress={handleSignOut}
-            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
-          >
-            <Text className="text-base text-foreground">Sign Out</Text>
-            <Ionicons name="log-out-outline" size={20} color="slategray" />
-          </TouchableOpacity>
+          <View className="gap-3">
+            <TouchableOpacity
+              onPress={handleTestNotification}
+              className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
+            >
+              <Text className="text-base text-foreground">
+                Test Push Notification
+              </Text>
+              <Ionicons
+                name="notifications-outline"
+                size={20}
+                color="slategray"
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleSignOut}
+              className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
+            >
+              <Text className="text-base text-foreground">Sign Out</Text>
+              <Ionicons name="log-out-outline" size={20} color="slategray" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Danger Zone */}

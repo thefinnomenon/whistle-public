@@ -47,7 +47,7 @@ export default {
     icon: getAppIcon(),
     scheme: getAppScheme(),
     splash: {
-      image: './assets/images/splash.png',
+      image: './assets/images/icon.png',
       resizeMode: 'contain',
       backgroundColor: '#ffffff',
     },
@@ -81,6 +81,10 @@ export default {
         foregroundImage: './assets/images/adaptive-icon.png',
         backgroundColor: '#ffffff',
       },
+      notification: {
+        icon: './assets/images/notification-icon.png',
+        color: '#000000',
+      },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
     },
@@ -90,16 +94,18 @@ export default {
       bundler: 'metro',
     },
     plugins: [
+      './plugins/withNotificationSounds',
       'expo-video',
       'expo-router',
       [
         'expo-splash-screen',
         {
-          image: './assets/images/splash.png',
+          image: './assets/images/icon.png',
           resizeMode: 'contain',
           backgroundColor: '#ffffff',
           dark: {
-            image: './assets/images/splash_dark.png',
+            image: './assets/images/icon.png',
+            resizeMode: 'contain',
             backgroundColor: '#000000',
           },
         },

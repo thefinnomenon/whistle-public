@@ -3,7 +3,13 @@ import notifee, {
   AuthorizationStatus,
   IOSNotificationCategory,
 } from '@notifee/react-native'
-import messaging from '@react-native-firebase/messaging'
+import { getApp } from '@react-native-firebase/app'
+import {
+  getMessaging,
+  getToken,
+  onTokenRefresh as onTokenRefreshModular,
+  requestPermission,
+} from '@react-native-firebase/messaging'
 import { Linking, Platform } from 'react-native'
 
 export interface NotificationPermissionResult {
@@ -40,17 +46,17 @@ async function setupIOSCategories(): Promise<void> {
 
   const categories: IOSNotificationCategory[] = [
     {
-      id: 'practice',
+      id: 'YESNO',
       actions: [
         {
           id: 'yes',
           title: '✅ Yes',
-          foreground: true,
+          foreground: false,
         },
         {
           id: 'no',
           title: '❌ No',
-          foreground: true,
+          foreground: false,
         },
       ],
     },
@@ -90,7 +96,9 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
   // If granted, also request Firebase Messaging permission on iOS
   if (granted && Platform.OS === 'ios') {
-    await messaging().requestPermission()
+    const app = getApp()
+    const messaging = getMessaging(app)
+    await requestPermission(messaging)
   }
 
   return granted
@@ -102,12 +110,27 @@ export async function requestNotificationPermission(): Promise<boolean> {
  */
 export async function getFCMToken(): Promise<string | null> {
   try {
-    const token = await messaging().getToken()
+    const app = getApp()
+    const messaging = getMessaging(app)
+    const token = await getToken(messaging)
     return token
   } catch (error) {
     console.warn('Could not get FCM token (APNS not configured):', error)
     return null
   }
+}
+
+/**
+ * Setup FCM token refresh listener
+ * Returns an unsubscribe function
+ */
+export function onTokenRefresh(callback: (token: string) => void): () => void {
+  const app = getApp()
+  const messaging = getMessaging(app)
+  return onTokenRefreshModular(messaging, (token) => {
+    console.log('[FCM] Token refreshed:', token)
+    callback(token)
+  })
 }
 
 /**
@@ -133,7 +156,7 @@ export async function createNotificationChannel(
     id: channelId,
     name,
     importance,
-    sound: 'default',
+    sound: 'whistle',
   })
 }
 
@@ -166,6 +189,9 @@ export async function displayNotification(
     android: {
       channelId: channelId!,
       importance: AndroidImportance.HIGH,
+      smallIcon: 'ic_small_icon',
+      color: '#000000', // Black background for notification icon
+      sound: 'whistle',
       pressAction: {
         id: 'default',
       },
@@ -175,7 +201,7 @@ export async function displayNotification(
       })),
     },
     ios: {
-      categoryId: options?.categoryId || 'practice',
+      categoryId: options?.categoryId || 'YESNO',
       foregroundPresentationOptions: {
         alert: true,
         badge: true,

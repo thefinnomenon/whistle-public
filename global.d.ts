@@ -71,7 +71,7 @@ type Question = {
   type: QuestionType
   question: string
   choices: string[]
-  answer?: string
+  answer?: boolean
   createdAt: FirestoreTimestamp
   updatedAt: FirestoreTimestamp
   cancelledAt?: FirestoreTimestamp
