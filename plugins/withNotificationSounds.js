@@ -70,35 +70,70 @@ const withAndroidNotificationSound = (config) => {
 }
 
 /**
- * Copy notification sound to iOS
- * The file is copied to the iOS project directory.
- * You only need to add it to Xcode once manually:
- * 1. Open ios/whistle.xcworkspace in Xcode
- * 2. Drag whistle.wav from ios/whistle/ into the project navigator
- * 3. Make sure "Copy items if needed" is unchecked (it's already there)
- * 4. Make sure your target is selected
+ * Copy notification sound to iOS and add to Xcode project
  */
 const withIOSNotificationSound = (config) => {
   return withXcodeProject(config, async (config) => {
-    const soundFile = path.join(
-      config.modRequest.projectRoot,
-      'assets/audio/whistle.wav'
-    )
-    const projectName = config.modRequest.projectName || 'whistle'
-    const targetDir = path.join(
-      config.modRequest.platformProjectRoot,
-      projectName
-    )
+    const projectRoot = config.modRequest.projectRoot
+    const iosRoot = config.modRequest.platformProjectRoot
+    const projectName = config.modRequest.projectName
+    const soundFile = path.join(projectRoot, 'assets/audio/whistle.wav')
 
     if (!fs.existsSync(soundFile)) {
       console.warn('⚠️  Could not find whistle.wav in assets/audio')
       return config
     }
 
-    // Copy sound file to iOS project directory
+    // 1) Copy into ios/<ProjectName>/
+    const targetDir = path.join(iosRoot, projectName)
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true })
     const targetFile = path.join(targetDir, 'whistle.wav')
-    fs.copyFileSync(soundFile, targetFile)
-    console.log('✅ Copied whistle.wav to iOS project directory')
+    if (!fs.existsSync(targetFile)) {
+      fs.copyFileSync(soundFile, targetFile)
+      console.log('✅ Copied whistle.wav to iOS project directory')
+    } else {
+      console.log('ℹ️  whistle.wav already exists in iOS project directory')
+    }
+
+    // 2) Ensure "Resources" group exists and get its UUID
+    const xcodeProject = config.modResults
+    let resourcesGroup = xcodeProject.pbxGroupByName('Resources')
+    if (!resourcesGroup) {
+      const newGroup = xcodeProject.addPbxGroup([], 'Resources', 'Resources')
+      const mainGroupId = xcodeProject.getFirstProject().firstProject.mainGroup
+      xcodeProject.addToPbxGroup(newGroup.uuid, mainGroupId)
+      resourcesGroup = xcodeProject.pbxGroupByName('Resources')
+      console.log('🧰 Created Resources group in Xcode project')
+    }
+    const resourcesGroupUuid = resourcesGroup && resourcesGroup.uuid
+
+    // 3) Add resource if not already present, using the GROUP UUID (not the name)
+    const firstTarget = xcodeProject.getFirstTarget().uuid
+
+    // Check if already added
+    const hasWhistle = Object.values(
+      xcodeProject.pbxFileReferenceSection() || {}
+    ).some((entry) => entry && entry.path === 'whistle.wav')
+    if (hasWhistle) {
+      console.log(
+        'ℹ️  whistle.wav already referenced in Xcode project; skipping add.'
+      )
+      return config
+    }
+
+    const added = xcodeProject.addResourceFile(
+      'whistle.wav',
+      { target: firstTarget },
+      resourcesGroupUuid // <- ✅ pass UUID, not 'Resources'
+    )
+
+    if (added) {
+      console.log('✅ Added whistle.wav to Xcode project (Resources group)')
+    } else {
+      console.warn(
+        '⚠️  Could not add whistle.wav to Xcode project (already exists?)'
+      )
+    }
 
     return config
   })

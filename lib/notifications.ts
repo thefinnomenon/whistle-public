@@ -41,7 +41,7 @@ export async function checkNotificationPermission(): Promise<NotificationPermiss
 /**
  * Setup iOS notification categories for action buttons
  */
-async function setupIOSCategories(): Promise<void> {
+export async function setupIOSCategories(): Promise<void> {
   if (Platform.OS !== 'ios') return
 
   const categories: IOSNotificationCategory[] = [
@@ -63,6 +63,7 @@ async function setupIOSCategories(): Promise<void> {
   ]
 
   await notifee.setNotificationCategories(categories)
+  console.log('[Notifications] iOS categories set up')
 }
 
 /**

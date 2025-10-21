@@ -30,7 +30,7 @@ import { configureGoogleSignIn } from '@/lib/auth'
 import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
-import { displayNotification } from '@/lib/notifications'
+import { displayNotification, setupIOSCategories } from '@/lib/notifications'
 import { MixpanelProvider } from '@/lib/providers/MixpanelProvider'
 import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
@@ -55,6 +55,9 @@ Sentry.init({
 
 // Configure Google Sign-In on app start
 configureGoogleSignIn()
+
+// Setup iOS notification categories on app start
+setupIOSCategories()
 
 // Track processed notifications to prevent duplicates (global to persist across hot reloads)
 const processedNotifications =
