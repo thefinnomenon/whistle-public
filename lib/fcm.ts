@@ -1,14 +1,14 @@
-import * as Application from 'expo-application'
-import * as Device from 'expo-device'
 import { getApp } from '@react-native-firebase/app'
 import {
   getMessaging,
   subscribeToTopic,
   unsubscribeFromTopic,
 } from '@react-native-firebase/messaging'
+import * as Application from 'expo-application'
+import * as Device from 'expo-device'
 import { Platform } from 'react-native'
-import { getFCMToken, onTokenRefresh } from './notifications'
 import { removeFCMToken, saveFCMToken } from './firebase'
+import { getFCMToken, onTokenRefresh } from './notifications'
 
 /**
  * Get a unique device identifier

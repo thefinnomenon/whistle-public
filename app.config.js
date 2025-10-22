@@ -137,6 +137,12 @@ export default {
           },
         },
       ],
+      [
+        'expo-notifications',
+        {
+          sounds: ['./assets/audio/whistle.wav'],
+        },
+      ],
     ],
     experiments: {
       typedRoutes: true,
