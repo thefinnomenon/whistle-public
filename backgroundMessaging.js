@@ -49,6 +49,7 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
       },
       ios: {
         categoryId: 'YESNO',
+        sound: 'whistle.wav',
         foregroundPresentationOptions: {
           alert: true,
           badge: true,

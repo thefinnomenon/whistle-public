@@ -60,6 +60,21 @@ export async function setupIOSCategories(): Promise<void> {
         },
       ],
     },
+    {
+      id: 'practice',
+      actions: [
+        {
+          id: 'yes',
+          title: '✅ Yes',
+          foreground: true, // Open app for practice
+        },
+        {
+          id: 'no',
+          title: '❌ No',
+          foreground: true, // Open app for practice
+        },
+      ],
+    },
   ]
 
   await notifee.setNotificationCategories(categories)
@@ -203,6 +218,7 @@ export async function displayNotification(
     },
     ios: {
       categoryId: options?.categoryId || 'YESNO',
+      sound: 'whistle.wav',
       foregroundPresentationOptions: {
         alert: true,
         badge: true,
