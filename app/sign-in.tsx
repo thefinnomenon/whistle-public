@@ -34,7 +34,11 @@ export default function SignInScreen() {
         {/* Top section with icon - 1/3 of screen */}
         <View className="flex-1 justify-center items-center">
           <Image
-            source={require('@/assets/images/icon.png')}
+            source={
+              colorScheme === 'dark'
+                ? require('@/assets/images/adaptive-icon-dark.png')
+                : require('@/assets/images/adaptive-icon.png')
+            }
             style={{
               width: 128,
               height: 128,

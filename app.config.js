@@ -46,11 +46,6 @@ export default {
     orientation: 'portrait',
     icon: getAppIcon(),
     scheme: getAppScheme(),
-    splash: {
-      image: './assets/images/icon.png',
-      resizeMode: 'contain',
-      backgroundColor: '#ffffff',
-    },
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     runtimeVersion: {
@@ -100,11 +95,11 @@ export default {
       [
         'expo-splash-screen',
         {
-          image: './assets/images/icon.png',
+          image: './assets/images/adaptive-icon.png',
           resizeMode: 'contain',
           backgroundColor: '#ffffff',
           dark: {
-            image: './assets/images/icon.png',
+            image: './assets/images/adaptive-icon-dark.png',
             resizeMode: 'contain',
             backgroundColor: '#000000',
           },

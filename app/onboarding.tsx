@@ -14,6 +14,7 @@ import {
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native'
 import { router } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
+import { useColorScheme } from 'nativewind'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Image, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -23,6 +24,7 @@ const videoSource = null
 
 export default function OnboardingScreen() {
   const { completeOnboarding } = useAuth()
+  const { colorScheme } = useColorScheme()
   const [step, setStep] = useState<'intro' | 'practice'>('intro')
   const [loading, setLoading] = useState(false)
   const [videoStarted, setVideoStarted] = useState(false)
@@ -235,7 +237,11 @@ export default function OnboardingScreen() {
       <SafeAreaView className="flex-1 bg-background">
         <View className="flex-1 items-center justify-center px-6">
           <Image
-            source={require('@/assets/images/icon.png')}
+            source={
+              colorScheme === 'dark'
+                ? require('@/assets/images/adaptive-icon-dark.png')
+                : require('@/assets/images/adaptive-icon.png')
+            }
             style={{
               width: 96,
               height: 96,
