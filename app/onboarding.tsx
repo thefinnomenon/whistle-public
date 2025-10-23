@@ -255,14 +255,14 @@ export default function OnboardingScreen() {
           </Text>
 
           <Card className="w-full max-w-md mb-8">
-            <CardContent className="pt-2">
-              <View className="gap-4">
-                <View className="gap-2">
+            <CardContent>
+              <View className="gap-6">
+                <View className="gap-1">
                   <Text className="text-lg font-semibold text-foreground">
                     1. Join a game
                   </Text>
                 </View>
-                <View className="gap-2">
+                <View className="gap-1">
                   <Text className="text-lg font-semibold text-foreground">
                     2. Answer predictions
                   </Text>
@@ -272,7 +272,7 @@ export default function OnboardingScreen() {
                     since the next play could literally be seconds away!
                   </Text>
                 </View>
-                <View className="gap-2">
+                <View className="gap-1">
                   <Text className="text-lg font-semibold text-foreground">
                     3. Get the most predictions right and win
                   </Text>
@@ -330,7 +330,7 @@ export default function OnboardingScreen() {
           {!videoStarted && permissionDenied && (
             <>
               <Card>
-                <CardContent className="pt-6">
+                <CardContent>
                   <Text className="text-center text-muted-foreground mb-4">
                     Push notifications are required to use this app. Please
                     enable them in your device settings.
@@ -350,7 +350,7 @@ export default function OnboardingScreen() {
             <>
               {userAnswer ? (
                 <Card>
-                  <CardContent className="pt-2">
+                  <CardContent>
                     <Text className="text-lg font-semibold text-center text-foreground">
                       You answered: {userAnswer === 'yes' ? 'Yes' : 'No'}
                     </Text>
@@ -372,7 +372,7 @@ export default function OnboardingScreen() {
           {showMissedResponse && (
             <>
               <Card className="mb-4">
-                <CardContent className="pt-2">
+                <CardContent>
                   <Text className="text-lg font-semibold text-center text-foreground mb-2">
                     You missed the response window!
                   </Text>
@@ -391,7 +391,7 @@ export default function OnboardingScreen() {
           {showFinalAnswer && (
             <>
               <Card>
-                <CardContent className="pt-2">
+                <CardContent>
                   <Text className="text-lg font-semibold text-center text-foreground mb-2">
                     You answered: {userAnswer === 'yes' ? 'Yes' : 'No'}
                   </Text>
