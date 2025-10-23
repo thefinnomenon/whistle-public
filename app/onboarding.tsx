@@ -16,7 +16,7 @@ import { router } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import { useColorScheme } from 'nativewind'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, Image, View } from 'react-native'
+import { ActivityIndicator, Image, Platform, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
 
@@ -101,7 +101,9 @@ export default function OnboardingScreen() {
       setNotificationId(
         await displayNotification(
           '[PAT vs ATL] Will this play result in a touchdown?',
-          'Tap Yes or No to make your prediction!',
+          Platform.OS === 'ios'
+            ? 'Long press to see options'
+            : 'Tap Yes or No to make your prediction!',
           {
             channelId,
             categoryId: 'practice',
@@ -262,7 +264,7 @@ export default function OnboardingScreen() {
                     1. Join a game
                   </Text>
                 </View>
-                <View className="gap-1">
+                <View className="gap-2">
                   <Text className="text-lg font-semibold text-foreground">
                     2. Answer predictions
                   </Text>
@@ -271,6 +273,25 @@ export default function OnboardingScreen() {
                     notifications which you should answer directly and quickly
                     since the next play could literally be seconds away!
                   </Text>
+                  {Platform.OS === 'ios' && (
+                    <Text className="text-foreground text-sm bold">
+                      Long press the notification to see the options
+                    </Text>
+                  )}
+                  <Image
+                    source={
+                      Platform.OS === 'ios'
+                        ? require('@/assets/images/onboarding/ios_push_example.png')
+                        : require('@/assets/images/onboarding/android_push_example.png')
+                    }
+                    style={{
+                      width: '100%',
+                      height: 120,
+                      borderRadius: 12,
+                      marginTop: 8,
+                    }}
+                    resizeMode="contain"
+                  />
                 </View>
                 <View className="gap-1">
                   <Text className="text-lg font-semibold text-foreground">
