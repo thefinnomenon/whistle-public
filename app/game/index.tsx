@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { unsubscribeFromGameTopic } from '@/lib/fcm'
 
+import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import {
@@ -99,6 +100,13 @@ export default function GameScreen() {
             }
             try {
               isLeavingRef.current = true
+
+              // Track game leave
+              analytics.track('Game Left', {
+                user_id: user.id,
+                game_id: id,
+                username: user.username,
+              })
 
               // Unsubscribe from game topic
               await unsubscribeFromGameTopic(id)
@@ -346,12 +354,6 @@ type Props = {
 const QuestionListItem = ({ question, prediction }: Props) => {
   const colorScheme = useColorScheme()
   const isDark = colorScheme === 'dark'
-
-  console.log('Rendering QuestionListItem:', {
-    state: question.state,
-    answer: question.answer,
-    prediction,
-  })
 
   let questionState: UserQuestionState = question.state
   if (question.state === 'resolved' && prediction === undefined)

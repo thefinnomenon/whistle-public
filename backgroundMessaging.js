@@ -9,6 +9,7 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   const isQuestion = remoteMessage.data?.questionId
 
   if (isQuestion) {
+    const receivedAt = Date.now()
     console.log(
       '[FCM Background] Displaying question notification with actions'
     )
@@ -25,7 +26,10 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     const notificationId = await notifee.displayNotification({
       title: remoteMessage.data?.title || '🏈 New Question!',
       body: remoteMessage.data?.body || remoteMessage.data?.question || '',
-      data: remoteMessage.data,
+      data: {
+        ...remoteMessage.data,
+        receivedAt: receivedAt.toString(),
+      },
       android: {
         channelId,
         importance: AndroidImportance.HIGH,

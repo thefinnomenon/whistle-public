@@ -84,7 +84,7 @@ export default function OnboardingScreen() {
     return () => {
       unsubscribe()
     }
-  }, [windowClosed, windowClosedTimer])
+  }, [player, windowClosed, windowClosedTimer])
 
   const handleNext = () => {
     setStep('practice')

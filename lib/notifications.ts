@@ -1,9 +1,17 @@
 import notifee, {
   AndroidImportance,
   AuthorizationStatus,
+  EventType,
   IOSNotificationCategory,
 } from '@notifee/react-native'
 import { getApp } from '@react-native-firebase/app'
+import { getAuth } from '@react-native-firebase/auth'
+import {
+  doc,
+  getFirestore,
+  serverTimestamp,
+  setDoc,
+} from '@react-native-firebase/firestore'
 import {
   getMessaging,
   getToken,
@@ -235,4 +243,175 @@ export async function cancelNotification(
   notificationId: string
 ): Promise<void> {
   await notifee.cancelNotification(notificationId)
+}
+
+/**
+ * Handle notification action press (Yes/No buttons)
+ */
+export async function handleNotificationActionPress(
+  actionId: string | undefined,
+  data: Record<string, any> | undefined,
+  analytics: { track: (event: string, data: any) => void },
+  logContext: 'Background' | 'Foreground' = 'Foreground'
+): Promise<void> {
+  if (actionId !== 'yes' && actionId !== 'no') {
+    return
+  }
+
+  const { gameId, questionId, triggeredAt, createdAt, sentAt, receivedAt } =
+    data || {}
+
+  if (!gameId || !questionId) {
+    return
+  }
+
+  try {
+    const answeredAt = Date.now()
+    const prediction = actionId === 'yes'
+    const app = getApp()
+    const auth = getAuth(app)
+    const firestore = getFirestore(app)
+    const userId = auth.currentUser?.uid
+
+    if (!userId) {
+      console.warn(`[Notification ${logContext}] No user ID available`)
+      return
+    }
+
+    // Write to question predictions collection (for scoring)
+    const predictionRef = doc(
+      firestore,
+      `games/${gameId}/questions/${questionId}/predictions/${userId}`
+    )
+
+    await setDoc(predictionRef, {
+      prediction,
+    })
+
+    // Write to user predictions subcollection (for UI display)
+    const userPredictionRef = doc(
+      firestore,
+      `users/${userId}/games/${gameId}/predictions/${questionId}`
+    )
+
+    await setDoc(userPredictionRef, {
+      prediction,
+      createdAt: serverTimestamp(),
+    })
+
+    console.log(`[Notification ${logContext}] Submitted answer: ${prediction}`)
+
+    // Track to Mixpanel with all timing data
+    const timingData: any = {
+      game_id: gameId,
+      question_id: questionId,
+      prediction,
+      answered_at: answeredAt,
+    }
+
+    if (triggeredAt) {
+      timingData.triggered_at = parseInt(triggeredAt as string)
+      timingData.trigger_to_answered_ms =
+        answeredAt - parseInt(triggeredAt as string)
+    }
+    if (createdAt) {
+      timingData.created_at = parseInt(createdAt as string)
+      timingData.created_to_answered_ms =
+        answeredAt - parseInt(createdAt as string)
+    }
+    if (sentAt) {
+      timingData.sent_at = parseInt(sentAt as string)
+      timingData.sent_to_answered_ms = answeredAt - parseInt(sentAt as string)
+    }
+    if (receivedAt) {
+      timingData.received_at = parseInt(receivedAt as string)
+      timingData.delivery_latency_ms =
+        parseInt(receivedAt as string) - parseInt((sentAt as string) || '0')
+      timingData.answer_latency_ms = answeredAt - parseInt(receivedAt as string)
+    }
+
+    analytics.track('question_answered', timingData)
+    console.log('[Mixpanel] Tracked question_answered with timing data')
+  } catch (error) {
+    console.error(
+      `[Notification ${logContext}] Error submitting answer:`,
+      error
+    )
+  }
+}
+
+/**
+ * Handle notification dismissal and track missed questions
+ */
+export async function handleNotificationDismissed(
+  data: Record<string, any> | undefined,
+  analytics: { track: (event: string, data: any) => void }
+): Promise<void> {
+  const { gameId, questionId, triggeredAt, createdAt, sentAt, receivedAt } =
+    data || {}
+
+  if (gameId && questionId) {
+    try {
+      const missedAt = Date.now()
+      const timingData: any = {
+        game_id: gameId,
+        question_id: questionId,
+        missed_at: missedAt,
+      }
+
+      if (triggeredAt) {
+        timingData.triggered_at = parseInt(triggeredAt as string)
+        timingData.trigger_to_missed_ms =
+          missedAt - parseInt(triggeredAt as string)
+      }
+      if (createdAt) {
+        timingData.created_at = parseInt(createdAt as string)
+        timingData.created_to_missed_ms =
+          missedAt - parseInt(createdAt as string)
+      }
+      if (sentAt) {
+        timingData.sent_at = parseInt(sentAt as string)
+        timingData.sent_to_missed_ms = missedAt - parseInt(sentAt as string)
+      }
+      if (receivedAt && sentAt) {
+        timingData.received_at = parseInt(receivedAt as string)
+        timingData.delivery_latency_ms =
+          parseInt(receivedAt as string) - parseInt(sentAt as string)
+        timingData.displayed_duration_ms =
+          missedAt - parseInt(receivedAt as string)
+      }
+
+      analytics.track('question_missed', timingData)
+      console.log('[Mixpanel] Tracked question_missed with timing data')
+    } catch (error) {
+      console.error('[Notification] Error tracking missed question:', error)
+    }
+  }
+}
+
+/**
+ * Unified notification event handler
+ * Handles both ACTION_PRESS and DISMISSED events
+ */
+export async function handleNotificationEvent(
+  type: number,
+  detail: any,
+  analytics: { track: (event: string, data: any) => void },
+  context: 'Background' | 'Foreground' = 'Foreground'
+): Promise<void> {
+  console.log(`[Notification Event] Type: ${type}, Context: ${context}`)
+  console.log(`[Notification Event] Action ID: ${detail.pressAction?.id}`)
+
+  if (type === EventType.ACTION_PRESS) {
+    console.log('[Notification Event] Handling ACTION_PRESS')
+    await handleNotificationActionPress(
+      detail.pressAction?.id,
+      detail.notification?.data,
+      analytics,
+      context
+    )
+  } else if (type === EventType.DISMISSED) {
+    console.log('[Notification Event] Handling DISMISSED')
+    await handleNotificationDismissed(detail.notification?.data, analytics)
+  }
 }

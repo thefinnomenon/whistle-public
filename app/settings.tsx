@@ -3,7 +3,7 @@ import { getApp } from '@react-native-firebase/app'
 import { getFunctions, httpsCallable } from '@react-native-firebase/functions'
 import * as Linking from 'expo-linking'
 import { router } from 'expo-router'
-import { Alert, Text, TouchableOpacity, View } from 'react-native'
+import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
@@ -120,7 +120,14 @@ Thank you!`
       </View>
 
       {/* Content */}
-      <View className="flex-1 px-4 py-6">
+      <ScrollView
+        className="flex-1 px-4"
+        contentContainerStyle={{
+          paddingVertical: 24,
+          paddingBottom: insets.bottom + 24,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Account Section */}
         <View className="mb-6">
           <Text className="text-sm font-semibold text-muted-foreground mb-3">
@@ -221,28 +228,13 @@ Thank you!`
           <Text className="text-sm font-semibold text-muted-foreground mb-3">
             ACTIONS
           </Text>
-          <View className="gap-3">
-            <TouchableOpacity
-              onPress={handleTestNotification}
-              className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
-            >
-              <Text className="text-base text-foreground">
-                Test Push Notification
-              </Text>
-              <Ionicons
-                name="notifications-outline"
-                size={20}
-                color="slategray"
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleSignOut}
-              className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
-            >
-              <Text className="text-base text-foreground">Sign Out</Text>
-              <Ionicons name="log-out-outline" size={20} color="slategray" />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            onPress={handleSignOut}
+            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"
+          >
+            <Text className="text-base text-foreground">Sign Out</Text>
+            <Ionicons name="log-out-outline" size={20} color="slategray" />
+          </TouchableOpacity>
         </View>
 
         {/* Danger Zone */}
@@ -261,10 +253,10 @@ Thank you!`
         </View>
 
         {/* App Info */}
-        <View className="mt-auto items-center pb-4">
+        <View className="items-center">
           <Text className="text-xs text-muted-foreground">Whistle v1.0.0</Text>
         </View>
-      </View>
+      </ScrollView>
     </View>
   )
 }

@@ -165,7 +165,7 @@ exports.pushNewQuestion = onDocumentCreated(
     console.log(`Pushing new question ${questionId} for game ${gameId}`)
 
     const question = event.data?.data() as Question
-    if (!question) {
+    if (!question || !event.data) {
       console.error('No data associated with the event', { event })
       return
     }
@@ -173,6 +173,9 @@ exports.pushNewQuestion = onDocumentCreated(
     const topic = `game_${gameId}`
 
     try {
+      // Capture sentAt BEFORE sending to get accurate timing
+      const sentAt = Date.now()
+
       // Send data-only FCM message to topic (so background handler can add action buttons)
       const message = {
         topic,
@@ -182,6 +185,9 @@ exports.pushNewQuestion = onDocumentCreated(
           question: question.question,
           title: '🏈 New Question!',
           body: question.question,
+          triggeredAt: question.triggeredAt?.toMillis().toString() || '',
+          createdAt: event.data.createTime.toMillis().toString(),
+          sentAt: sentAt.toString(),
         },
         android: {
           priority: 'high' as const,

@@ -14,6 +14,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   writeBatch,
 } from '@react-native-firebase/firestore'
@@ -348,12 +349,13 @@ export const createQuestionsCollection = (gameId: string) => {
 
 export const addQuestion = async (
   gameId: string,
-  question: Omit<Question, 'id' | 'createdAt'>
+  question: Omit<Question, 'id' | 'createdAt' | 'triggeredAt'>
 ) => {
   const ref = doc(collection(db, 'games'))
   await addDoc(collection(db, `games/${gameId}/questions`), {
     id: ref.id,
     ...question,
+    triggeredAt: Timestamp.fromMillis(Date.now()),
     createdAt: serverTimestamp(),
   })
 }

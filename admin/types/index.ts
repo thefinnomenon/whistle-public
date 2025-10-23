@@ -63,6 +63,7 @@ export type Question = {
   question: string
   choices: string[]
   answer?: boolean
+  triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
 }

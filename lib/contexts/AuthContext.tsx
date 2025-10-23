@@ -175,7 +175,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const handleSignOut = async () => {
     try {
+      // Track sign out before clearing user data
+      if (firebaseUser) {
+        analytics.track('User Signed Out', {
+          user_id: firebaseUser.uid,
+        })
+      }
+
       await signOut(auth)
+      analytics.reset()
     } catch (error) {
       console.error('Sign out error:', error)
       throw error
@@ -189,6 +197,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         'true'
       )
       setHasCompletedOnboarding(true)
+
+      // Track onboarding completion
+      analytics.track('Onboarding Completed', {
+        user_id: firebaseUser.uid,
+      })
 
       // Refresh user record to check for username
       const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid))

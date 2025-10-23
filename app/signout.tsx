@@ -1,3 +1,4 @@
+import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { deleteUser } from '@/lib/firebase'
 import { clearFCMToken, unsubscribeFromAllTopics } from '@/lib/fcm'
@@ -42,6 +43,12 @@ export default function SignOutScreen() {
         }
 
         if (shouldDeleteAccount && user) {
+          // Track account deletion before deleting
+          analytics.track('Account Deleted', {
+            user_id: user.id,
+            username: user.username,
+          })
+
           // Delete user data and Firebase Auth account
           // Note: Deleting the Firebase Auth account will automatically trigger signOut
           console.log('[SignOut] Deleting user account and data')

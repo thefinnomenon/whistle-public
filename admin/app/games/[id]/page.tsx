@@ -115,6 +115,7 @@ export default function GamePage() {
         type: 'YESNO',
         choices: ['Yes', 'No'],
         state: 'open',
+        triggeredAt: Timestamp.now(),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       })

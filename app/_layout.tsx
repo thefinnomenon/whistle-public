@@ -1,12 +1,5 @@
 import notifee, { EventType } from '@notifee/react-native'
 import { getApp } from '@react-native-firebase/app'
-import { getAuth } from '@react-native-firebase/auth'
-import {
-  doc,
-  getFirestore,
-  serverTimestamp,
-  setDoc,
-} from '@react-native-firebase/firestore'
 import { getMessaging, onMessage } from '@react-native-firebase/messaging'
 import {
   DarkTheme,
@@ -26,11 +19,16 @@ import './global.css'
 // Import background messaging handler
 import '../backgroundMessaging'
 
+import { analytics } from '@/lib/analytics'
 import { configureGoogleSignIn } from '@/lib/auth'
 import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
-import { displayNotification, setupIOSCategories } from '@/lib/notifications'
+import {
+  displayNotification,
+  handleNotificationEvent,
+  setupIOSCategories,
+} from '@/lib/notifications'
 import { MixpanelProvider } from '@/lib/providers/MixpanelProvider'
 import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
@@ -93,6 +91,16 @@ if (!(global as any).__messageHandlerSetup) {
 
       // Check if this is a question notification (has questionId in data)
       const isQuestion = remoteMessage.data?.questionId
+      const receivedAt = Date.now()
+
+      // Log latency if timing data available
+      if (isQuestion && remoteMessage.data?.sentAt) {
+        const deliveryLatency =
+          receivedAt - parseInt(remoteMessage.data.sentAt as string)
+        console.log(
+          `[Timing] Notification delivery latency: ${deliveryLatency}ms`
+        )
+      }
 
       // Display the notification using notifee
       if (isQuestion || remoteMessage.notification) {
@@ -106,7 +114,10 @@ if (!(global as any).__messageHandlerSetup) {
             remoteMessage.notification?.body ||
             '',
           {
-            data: remoteMessage.data,
+            data: {
+              ...remoteMessage.data,
+              receivedAt: receivedAt.toString(),
+            },
             actions: isQuestion
               ? [
                   { title: '✅ Yes', id: 'yes' },
@@ -143,65 +154,33 @@ if (!(global as any).__messageHandlerSetup) {
 const processedActions = (global as any).__processedActions || new Set<string>()
 ;(global as any).__processedActions = processedActions
 
+// Track answered notifications to prevent logging dismissed events for already-answered questions
+const answeredNotifications =
+  (global as any).__answeredNotifications || new Set<string>()
+;(global as any).__answeredNotifications = answeredNotifications
+
 // Setup notification action handler (for Yes/No buttons, only once)
 if (!(global as any).__actionHandlerSetup) {
   ;(global as any).__actionHandlerSetup = true
 
   // Handle background notification actions
   notifee.onBackgroundEvent(async ({ type, detail }) => {
-    if (type === EventType.ACTION_PRESS) {
-      const actionId = detail.pressAction?.id
-      const data = detail.notification?.data
-
-      if (actionId === 'yes' || actionId === 'no') {
-        const { gameId, questionId } = data || {}
-        if (gameId && questionId) {
-          try {
-            const prediction = actionId === 'yes'
-            const app = getApp()
-            const auth = getAuth(app)
-            const firestore = getFirestore(app)
-            const userId = auth.currentUser?.uid
-
-            if (userId) {
-              // Write to question predictions collection (for scoring)
-              const predictionRef = doc(
-                firestore,
-                `games/${gameId}/questions/${questionId}/predictions/${userId}`
-              )
-
-              await setDoc(predictionRef, {
-                prediction,
-              })
-
-              // Write to user predictions subcollection (for UI display)
-              const userPredictionRef = doc(
-                firestore,
-                `users/${userId}/games/${gameId}/predictions/${questionId}`
-              )
-
-              await setDoc(userPredictionRef, {
-                prediction,
-                createdAt: serverTimestamp(),
-              })
-
-              console.log(
-                `[Notification Background] Submitted answer: ${prediction}`
-              )
-            }
-          } catch (error) {
-            console.error(
-              '[Notification Background] Error submitting answer:',
-              error
-            )
-          }
-        }
-      }
-    }
+    await handleNotificationEvent(type, detail, analytics, 'Background')
   })
 
   notifee.onForegroundEvent(async ({ type, detail }) => {
+    console.log(`[Notification Foreground] Event type: ${type}`)
+    console.log(
+      `[Notification Foreground] EventType.ACTION_PRESS = ${EventType.ACTION_PRESS}`
+    )
+    console.log(
+      `[Notification Foreground] EventType.DISMISSED = ${EventType.DISMISSED}`
+    )
+
     if (type === EventType.ACTION_PRESS) {
+      console.log('[Notification Foreground] Entering ACTION_PRESS handler')
+
+      // Check for duplicates (foreground-only logic)
       const actionKey = `${detail.notification?.id}-${detail.pressAction?.id}`
       if (processedActions.has(actionKey)) {
         console.log('[Notification] Skipping duplicate action')
@@ -219,54 +198,37 @@ if (!(global as any).__actionHandlerSetup) {
       console.log('[Notification] Action pressed:', detail.pressAction?.id)
       console.log('[Notification] Data:', detail.notification?.data)
 
-      const actionId = detail.pressAction?.id
-      const data = detail.notification?.data
-
-      if (actionId === 'yes' || actionId === 'no') {
-        const { gameId, questionId } = data || {}
-        if (gameId && questionId) {
-          try {
-            // Submit answer to Firestore
-            const prediction = actionId === 'yes'
-            const app = getApp()
-            const auth = getAuth(app)
-            const firestore = getFirestore(app)
-            const userId = auth.currentUser?.uid
-
-            if (userId) {
-              // Write to question predictions collection (for scoring)
-              const predictionRef = doc(
-                firestore,
-                `games/${gameId}/questions/${questionId}/predictions/${userId}`
-              )
-
-              await setDoc(predictionRef, {
-                prediction,
-              })
-
-              // Write to user predictions subcollection (for UI display)
-              const userPredictionRef = doc(
-                firestore,
-                `users/${userId}/games/${gameId}/predictions/${questionId}`
-              )
-
-              await setDoc(userPredictionRef, {
-                prediction,
-                createdAt: serverTimestamp(),
-              })
-
-              console.log(`[Notification] Submitted answer: ${prediction}`)
-            }
-          } catch (error) {
-            console.error('[Notification] Error submitting answer:', error)
-          }
-        }
+      // Mark this notification as answered to prevent tracking it as missed
+      if (detail.notification?.id) {
+        answeredNotifications.add(detail.notification.id)
+        console.log(
+          '[Notification] Marked as answered:',
+          detail.notification.id
+        )
       }
 
-      // Dismiss the notification
+      // Handle the action
+      await handleNotificationEvent(type, detail, analytics, 'Foreground')
+
+      // Dismiss the notification (foreground-only logic)
       if (detail.notification?.id) {
         await notifee.cancelNotification(detail.notification.id)
       }
+    } else if (type === EventType.DISMISSED) {
+      console.log('[Notification Foreground] Entering DISMISSED handler')
+
+      // Don't track dismissed events for notifications that were already answered
+      const notificationId = detail.notification?.id
+      if (notificationId && answeredNotifications.has(notificationId)) {
+        console.log(
+          '[Notification] Skipping dismissed event for answered notification'
+        )
+        answeredNotifications.delete(notificationId) // Clean up
+        return
+      }
+
+      console.log('[Notification] Processing dismissed event (not answered)')
+      await handleNotificationEvent(type, detail, analytics, 'Foreground')
     }
   })
 }

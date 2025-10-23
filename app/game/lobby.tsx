@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppState, Image, Text, TouchableOpacity, View } from 'react-native'
 import { toast } from 'sonner-native'
 
+import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import { subscribeToGameTopic } from '@/lib/fcm'
@@ -146,6 +147,14 @@ export default function GameLobbyScreen() {
 
       // Subscribe to game topic for notifications
       await subscribeToGameTopic(game.id)
+
+      // Track game join
+      analytics.track('Game Joined', {
+        user_id: user.id,
+        game_id: game.id,
+        username: user.username,
+        game_state: game.state,
+      })
 
       setHasUserJoined(true)
       if (game?.state === 'open') {

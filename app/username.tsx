@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Text } from '@/components/ui/text'
+import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { setUsername } from '@/lib/firebase'
 import { router } from 'expo-router'
@@ -25,6 +26,13 @@ export default function UsernameScreen() {
     setLoading(true)
     try {
       await setUsername(firebaseUser.uid, username)
+
+      // Track username creation
+      analytics.track('Username Created', {
+        user_id: firebaseUser.uid,
+        username,
+      })
+
       await completeOnboarding()
       router.replace('/')
     } catch (error: any) {
