@@ -28,6 +28,7 @@ export default function GamePage() {
   const [game, setGame] = useState<Game | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
   const [loading, setLoading] = useState(true)
+  const [changingAnswerId, setChangingAnswerId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user || !gameId) return
@@ -94,7 +95,7 @@ export default function GamePage() {
       await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
         state: 'resolved',
         answer: answer,
-        resolvedAt: Timestamp.now(),
+        changedAt: Timestamp.now(),
       })
     } catch (error) {
       console.error('Error resolving question:', error)
@@ -181,7 +182,7 @@ export default function GamePage() {
             {game.state === 'scheduled' && (
               <button
                 onClick={() => updateGameState('open')}
-                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 cursor-pointer"
               >
                 Start Game
               </button>
@@ -189,7 +190,7 @@ export default function GamePage() {
             {game.state === 'open' && (
               <button
                 onClick={() => updateGameState('resolved')}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 cursor-pointer"
               >
                 End Game
               </button>
@@ -197,7 +198,7 @@ export default function GamePage() {
             {game.state !== 'cancelled' && (
               <button
                 onClick={() => updateGameState('cancelled')}
-                className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 cursor-pointer"
               >
                 Cancel Game
               </button>
@@ -221,7 +222,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will there be a score in this quarter?')
                 }
-                className="bg-purple-100 hover:bg-purple-200 text-purple-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-purple-100 hover:bg-purple-200 text-purple-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ⏱️ Score this quarter?
               </button>
@@ -229,7 +230,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [HOMETEAM] score before halftime?')
                 }
-                className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏁 Home score before half?
               </button>
@@ -237,7 +238,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [AWAYTEAM] score before halftime?')
                 }
-                className="bg-pink-100 hover:bg-pink-200 text-pink-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-pink-100 hover:bg-pink-200 text-pink-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏁 Away score before half?
               </button>
@@ -254,7 +255,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this drive result in a score?')
                 }
-                className="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 📊 Score on drive?
               </button>
@@ -262,7 +263,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [HOMETEAM] score on this drive?')
                 }
-                className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏠 Home team score?
               </button>
@@ -270,7 +271,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [AWAYTEAM] score on this drive?')
                 }
-                className="bg-teal-100 hover:bg-teal-200 text-teal-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-teal-100 hover:bg-teal-200 text-teal-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ✈️ Away team score?
               </button>
@@ -278,7 +279,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this red zone drive end in a TD?')
                 }
-                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🔴 Red zone TD?
               </button>
@@ -286,7 +287,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [HOMETEAM] go 3-and-out?')
                 }
-                className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🔥 Home 3-and-out?
               </button>
@@ -294,7 +295,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will [AWAYTEAM] stop them here?')
                 }
-                className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 💪 Away team stop?
               </button>
@@ -311,7 +312,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this play result in a touchdown?')
                 }
-                className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏈 Touchdown?
               </button>
@@ -319,7 +320,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this field goal be good?')
                 }
-                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🎯 Field goal good?
               </button>
@@ -327,7 +328,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will the extra point be good?')
                 }
-                className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🎊 Extra point?
               </button>
@@ -335,7 +336,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will the 2-point conversion succeed?')
                 }
-                className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏁 2-point conversion?
               </button>
@@ -343,7 +344,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this result in a safety?')
                 }
-                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🛡️ Safety?
               </button>
@@ -351,7 +352,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will the defense score on this play?')
                 }
-                className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🔙 Defensive score?
               </button>
@@ -368,7 +369,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this be a first down?')
                 }
-                className="bg-lime-100 hover:bg-lime-200 text-lime-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-lime-100 hover:bg-lime-200 text-lime-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ⬇️ First down?
               </button>
@@ -376,7 +377,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will they convert this 3rd down?')
                 }
-                className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ⚡ 3rd down conversion?
               </button>
@@ -384,7 +385,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will they convert this 4th down?')
                 }
-                className="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🎲 4th down conversion?
               </button>
@@ -392,7 +393,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this play gain 20+ yards?')
                 }
-                className="bg-sky-100 hover:bg-sky-200 text-sky-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-sky-100 hover:bg-sky-200 text-sky-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 💨 Big play (20+ yards)?
               </button>
@@ -400,7 +401,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this run gain 10+ yards?')
                 }
-                className="bg-violet-100 hover:bg-violet-200 text-violet-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-violet-100 hover:bg-violet-200 text-violet-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏃 Run 10+ yards?
               </button>
@@ -408,7 +409,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this pass gain 15+ yards?')
                 }
-                className="bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 📡 Pass 15+ yards?
               </button>
@@ -423,13 +424,13 @@ export default function GamePage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
                 onClick={() => createQuickQuestion('Will this be completed?')}
-                className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ✅ Completion?
               </button>
               <button
                 onClick={() => createQuickQuestion('Will this be a sack?')}
-                className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 💥 Sack?
               </button>
@@ -437,7 +438,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this result in a turnover?')
                 }
-                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🔄 Turnover?
               </button>
@@ -445,7 +446,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this result in an interception?')
                 }
-                className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🎯 Interception?
               </button>
@@ -453,7 +454,7 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will this result in a fumble?')
                 }
-                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🔁 Fumble?
               </button>
@@ -461,13 +462,13 @@ export default function GamePage() {
                 onClick={() =>
                   createQuickQuestion('Will there be a penalty on this play?')
                 }
-                className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🚩 Penalty?
               </button>
               <button
                 onClick={() => createQuickQuestion('Will they punt?')}
-                className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded text-sm font-medium text-left"
+                className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🦵 Punt?
               </button>
@@ -480,7 +481,7 @@ export default function GamePage() {
             <h2 className="text-2xl font-semibold">Questions</h2>
             <Link
               href={`/games/${gameId}/questions/new`}
-              className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 text-sm"
+              className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 text-sm cursor-pointer"
             >
               Custom Question
             </Link>
@@ -517,7 +518,7 @@ export default function GamePage() {
                       <div className="text-sm text-gray-600">
                         Choices: {question.choices.join(', ')}
                       </div>
-                      {question.answer && (
+                      {question.answer !== undefined && (
                         <div className="text-sm text-green-600 mt-1">
                           Answer: {question.answer === true ? 'Yes' : 'No'}
                         </div>
@@ -533,7 +534,7 @@ export default function GamePage() {
                           onClick={() =>
                             updateQuestionState(question.id, 'closed')
                           }
-                          className="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700"
+                          className="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700 cursor-pointer"
                         >
                           Close
                         </button>
@@ -544,22 +545,61 @@ export default function GamePage() {
                             onClick={() =>
                               updateQuestionState(question.id, 'open')
                             }
-                            className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500"
+                            className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
                           >
                             Reopen
                           </button>
                           <button
                             onClick={() => resolveQuestion(question.id, true)}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700"
+                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
                           >
                             ✓ Yes
                           </button>
                           <button
                             onClick={() => resolveQuestion(question.id, false)}
-                            className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
+                            className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
                           >
                             ✗ No
                           </button>
+                        </>
+                      )}
+                      {question.state === 'resolved' && (
+                        <>
+                          {changingAnswerId === question.id ? (
+                            <>
+                              <button
+                                onClick={() => {
+                                  resolveQuestion(question.id, true)
+                                  setChangingAnswerId(null)
+                                }}
+                                className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
+                              >
+                                ✓ Yes
+                              </button>
+                              <button
+                                onClick={() => {
+                                  resolveQuestion(question.id, false)
+                                  setChangingAnswerId(null)
+                                }}
+                                className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
+                              >
+                                ✗ No
+                              </button>
+                              <button
+                                onClick={() => setChangingAnswerId(null)}
+                                className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setChangingAnswerId(question.id)}
+                              className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
+                            >
+                              Change Answer
+                            </button>
+                          )}
                         </>
                       )}
                       {question.state !== 'cancelled' && (
@@ -567,7 +607,7 @@ export default function GamePage() {
                           onClick={() =>
                             updateQuestionState(question.id, 'cancelled')
                           }
-                          className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
+                          className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
                         >
                           Cancel
                         </button>

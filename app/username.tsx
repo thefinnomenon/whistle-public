@@ -45,7 +45,7 @@ export default function UsernameScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-background">
-      <View className="flex-1 items-center justify-center px-6">
+      <View className="flex-1 px-6 pt-8">
         <Image
           source={require('@/assets/images/icon.png')}
           style={{
@@ -53,6 +53,7 @@ export default function UsernameScreen() {
             height: 96,
             borderRadius: 20,
             marginBottom: 32,
+            alignSelf: 'center',
           }}
         />
 

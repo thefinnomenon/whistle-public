@@ -363,8 +363,8 @@ exports.calculateScores = onDocumentUpdated(
 
     // Question answer changes -> Revert and update scores
     if (
-      question.answer &&
-      oldQuestion.answer &&
+      question.answer !== undefined &&
+      oldQuestion.answer !== undefined &&
       question.answer !== oldQuestion.answer
     ) {
       console.log(
