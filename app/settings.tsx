@@ -43,13 +43,13 @@ Thank you!`
       } else {
         Alert.alert(
           'Email Not Available',
-          `Please send a withdrawal request to ${email} with the following details:\n\nUsername: ${user?.username}\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
+          `Please send a withdrawal request to ${email} with the following details:\n\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
         )
       }
     } catch {
       Alert.alert(
         'Email Not Available',
-        `Please send a withdrawal request to ${email} with the following details:\n\nUsername: ${user?.username}\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
+        `Please send a withdrawal request to ${email} with the following details:\n\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
       )
     }
   }
