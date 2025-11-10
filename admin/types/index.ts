@@ -66,6 +66,31 @@ export type Question = {
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
+  closedAt?: FirestoreTimestamp
+  resolvedAt?: FirestoreTimestamp
+  cancelledAt?: FirestoreTimestamp
+  changedAt?: FirestoreTimestamp
+
+  // Statistics fields (set when question is closed/resolved/cancelled)
+  totalResponses?: number
+  totalPlayers?: number
+  responseRate?: number
+  yesCount?: number
+  noCount?: number
+  correctCount?: number
+  incorrectCount?: number
+  questionOpenTimeMs?: number
+  questionResolutionTimeMs?: number
+  avgResponseTimeMs?: number
+  medianResponseTimeMs?: number
+  p95ResponseTimeMs?: number
+  minResponseTimeMs?: number
+  maxResponseTimeMs?: number
+  avgDeliveryTimeMs?: number
+  medianDeliveryTimeMs?: number
+  p95DeliveryTimeMs?: number
+  minDeliveryTimeMs?: number
+  maxDeliveryTimeMs?: number
 }
 
 export type Prediction = {

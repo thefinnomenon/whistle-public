@@ -1,8 +1,5 @@
 import { createHash } from 'crypto'
-import type { ExpoPushMessage } from 'expo-server-sdk'
-import { Expo } from 'expo-server-sdk'
 import admin from 'firebase-admin'
-import { defineSecret } from 'firebase-functions/params'
 import { setGlobalOptions } from 'firebase-functions/v2'
 import {
   onDocumentCreated,
@@ -11,35 +8,9 @@ import {
 import { onCall } from 'firebase-functions/v2/https'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 
-const expoAccessToken = defineSecret('EXPO_ACCESS_TOKEN')
-
 setGlobalOptions({ region: 'us-east1' })
 
 admin.initializeApp()
-
-// https://stackoverflow.com/a/55251598/6775987
-const flattenObject = (obj: any) => {
-  const flattened: { [key: string]: any } = {}
-  if (!obj) return flattened
-
-  Object.keys(obj).forEach((key) => {
-    const value = obj[key]
-
-    // Skip flattening updatedAt since it's a Firestore Timestamp
-    if (key === 'updatedAt') {
-      flattened[key] = value // keep it unflattened
-      return // continue to next key
-    }
-
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      Object.assign(flattened, flattenObject(value))
-    } else {
-      flattened[key] = value
-    }
-  })
-
-  return flattened
-}
 
 // Test function to send a notification to the app_notifications topic
 exports.testPushNotification = onCall(async (request) => {
@@ -158,7 +129,6 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
 exports.pushNewQuestion = onDocumentCreated(
   {
     document: 'games/{gameId}/questions/{questionId}',
-    secrets: [expoAccessToken],
   },
   async (event) => {
     const { gameId, questionId } = event.params
@@ -323,6 +293,198 @@ const calculatePlaces = (leaderboardDocs: LeaderboardDoc) => {
   return places
 }
 
+const calculateQuestionStatistics = async (
+  gameId: string,
+  questionId: string,
+  question: Question
+) => {
+  console.log(`Calculating statistics for question ${questionId}`)
+
+  if (!question.createdAt) {
+    console.error('Question missing createdAt timestamp')
+    return
+  }
+
+  // Get total player count for response rate calculation
+  const gamePlayersSnapshot = await admin
+    .firestore()
+    .collection(`games/${gameId}/users`)
+    .count()
+    .get()
+  const totalPlayers = gamePlayersSnapshot.data().count
+
+  // Get all predictions for this question
+  const predictionsSnapshot = await admin
+    .firestore()
+    .collection(`games/${gameId}/questions/${questionId}/predictions`)
+    .get()
+
+  console.log(`Found ${predictionsSnapshot.docs.length} total predictions`)
+
+  // Filter predictions that were made before question closed (if it has a closedAt)
+  const validPredictions = question.closedAt
+    ? predictionsSnapshot.docs.filter((doc) => {
+        const createTime = doc.createTime?.toDate()
+        const closedAt = question.closedAt?.toDate()
+        return createTime && closedAt && createTime < closedAt
+      })
+    : predictionsSnapshot.docs
+
+  console.log(`Found ${validPredictions.length} valid predictions`)
+
+  const totalResponses = validPredictions.length
+  const responseRate =
+    totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+
+  // Calculate response times and delivery times
+  const responseTimes: number[] = []
+  const deliveryTimes: number[] = []
+
+  const createdAtMillis = question.createdAt.toMillis()
+  const triggeredAtMillis = question.triggeredAt?.toMillis()
+
+  validPredictions.forEach((doc) => {
+    const predictionTime = doc.createTime?.toMillis()
+
+    if (predictionTime) {
+      // Response time: from when question was created to when prediction was made
+      const responseTime = predictionTime - createdAtMillis
+      if (responseTime >= 0) {
+        responseTimes.push(responseTime)
+      }
+
+      // Delivery time: from when question was triggered to when prediction was made
+      // (Only if we have a triggeredAt timestamp)
+      if (triggeredAtMillis) {
+        const deliveryTime = predictionTime - triggeredAtMillis
+        if (deliveryTime >= 0) {
+          deliveryTimes.push(deliveryTime)
+        }
+      }
+    }
+  })
+
+  // Sort times for percentile calculations
+  responseTimes.sort((a, b) => a - b)
+  deliveryTimes.sort((a, b) => a - b)
+
+  // Helper function to calculate percentile
+  const getPercentile = (sortedArray: number[], percentile: number): number => {
+    if (sortedArray.length === 0) return 0
+    const index = Math.ceil((percentile / 100) * sortedArray.length) - 1
+    return sortedArray[Math.max(0, index)]
+  }
+
+  // Calculate timing statistics
+  const avgResponseTime =
+    responseTimes.length > 0
+      ? responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length
+      : 0
+  const medianResponseTime = getPercentile(responseTimes, 50)
+  const p95ResponseTime = getPercentile(responseTimes, 95)
+  const minResponseTime = responseTimes.length > 0 ? responseTimes[0] : 0
+  const maxResponseTime =
+    responseTimes.length > 0 ? responseTimes[responseTimes.length - 1] : 0
+
+  const avgDeliveryTime =
+    deliveryTimes.length > 0
+      ? deliveryTimes.reduce((a, b) => a + b, 0) / deliveryTimes.length
+      : 0
+  const medianDeliveryTime = getPercentile(deliveryTimes, 50)
+  const p95DeliveryTime = getPercentile(deliveryTimes, 95)
+  const minDeliveryTime = deliveryTimes.length > 0 ? deliveryTimes[0] : 0
+  const maxDeliveryTime =
+    deliveryTimes.length > 0 ? deliveryTimes[deliveryTimes.length - 1] : 0
+
+  // Count by prediction value (true/false)
+  const yesCount = validPredictions.filter(
+    (doc) => doc.data().prediction === true
+  ).length
+  const noCount = validPredictions.filter(
+    (doc) => doc.data().prediction === false
+  ).length
+
+  // Calculate question open time (time from creation to when it was closed)
+  // Questions must be closed before being resolved, so closedAt should always exist
+  const questionOpenTimeMs = question.closedAt
+    ? question.closedAt.toMillis() - createdAtMillis
+    : 0
+
+  // Calculate resolution time (time from when question was closed to when it was resolved)
+  // This measures how long it took to determine the answer after closing
+  let questionResolutionTimeMs = 0
+  if (
+    question.state === 'resolved' &&
+    question.closedAt &&
+    question.resolvedAt
+  ) {
+    questionResolutionTimeMs =
+      question.resolvedAt.toMillis() - question.closedAt.toMillis()
+  }
+
+  // Build statistics object
+  const statistics: {
+    totalResponses: number
+    totalPlayers: number
+    responseRate: number
+    yesCount: number
+    noCount: number
+    questionOpenTimeMs: number
+    questionResolutionTimeMs: number
+    avgResponseTimeMs: number
+    medianResponseTimeMs: number
+    p95ResponseTimeMs: number
+    minResponseTimeMs: number
+    maxResponseTimeMs: number
+    avgDeliveryTimeMs: number
+    medianDeliveryTimeMs: number
+    p95DeliveryTimeMs: number
+    minDeliveryTimeMs: number
+    maxDeliveryTimeMs: number
+    correctCount?: number
+    incorrectCount?: number
+  } = {
+    totalResponses,
+    totalPlayers,
+    responseRate: Math.round(responseRate * 100) / 100, // Round to 2 decimal places
+    yesCount,
+    noCount,
+    questionOpenTimeMs: Math.round(questionOpenTimeMs),
+    questionResolutionTimeMs: Math.round(questionResolutionTimeMs),
+    avgResponseTimeMs: Math.round(avgResponseTime),
+    medianResponseTimeMs: Math.round(medianResponseTime),
+    p95ResponseTimeMs: Math.round(p95ResponseTime),
+    minResponseTimeMs: Math.round(minResponseTime),
+    maxResponseTimeMs: Math.round(maxResponseTime),
+    avgDeliveryTimeMs: Math.round(avgDeliveryTime),
+    medianDeliveryTimeMs: Math.round(medianDeliveryTime),
+    p95DeliveryTimeMs: Math.round(p95DeliveryTime),
+    minDeliveryTimeMs: Math.round(minDeliveryTime),
+    maxDeliveryTimeMs: Math.round(maxDeliveryTime),
+  }
+
+  // If question has an answer, calculate correct/incorrect counts
+  if (question.answer !== undefined) {
+    const correctCount = validPredictions.filter(
+      (doc) => doc.data().prediction === question.answer
+    ).length
+    const incorrectCount = validPredictions.length - correctCount
+
+    statistics.correctCount = correctCount
+    statistics.incorrectCount = incorrectCount
+  }
+
+  console.log('Question statistics:', statistics)
+
+  // Update the question with statistics
+  await admin
+    .firestore()
+    .doc(`games/${gameId}/questions/${questionId}`)
+    .update(statistics)
+
+  console.log('Successfully saved question statistics')
+}
+
 exports.calculateScores = onDocumentUpdated(
   'games/{gameId}/questions/{questionId}',
   async (event) => {
@@ -339,26 +501,39 @@ exports.calculateScores = onDocumentUpdated(
       state: question.state,
     })
 
-    // Ignore if question was closed
+    // Ignore if question was closed (not resolved)
     if (question.state === 'closed') {
-      console.log('Question was closed! Skipping updates...')
+      console.log('Question in closed state, skipping updates...')
       return
     }
 
-    // Question was resolved -> Update scores
+    // Question was resolved -> Update scores and calculate statistics
     if (question.state === 'resolved' && oldQuestion.state !== 'resolved') {
-      console.log('Question was resolved! Updating scores...')
+      console.log(
+        'Question was resolved! Updating scores and calculating statistics...'
+      )
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
-      if (correctUsers.length === 0) return
-      await updateScores(gameId, questionId, correctUsers, 1)
+      if (correctUsers.length > 0) {
+        await updateScores(gameId, questionId, correctUsers, 1)
+      }
+
+      // Calculate all statistics
+      await calculateQuestionStatistics(gameId, questionId, question)
     }
 
     // Question cancelled after being resolved -> Revert scores
     if (question.state === 'cancelled' && oldQuestion.state === 'resolved') {
       console.log('Question was cancelled! Reverting scores...')
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
-      if (correctUsers.length === 0) return
-      await updateScores(gameId, questionId, correctUsers, -1)
+      if (correctUsers.length > 0) {
+        await updateScores(gameId, questionId, correctUsers, -1)
+      }
+    }
+
+    // Question cancelled -> Calculate statistics
+    if (question.state === 'cancelled' && oldQuestion.state !== 'cancelled') {
+      console.log('Question was cancelled! Calculating statistics...')
+      await calculateQuestionStatistics(gameId, questionId, question)
     }
 
     // Question answer changes -> Revert and update scores
@@ -468,8 +643,178 @@ exports.updatePlayerCountForGames = onSchedule('every 1 minutes', async () => {
   )
 })
 
+const calculateGameStatistics = async (gameId: string) => {
+  console.log(`Calculating global statistics for game ${gameId}`)
+
+  // Get all questions for this game
+  const questionsSnapshot = await admin
+    .firestore()
+    .collection(`games/${gameId}/questions`)
+    .get()
+
+  console.log(
+    `Found ${questionsSnapshot.docs.length} questions for game ${gameId}`
+  )
+
+  const questions = questionsSnapshot.docs.map((doc) => ({
+    id: doc.id,
+    ...doc.data(),
+  }))
+
+  // Count questions by state
+  const resolvedQuestions = questions.filter((q: any) => q.state === 'resolved')
+  const cancelledQuestions = questions.filter(
+    (q: any) => q.state === 'cancelled'
+  )
+  const totalQuestionsAsked = questions.length
+
+  // Filter resolved questions with statistics for aggregation
+  const resolvedWithStats = resolvedQuestions.filter(
+    (q: any) => q.totalResponses !== undefined
+  )
+
+  console.log(
+    `Found ${resolvedWithStats.length} resolved questions with statistics, ${cancelledQuestions.length} cancelled`
+  )
+
+  if (resolvedWithStats.length === 0) {
+    console.log(
+      'No resolved questions with statistics, saving basic counts only'
+    )
+    await admin
+      .firestore()
+      .doc(`games/${gameId}`)
+      .update({
+        statistics: {
+          totalQuestionsAsked,
+          totalResolved: resolvedQuestions.length,
+          totalCancelled: cancelledQuestions.length,
+        },
+      })
+    return
+  }
+
+  // Aggregate statistics from resolved questions
+  let totalResponses = 0
+  let totalCorrect = 0
+  let totalIncorrect = 0
+  let totalResponseTime = 0
+  let totalDeliveryTime = 0
+  let totalQuestionOpenTime = 0
+  let questionsWithResponseTime = 0
+  let questionsWithDeliveryTime = 0
+  let questionsWithOpenTime = 0
+  let allResponseRates: number[] = []
+  let allResolutionTimes: number[] = []
+
+  resolvedWithStats.forEach((q: any) => {
+    totalResponses += q.totalResponses || 0
+
+    if (q.correctCount !== undefined) {
+      totalCorrect += q.correctCount
+    }
+    if (q.incorrectCount !== undefined) {
+      totalIncorrect += q.incorrectCount
+    }
+
+    if (q.avgResponseTimeMs !== undefined && q.avgResponseTimeMs > 0) {
+      totalResponseTime += q.avgResponseTimeMs
+      questionsWithResponseTime++
+    }
+
+    if (q.avgDeliveryTimeMs !== undefined && q.avgDeliveryTimeMs > 0) {
+      totalDeliveryTime += q.avgDeliveryTimeMs
+      questionsWithDeliveryTime++
+    }
+
+    if (q.questionOpenTimeMs !== undefined && q.questionOpenTimeMs > 0) {
+      totalQuestionOpenTime += q.questionOpenTimeMs
+      questionsWithOpenTime++
+    }
+
+    if (
+      q.questionResolutionTimeMs !== undefined &&
+      q.questionResolutionTimeMs > 0
+    ) {
+      allResolutionTimes.push(q.questionResolutionTimeMs)
+    }
+
+    if (q.responseRate !== undefined) {
+      allResponseRates.push(q.responseRate)
+    }
+  })
+
+  // Helper function to calculate percentile
+  const getPercentile = (sortedArray: number[], percentile: number): number => {
+    if (sortedArray.length === 0) return 0
+    const index = Math.ceil((percentile / 100) * sortedArray.length) - 1
+    return sortedArray[Math.max(0, index)]
+  }
+
+  // Calculate averages
+  const avgResponsesPerQuestion =
+    resolvedWithStats.length > 0 ? totalResponses / resolvedWithStats.length : 0
+  const avgResponseRate =
+    allResponseRates.length > 0
+      ? allResponseRates.reduce((a, b) => a + b, 0) / allResponseRates.length
+      : 0
+  const avgResponseTimeMs =
+    questionsWithResponseTime > 0
+      ? totalResponseTime / questionsWithResponseTime
+      : 0
+  const avgDeliveryTimeMs =
+    questionsWithDeliveryTime > 0
+      ? totalDeliveryTime / questionsWithDeliveryTime
+      : 0
+  const avgQuestionOpenTimeMs =
+    questionsWithOpenTime > 0
+      ? totalQuestionOpenTime / questionsWithOpenTime
+      : 0
+
+  // Calculate resolution time statistics
+  allResolutionTimes.sort((a, b) => a - b)
+  const avgResolutionTimeMs =
+    allResolutionTimes.length > 0
+      ? allResolutionTimes.reduce((a, b) => a + b, 0) /
+        allResolutionTimes.length
+      : 0
+  const medianResolutionTimeMs = getPercentile(allResolutionTimes, 50)
+  const p95ResolutionTimeMs = getPercentile(allResolutionTimes, 95)
+
+  const totalPredictions = totalCorrect + totalIncorrect
+  const accuracyRate =
+    totalPredictions > 0 ? (totalCorrect / totalPredictions) * 100 : 0
+
+  const gameStats = {
+    totalQuestionsAsked,
+    totalResolved: resolvedQuestions.length,
+    totalCancelled: cancelledQuestions.length,
+    totalResponses,
+    avgResponsesPerQuestion: Math.round(avgResponsesPerQuestion * 100) / 100,
+    avgResponseRate: Math.round(avgResponseRate * 100) / 100,
+    totalCorrect,
+    totalIncorrect,
+    accuracyRate: Math.round(accuracyRate * 100) / 100,
+    avgResponseTimeMs: Math.round(avgResponseTimeMs),
+    avgDeliveryTimeMs: Math.round(avgDeliveryTimeMs),
+    avgQuestionOpenTimeMs: Math.round(avgQuestionOpenTimeMs),
+    avgResolutionTimeMs: Math.round(avgResolutionTimeMs),
+    medianResolutionTimeMs: Math.round(medianResolutionTimeMs),
+    p95ResolutionTimeMs: Math.round(p95ResolutionTimeMs),
+  }
+
+  console.log('Game statistics:', gameStats)
+
+  // Update the game document with statistics
+  await admin.firestore().doc(`games/${gameId}`).update({
+    statistics: gameStats,
+  })
+
+  console.log('Successfully saved game statistics')
+}
+
 exports.handleGameEnd = onDocumentUpdated(
-  { document: 'games/{gameId}', secrets: [expoAccessToken] },
+  { document: 'games/{gameId}' },
   async (event) => {
     const { gameId } = event.params
     const game = event.data?.after.data() as Game
@@ -483,17 +828,18 @@ exports.handleGameEnd = onDocumentUpdated(
     if (game.state === 'resolved' && oldGame.state !== 'resolved') {
       console.log(`Game ${gameId} resolved.`)
 
-      const expo = new Expo({ accessToken: expoAccessToken.value() })
+      // Calculate global game statistics
+      await calculateGameStatistics(gameId)
 
       // Calculate and distribute winnings
       const winnerNotifications = await distributeWinnings(gameId, game)
 
       // Notify winners
-      await notifyWinners(winnerNotifications, game, expo)
+      await notifyWinners(winnerNotifications, game)
 
       // Send end of game notification to all players
       const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
-      await sendNotificationsToGameUsers(expo, gameId, message)
+      await sendNotificationsToGameUsers(gameId, message)
     }
   }
 )
@@ -555,8 +901,7 @@ const distributeWinnings = async (
 
 const notifyWinners = async (
   winnerNotifications: { userId: string; amount: number }[],
-  game: Game,
-  expo: Expo
+  game: Game
 ) => {
   if (winnerNotifications.length === 0) {
     console.log('No winners to notify...')
@@ -567,9 +912,16 @@ const notifyWinners = async (
 
   await Promise.all(
     winnerNotifications.map(async ({ userId, amount }) => {
-      const userData = (
-        await admin.firestore().collection('users').doc(userId).get()
-      ).data() as { tokens?: { [tokenId: string]: Token } }
+      console.log(`Processing winner ${userId}, amount: $${amount}`)
+
+      const userDoc = await admin
+        .firestore()
+        .collection('users')
+        .doc(userId)
+        .get()
+      const userData = userDoc.data() as {
+        tokens?: { [tokenId: string]: Token }
+      }
 
       if (!userData?.tokens) {
         console.error(`No tokens found for user ${userId}`)
@@ -577,98 +929,109 @@ const notifyWinners = async (
       }
 
       const tokens = Object.values(userData.tokens)
-      const messages: any[] = []
+      console.log(`Found ${tokens.length} token(s) for user ${userId}`)
 
-      tokens.forEach(({ token }) => {
-        if (!Expo.isExpoPushToken(token)) {
-          console.error(`Invalid push token for user ${userId}`)
-          return
+      for (const tokenData of tokens) {
+        const token = tokenData.token
+
+        if (!token) {
+          console.error(`No token string in tokenData for user ${userId}`)
+          continue
         }
 
-        messages.push({
-          to: token,
-          sound: 'default',
-          title: '🎉 You Won!',
-          body: `Congratulations! You won $${amount.toFixed(2)} in ${game.homeTeam} vs. ${game.awayTeam}!`,
-          data: { gameId: game.id, winnings: amount },
-          priority: 'high',
-        })
-      })
-
-      if (messages.length > 0) {
-        const chunks = expo.chunkPushNotifications(messages)
-        await Promise.allSettled(
-          chunks.map((chunk) => expo.sendPushNotificationsAsync(chunk))
+        console.log(
+          `Sending winner notification to user ${userId} with token: ${token.substring(0, 20)}...`
         )
+
+        try {
+          const message = {
+            token,
+            notification: {
+              title: '🎉 You Won!',
+              body: `Congratulations! You won $${amount.toFixed(2)} in ${game.homeTeam} vs. ${game.awayTeam}!`,
+            },
+            data: {
+              gameId: game.id,
+              winnings: amount.toString(),
+            },
+            android: {
+              priority: 'high' as const,
+              notification: {
+                channelId: 'default',
+                priority: 'high' as const,
+                sound: 'whistle',
+              },
+            },
+            apns: {
+              payload: {
+                aps: {
+                  contentAvailable: true,
+                  sound: 'whistle.wav',
+                },
+              },
+            },
+          }
+
+          const response = await admin.messaging().send(message)
+          console.log(
+            `Successfully sent winner notification to user ${userId}: ${response}`
+          )
+        } catch (error) {
+          console.error(
+            `Failed to send winner notification to user ${userId}:`,
+            error
+          )
+        }
       }
     })
   )
 }
 
 const sendNotificationsToGameUsers = async (
-  expo: Expo,
   gameId: string,
   message: string
 ) => {
-  const players = await admin
-    .firestore()
-    .collection(`games/${gameId}/users`)
-    .get()
-  const playerTokensPromisesRes = await Promise.allSettled(
-    players.docs.map(async (player) => {
-      try {
-        const { tokens } = (
-          await admin.firestore().collection('users').doc(player.id).get()
-        ).data() as { tokens: { [tokenId: string]: Token } }
-        return Promise.resolve(tokens)
-      } catch (error) {
-        console.debug(
-          `Failed to retrieve document for user ${player.id}: `,
-          error
-        )
-        return Promise.reject(error)
-      }
-    })
-  )
+  const topic = `game_${gameId}`
 
-  const playerTokens = playerTokensPromisesRes
-    .filter(
-      (
-        playerTokenPromiseRes
-      ): playerTokenPromiseRes is PromiseFulfilledResult<{
-        [tokenId: string]: Token
-      }> => playerTokenPromiseRes.status === 'fulfilled'
-    )
-    .map((playerTokenPromiseRes) => flattenObject(playerTokenPromiseRes.value))
+  try {
+    console.log(`Sending game end notification to topic ${topic}`)
 
-  const messages: ExpoPushMessage[] = []
-  playerTokens.map(({ token }: any) => {
-    if (!Expo.isExpoPushToken(token)) {
-      console.error(`Push token ${token} is not a valid Expo push token`)
-      return
+    const fcmMessage = {
+      topic,
+      notification: {
+        title: '🏈 Game Ended',
+        body: message,
+      },
+      data: {
+        gameId,
+      },
+      android: {
+        priority: 'high' as const,
+        notification: {
+          channelId: 'default',
+          priority: 'high' as const,
+          sound: 'whistle',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            contentAvailable: true,
+            sound: 'whistle.wav',
+          },
+        },
+      },
     }
 
-    messages.push({
-      to: token,
-      sound: 'default',
-      body: message,
-      data: { gameId },
-      priority: 'high',
-      /* @ts-expect-error missing in types but needed to trigger background handler */
-      _contentAvailable: true,
-    })
-  })
-
-  const chunks = expo.chunkPushNotifications(messages)
-  await Promise.allSettled(
-    chunks.map(async (chunk) => {
-      try {
-        const ticketChunk = await expo.sendPushNotificationsAsync(chunk)
-        return Promise.resolve(ticketChunk)
-      } catch (error) {
-        console.error('Failed to send push notification', error)
-        return Promise.reject(error)
-      }
-    })
-  )
+    const response = await admin.messaging().send(fcmMessage)
+    console.log(
+      `Successfully sent game end notification to topic ${topic}:`,
+      response
+    )
+  } catch (error) {
+    console.error(
+      `Failed to send game end notification to topic ${topic}:`,
+      error
+    )
+  }
 }
