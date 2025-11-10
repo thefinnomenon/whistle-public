@@ -943,6 +943,15 @@ const notifyWinners = async (
           `Sending winner notification to user ${userId} with token: ${token.substring(0, 20)}...`
         )
 
+        const dataPayload = {
+          gameId: String(game.id),
+          winnings: String(amount.toFixed(2)),
+        }
+
+        console.log(
+          `Data payload types - gameId: ${typeof dataPayload.gameId}, winnings: ${typeof dataPayload.winnings}`
+        )
+
         try {
           const message = {
             token,
@@ -950,10 +959,7 @@ const notifyWinners = async (
               title: '🎉 You Won!',
               body: `Congratulations! You won $${amount.toFixed(2)} in ${game.homeTeam} vs. ${game.awayTeam}!`,
             },
-            data: {
-              gameId: game.id,
-              winnings: amount.toString(),
-            },
+            data: dataPayload,
             android: {
               priority: 'high' as const,
               notification: {
