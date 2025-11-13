@@ -60,8 +60,11 @@ service cloud.firestore {
               && isUser(userId)
               && userIsInGame(gameId)
               && isQuestionOpen(gameId, questionId)
-              && request.resource.data.keys().hasOnly(['prediction'])
-              && request.resource.data.prediction is bool;
+              && 'prediction' in request.resource.data
+              && request.resource.data.prediction is bool
+              && request.resource.data.keys().hasOnly(['prediction', 'sentAt', 'receivedAt'])
+              && (!('sentAt' in request.resource.data) || request.resource.data.sentAt is number)
+              && (!('receivedAt' in request.resource.data) || request.resource.data.receivedAt is number);
           }
         }
         match /users/{userId} {

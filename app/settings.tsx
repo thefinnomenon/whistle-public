@@ -254,7 +254,7 @@ Thank you!`
 
         {/* App Info */}
         <View className="items-center">
-          <Text className="text-xs text-muted-foreground">Whistle v1.0.0</Text>
+          <Text className="text-xs text-muted-foreground">Whistle v1.0.1</Text>
         </View>
       </ScrollView>
     </View>

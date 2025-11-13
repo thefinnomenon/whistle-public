@@ -42,7 +42,7 @@ export default {
   expo: {
     name: getAppName(),
     slug: 'whistle',
-    version: '1.0.0',
+    version: '1.0.1',
     orientation: 'portrait',
     icon: getAppIcon(),
     scheme: getAppScheme(),
@@ -52,7 +52,8 @@ export default {
       policy: 'appVersion',
     },
     updates: {
-      url: `https://u.expo.dev/${process.env.EAS_PROJECT_ID || 'YOUR_PROJECT_ID'}`,
+      url: 'https://u.expo.dev/00000000-0000-0000-0000-000000000000',
+      channel: 'production',
     },
     ios: {
       supportsTablet: true,

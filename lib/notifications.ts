@@ -284,9 +284,28 @@ export async function handleNotificationActionPress(
       `games/${gameId}/questions/${questionId}/predictions/${userId}`
     )
 
-    await setDoc(predictionRef, {
+    // Store timing metadata for delivery time calculations
+    const predictionData: any = {
       prediction,
-    })
+    }
+
+    if (sentAt) {
+      predictionData.sentAt = parseInt(sentAt as string)
+    }
+    if (receivedAt) {
+      predictionData.receivedAt = parseInt(receivedAt as string)
+    }
+
+    console.log(
+      `[Notification ${logContext}] Prediction data:`,
+      JSON.stringify(predictionData)
+    )
+    console.log(
+      `[Notification ${logContext}] Data keys:`,
+      Object.keys(predictionData)
+    )
+
+    await setDoc(predictionRef, predictionData)
 
     // Write to user predictions subcollection (for UI display)
     const userPredictionRef = doc(

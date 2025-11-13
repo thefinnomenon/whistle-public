@@ -341,10 +341,10 @@ const calculateQuestionStatistics = async (
   const deliveryTimes: number[] = []
 
   const createdAtMillis = question.createdAt.toMillis()
-  const triggeredAtMillis = question.triggeredAt?.toMillis()
 
   validPredictions.forEach((doc) => {
     const predictionTime = doc.createTime?.toMillis()
+    const predictionData = doc.data()
 
     if (predictionTime) {
       // Response time: from when question was created to when prediction was made
@@ -353,10 +353,10 @@ const calculateQuestionStatistics = async (
         responseTimes.push(responseTime)
       }
 
-      // Delivery time: from when question was triggered to when prediction was made
-      // (Only if we have a triggeredAt timestamp)
-      if (triggeredAtMillis) {
-        const deliveryTime = predictionTime - triggeredAtMillis
+      // Delivery time: from when notification was sent to when it was received on device
+      // Use sentAt and receivedAt if available (stored in prediction document)
+      if (predictionData?.sentAt && predictionData?.receivedAt) {
+        const deliveryTime = predictionData.receivedAt - predictionData.sentAt
         if (deliveryTime >= 0) {
           deliveryTimes.push(deliveryTime)
         }
