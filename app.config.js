@@ -1,3 +1,4 @@
+import packageJson from './package.json'
 import 'dotenv/config'
 
 const IS_DEV = process.env.APP_ENV === 'development'
@@ -42,7 +43,7 @@ export default {
   expo: {
     name: getAppName(),
     slug: 'whistle',
-    version: '1.0.1',
+    version: packageJson.version,
     orientation: 'portrait',
     icon: getAppIcon(),
     scheme: getAppScheme(),

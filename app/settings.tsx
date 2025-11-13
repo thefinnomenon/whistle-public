@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons'
 import { getApp } from '@react-native-firebase/app'
 import { getFunctions, httpsCallable } from '@react-native-firebase/functions'
+import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
 import { router } from 'expo-router'
 import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native'
@@ -254,7 +255,9 @@ Thank you!`
 
         {/* App Info */}
         <View className="items-center">
-          <Text className="text-xs text-muted-foreground">Whistle v1.0.1</Text>
+          <Text className="text-xs text-muted-foreground">
+            Whistle v{Constants.expoConfig?.version || '1.0.0'}
+          </Text>
         </View>
       </ScrollView>
     </View>
