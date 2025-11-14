@@ -14,6 +14,7 @@ import {
   useSegments,
 } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as SplashScreen from 'expo-splash-screen'
 import './global.css'
 
 // Import background messaging handler
@@ -34,9 +35,11 @@ import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
 import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
 import React, { useEffect } from 'react'
-import { ActivityIndicator, View } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
+
+// Keep splash screen visible while app loads
+SplashScreen.preventAutoHideAsync()
 
 const navigationIntegration = Sentry.reactNavigationIntegration({
   enableTimeToInitialDisplay: !isRunningInExpoGo(),
@@ -264,14 +267,14 @@ function AuthGate() {
       // Redirect to game lobby after completing onboarding or from root index
       router.replace('/game/lobby')
     }
+
+    // Hide splash screen once auth is loaded and routing is complete
+    SplashScreen.hideAsync()
   }, [user, loading, hasCompletedOnboarding, hasUsername, pathname])
 
+  // Don't render anything while loading - splash screen will stay visible
   if (loading) {
-    return (
-      <View className="flex-1 justify-center items-center bg-background">
-        <ActivityIndicator size="large" />
-      </View>
-    )
+    return null
   }
 
   return (
