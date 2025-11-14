@@ -18,6 +18,8 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
+import * as Updates from 'expo-updates'
+
 import { unsubscribeFromGameTopic } from '@/lib/fcm'
 
 import { analytics } from '@/lib/analytics'
@@ -264,6 +266,12 @@ export default function GameScreen() {
   const showLeaderboard = () => {
     router.push('/game/leaderboard')
   }
+
+  console.log('UPDATE')
+  console.log(Updates.channel)
+  console.log(Updates.runtimeVersion)
+  console.log(Updates.isEnabled)
+  console.log(Updates.runtimeVersion)
 
   if (!game || !userGame) return null
 

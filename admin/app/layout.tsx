@@ -1,7 +1,8 @@
+import { AuthProvider } from "@/components/AuthProvider";
+import * as Updates from 'expo-updates';
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { AuthProvider } from "@/components/AuthProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,6 +24,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  
+  console.log('UPDATE')
+  console.log(Updates.channel); 
+  console.log(Updates.runtimeVersion);
+  console.log(Updates.isEnabled);
+  console.log(Updates.runtimeVersion);
+
   return (
     <html lang="en">
       <body

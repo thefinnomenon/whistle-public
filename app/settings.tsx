@@ -3,6 +3,7 @@ import { getApp } from '@react-native-firebase/app'
 import { getFunctions, httpsCallable } from '@react-native-firebase/functions'
 import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
+import * as Updates from 'expo-updates'
 import { router } from 'expo-router'
 import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -254,9 +255,12 @@ Thank you!`
         </View>
 
         {/* App Info */}
-        <View className="items-center">
+        <View className="items-center gap-1">
           <Text className="text-xs text-muted-foreground">
             Whistle v{Constants.expoConfig?.version || '1.0.0'}
+          </Text>
+          <Text className="text-xs text-muted-foreground">
+            Channel: {Updates.channel || 'none'}
           </Text>
         </View>
       </ScrollView>

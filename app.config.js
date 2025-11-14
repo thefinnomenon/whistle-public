@@ -49,12 +49,9 @@ export default {
     scheme: getAppScheme(),
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
-    runtimeVersion: {
-      policy: 'appVersion',
-    },
+    runtimeVersion: '1.0.0',
     updates: {
       url: 'https://u.expo.dev/00000000-0000-0000-0000-000000000000',
-      channel: 'production',
     },
     ios: {
       supportsTablet: true,
@@ -92,6 +89,7 @@ export default {
     },
     plugins: [
       './plugins/withNotificationSounds',
+      'expo-updates',
       'expo-video',
       'expo-router',
       [
