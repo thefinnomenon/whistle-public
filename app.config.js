@@ -1,5 +1,5 @@
-import packageJson from './package.json'
 import 'dotenv/config'
+import packageJson from './package.json'
 
 const IS_DEV = process.env.APP_ENV === 'development'
 const IS_STAGING = process.env.APP_ENV === 'staging'
@@ -51,6 +51,9 @@ export default {
     newArchEnabled: true,
     runtimeVersion: '1.0.0',
     updates: {
+      enabled: false,
+      checkAutomatically: 'ON_LOAD',
+      fallbackToCacheTimeout: 3000,
       url: 'https://u.expo.dev/00000000-0000-0000-0000-000000000000',
     },
     ios: {
