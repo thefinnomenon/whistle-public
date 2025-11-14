@@ -806,7 +806,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this red zone drive end in a TD?')
+                  createQuickQuestion('Will the next red zone drive end in a TD?')
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -839,7 +839,7 @@ export default function GamePage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this play result in a touchdown?')
+                  createQuickQuestion('Will the next play result in a touchdown?')
                 }
                 className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -847,7 +847,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this field goal be good?')
+                  createQuickQuestion('Will the next field goal be good?')
                 }
                 className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -871,7 +871,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this result in a safety?')
+                  createQuickQuestion('Will the next play result in a safety?')
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -879,7 +879,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the defense score on this play?')
+                  createQuickQuestion('Will the defense score on the next play?')
                 }
                 className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -896,7 +896,7 @@ export default function GamePage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this be a first down?')
+                  createQuickQuestion('Will the next play be a first down?')
                 }
                 className="bg-lime-100 hover:bg-lime-200 text-lime-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -904,7 +904,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will they convert this 3rd down?')
+                  createQuickQuestion('Will they convert the next 3rd down?')
                 }
                 className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -912,7 +912,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will they convert this 4th down?')
+                  createQuickQuestion('Will they convert the next 4th down?')
                 }
                 className="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -920,7 +920,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this play gain 20+ yards?')
+                  createQuickQuestion('Will the next play gain 20+ yards?')
                 }
                 className="bg-sky-100 hover:bg-sky-200 text-sky-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -928,7 +928,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this run gain 10+ yards?')
+                  createQuickQuestion('Will the next run gain 10+ yards?')
                 }
                 className="bg-violet-100 hover:bg-violet-200 text-violet-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -936,7 +936,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this pass gain 15+ yards?')
+                  createQuickQuestion('Will the next pass gain 15+ yards?')
                 }
                 className="bg-fuchsia-100 hover:bg-fuchsia-200 text-fuchsia-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -952,20 +952,20 @@ export default function GamePage() {
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
-                onClick={() => createQuickQuestion('Will this be completed?')}
+                onClick={() => createQuickQuestion('Will the next pass be completed?')}
                 className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ✅ Completion?
               </button>
               <button
-                onClick={() => createQuickQuestion('Will this be a sack?')}
+                onClick={() => createQuickQuestion('Will the next play be a sack?')}
                 className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 💥 Sack?
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this result in a turnover?')
+                  createQuickQuestion('Will the next play result in a turnover?')
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -973,7 +973,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this result in an interception?')
+                  createQuickQuestion('Will the next play result in an interception?')
                 }
                 className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -981,7 +981,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will this result in a fumble?')
+                  createQuickQuestion('Will the next play result in a fumble?')
                 }
                 className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -989,7 +989,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will there be a penalty on this play?')
+                  createQuickQuestion('Will there be a penalty on the next play?')
                 }
                 className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >

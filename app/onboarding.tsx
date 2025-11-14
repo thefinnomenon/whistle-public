@@ -100,7 +100,7 @@ export default function OnboardingScreen() {
 
       setNotificationId(
         await displayNotification(
-          '[PAT vs ATL] Will this play result in a touchdown?',
+          '[PAT vs ATL] Will the next play result in a touchdown?',
           Platform.OS === 'ios'
             ? 'Long press to see options'
             : 'Tap Yes or No to make your prediction!',

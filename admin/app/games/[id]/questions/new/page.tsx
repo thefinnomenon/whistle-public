@@ -63,7 +63,7 @@ export default function NewQuestionPage() {
                 id="question"
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
-                placeholder="e.g., Will this play result in a touchdown?"
+                placeholder="e.g., Will the next play result in a touchdown?"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 rows={3}
                 disabled={loading}

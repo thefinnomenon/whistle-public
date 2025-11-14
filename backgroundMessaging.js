@@ -2,17 +2,14 @@ import notifee, { AndroidImportance } from '@notifee/react-native'
 import messaging from '@react-native-firebase/messaging'
 
 // Background message handler for React Native Firebase
+// This handles notifications when the app is in background or killed
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-  console.log('[FCM Background] Message received in background:', remoteMessage)
+  console.log('[FCM Background] Message received:', remoteMessage)
 
-  // Check if this is a question notification
-  const isQuestion = remoteMessage.data?.questionId
+  const isQuestion = remoteMessage.data?.type === 'question'
 
   if (isQuestion) {
     const receivedAt = Date.now()
-    console.log(
-      '[FCM Background] Displaying question notification with actions'
-    )
 
     // Create notification channel for Android
     const channelId = await notifee.createChannel({
@@ -22,10 +19,11 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
       sound: 'whistle',
     })
 
-    // Display notification with action buttons using notifee
-    const notificationId = await notifee.displayNotification({
-      title: remoteMessage.data?.title || '🏈 New Question!',
-      body: remoteMessage.data?.body || remoteMessage.data?.question || '',
+    // Display notification with action buttons
+    await notifee.displayNotification({
+      title: remoteMessage.notification?.title || '🏈 New Question!',
+      body:
+        remoteMessage.notification?.body || remoteMessage.data?.question || '',
       data: {
         ...remoteMessage.data,
         receivedAt: receivedAt.toString(),
@@ -34,48 +32,24 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
         channelId,
         importance: AndroidImportance.HIGH,
         smallIcon: 'ic_small_icon',
-        color: '#000000', // Black background for notification icon
+        color: '#000000',
         sound: 'whistle',
-        pressAction: {
-          id: 'default',
-        },
+        pressAction: { id: 'default' },
         actions: [
-          {
-            title: '✅ Yes',
-            pressAction: { id: 'yes' },
-          },
-          {
-            title: '❌ No',
-            pressAction: { id: 'no' },
-          },
+          { title: '✅ Yes', pressAction: { id: 'yes' } },
+          { title: '❌ No', pressAction: { id: 'no' } },
         ],
-        timeoutAfter: 30000, // Auto-dismiss after 30 seconds
+        timeoutAfter: 30000,
       },
       ios: {
         categoryId: 'YESNO',
         sound: 'whistle.wav',
-        foregroundPresentationOptions: {
-          alert: true,
-          badge: true,
-          sound: true,
-        },
       },
     })
 
-    // Schedule auto-dismiss for iOS after 30 seconds (Android uses timeoutAfter above)
-    setTimeout(async () => {
-      try {
-        await notifee.cancelNotification(notificationId)
-        console.log('[FCM Background] Auto-dismissed notification after 30s')
-      } catch (error) {
-        console.log('[FCM Background] Failed to auto-dismiss:', error)
-      }
-    }, 30000)
-
     console.log('[FCM Background] Notification displayed with actions')
   } else {
-    console.log(
-      '[FCM Background] Non-question notification, using default handling'
-    )
+    // For non-question notifications, display them normally
+    console.log('[FCM Background] Non-question notification')
   }
 })

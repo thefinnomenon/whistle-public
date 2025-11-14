@@ -146,27 +146,36 @@ exports.pushNewQuestion = onDocumentCreated(
       // Capture sentAt BEFORE sending to get accurate timing
       const sentAt = Date.now()
 
-      // Send data-only FCM message to topic (so background handler can add action buttons)
+      // Send standard FCM notification with category for action buttons
       const message = {
         topic,
+        notification: {
+          title: '🏈 New Question!',
+          body: question.question,
+        },
         data: {
+          type: 'question',
           gameId,
           questionId,
           question: question.question,
-          title: '🏈 New Question!',
-          body: question.question,
-          triggeredAt: question.triggeredAt?.toMillis().toString() || '',
-          createdAt: event.data.createTime.toMillis().toString(),
           sentAt: sentAt.toString(),
         },
         android: {
           priority: 'high' as const,
+          notification: {
+            channelId: 'default',
+            sound: 'whistle',
+          },
         },
         apns: {
           payload: {
             aps: {
-              contentAvailable: true,
               sound: 'whistle.wav',
+              category: 'YESNO',
+              alert: {
+                title: '🏈 New Question!',
+                body: question.question,
+              },
             },
           },
           headers: {

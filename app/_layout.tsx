@@ -13,11 +13,11 @@ import {
   useNavigationContainerRef,
   useSegments,
 } from 'expo-router'
-import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
+import { StatusBar } from 'expo-status-bar'
 import './global.css'
 
-// Import background messaging handler
+// Import background messaging handler for Android
 import '../backgroundMessaging'
 
 import { analytics } from '@/lib/analytics'
