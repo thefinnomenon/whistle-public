@@ -86,7 +86,7 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
         topic,
         notification: {
           title: '🏈 Game Started!',
-          body: `${game.homeTeam} vs ${game.awayTeam} is now live. Get ready to predict!`,
+          body: `${game.homeTeam} vs ${game.awayTeam} is now live. Join now and get ready to play!`,
         },
         data: {
           gameId,
