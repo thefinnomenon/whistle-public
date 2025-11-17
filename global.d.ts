@@ -72,6 +72,7 @@ type Question = {
   question: string
   choices: string[]
   answer?: boolean
+  engineTag?: string
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt: FirestoreTimestamp

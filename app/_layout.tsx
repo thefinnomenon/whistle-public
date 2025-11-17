@@ -7,6 +7,7 @@ import {
   ThemeProvider as NavigationThemeProvider,
 } from '@react-navigation/native'
 import { isRunningInExpoGo } from 'expo'
+import * as Notifications from 'expo-notifications'
 import {
   router,
   Stack,
@@ -232,6 +233,34 @@ if (!(global as any).__actionHandlerSetup) {
 
       console.log('[Notification] Processing dismissed event (not answered)')
       await handleNotificationEvent(type, detail, analytics, 'Foreground')
+    }
+  })
+
+  // Handle iOS notification action responses (for native category actions)
+  Notifications.addNotificationResponseReceivedListener((response) => {
+    console.log('[iOS Notification] Response received:', response)
+    const actionIdentifier = response.actionIdentifier
+
+    // iOS sends action identifiers for category actions
+    if (actionIdentifier === 'yes' || actionIdentifier === 'no') {
+      console.log('[iOS Notification] Action button pressed:', actionIdentifier)
+
+      // Convert to notifee-compatible format and handle
+      const notifeeDetail = {
+        notification: {
+          id: response.notification.request.identifier,
+          data: response.notification.request.content.data,
+        },
+        pressAction: {
+          id: actionIdentifier,
+        },
+      }
+
+      handleNotificationEvent(
+        EventType.ACTION_PRESS,
+        notifeeDetail as any,
+        analytics
+      )
     }
   })
 }

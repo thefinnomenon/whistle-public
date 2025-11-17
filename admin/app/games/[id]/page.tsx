@@ -41,6 +41,9 @@ export default function GamePage() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [loading, setLoading] = useState(true)
   const [changingAnswerId, setChangingAnswerId] = useState<string | null>(null)
+  const [selectedEngineTag, setSelectedEngineTag] = useState<string | null>(null)
+  const [currentTime, setCurrentTime] = useState(Date.now())
+  const [livePredictions, setLivePredictions] = useState<any[]>([])
 
   // Calculate real-time game statistics from questions
   const gameStats = React.useMemo(() => {
@@ -163,6 +166,54 @@ export default function GamePage() {
     }
   }, [questions])
 
+  // Calculate statistics by engine tag
+  const engineTagStats = React.useMemo(() => {
+    const tagStats: Record<
+      string,
+      {
+        count: number
+        totalResponses: number
+        totalPlayers: number
+        avgResponseRate: number
+        correctCount: number
+        incorrectCount: number
+      }
+    > = {}
+
+    questions
+      .filter((q) => q.state === 'resolved' && q.engineTag)
+      .forEach((q) => {
+        const tag = q.engineTag!
+        if (!tagStats[tag]) {
+          tagStats[tag] = {
+            count: 0,
+            totalResponses: 0,
+            totalPlayers: 0,
+            avgResponseRate: 0,
+            correctCount: 0,
+            incorrectCount: 0,
+          }
+        }
+
+        tagStats[tag].count++
+        tagStats[tag].totalResponses += q.totalResponses || 0
+        tagStats[tag].totalPlayers += q.totalPlayers || 0
+        tagStats[tag].correctCount += q.correctCount || 0
+        tagStats[tag].incorrectCount += q.incorrectCount || 0
+      })
+
+    // Calculate average response rate for each tag
+    Object.keys(tagStats).forEach((tag) => {
+      const stats = tagStats[tag]
+      stats.avgResponseRate =
+        stats.totalPlayers > 0
+          ? (stats.totalResponses / stats.totalPlayers) * 100
+          : 0
+    })
+
+    return tagStats
+  }, [questions])
+
   // Prepare chart data from questions
   const chartData = React.useMemo(() => {
     const resolvedWithStats = questions
@@ -195,6 +246,68 @@ export default function GamePage() {
     }))
   }, [questions])
 
+  // Calculate last question stats
+  const lastQuestionStats = React.useMemo(() => {
+    if (questions.length === 0) return null
+
+    const lastQuestion = questions[0] // Already sorted by createdAt desc
+    const triggeredTime = lastQuestion.triggeredAt?.toMillis?.() || lastQuestion.createdAt?.toMillis?.() || 0
+    const timeSinceLastMs = triggeredTime > 0 ? currentTime - triggeredTime : 0
+
+    // Use live predictions for open/closed questions, otherwise use stored stats
+    let totalResponses = lastQuestion.totalResponses || 0
+    let responseRate = lastQuestion.responseRate || 0
+    let avgResponseTime = lastQuestion.avgResponseTimeMs ? (lastQuestion.avgResponseTimeMs / 1000).toFixed(1) : 'N/A'
+    const totalPlayers = game?.userCount || lastQuestion.totalPlayers || 0
+    const correctCount = lastQuestion.correctCount || 0
+    const incorrectCount = lastQuestion.incorrectCount || 0
+    let accuracy = 0
+
+    if (lastQuestion.state === 'open' || lastQuestion.state === 'closed') {
+      // Calculate live stats from predictions
+      totalResponses = livePredictions.length
+      responseRate = totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+
+      // Calculate average response time (from when notification was received to when user answered)
+      // This is the most meaningful metric - how quickly users respond after seeing the notification
+      const validResponseTimes = livePredictions
+        .map((p: any) => {
+          const predictionCreatedAt = p.createdAt?.toMillis?.() || 0
+          const receivedAt = p.receivedAt || 0
+          // Response time = time from notification received to answer
+          return receivedAt > 0 && predictionCreatedAt > receivedAt ? predictionCreatedAt - receivedAt : 0
+        })
+        .filter((time: number) => time > 0)
+
+      if (validResponseTimes.length > 0) {
+        const avgMs = validResponseTimes.reduce((a: number, b: number) => a + b, 0) / validResponseTimes.length
+        avgResponseTime = (avgMs / 1000).toFixed(1)
+      } else if (totalResponses > 0) {
+        // If we have responses but no valid times, show 0 instead of N/A
+        avgResponseTime = '0.0'
+      }
+    } else if (lastQuestion.state === 'resolved') {
+      // For resolved questions, calculate accuracy
+      if (correctCount + incorrectCount > 0) {
+        accuracy = (correctCount / (correctCount + incorrectCount)) * 100
+      }
+    }
+
+    return {
+      question: lastQuestion.question,
+      engineTag: lastQuestion.engineTag || 'No tag',
+      state: lastQuestion.state,
+      responseRate,
+      avgResponseTime,
+      totalResponses,
+      totalPlayers,
+      timeSinceLastMs,
+      correctCount,
+      incorrectCount,
+      accuracy,
+    }
+  }, [questions, currentTime, livePredictions, game])
+
   useEffect(() => {
     if (!user || !gameId) return
 
@@ -223,6 +336,36 @@ export default function GamePage() {
 
     return () => unsubscribe()
   }, [user, gameId])
+
+  // Listen to predictions for the last question (for live stats)
+  useEffect(() => {
+    if (!user || !gameId || questions.length === 0) return
+
+    const lastQuestion = questions[0]
+    if (!lastQuestion?.id) return
+
+    const q = query(
+      collection(db, 'games', gameId, 'questions', lastQuestion.id, 'predictions')
+    )
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const predictionsData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }))
+      setLivePredictions(predictionsData)
+    })
+
+    return () => unsubscribe()
+  }, [user, gameId, questions])
+
+  // Update current time every second for live timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now())
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   const updateGameState = async (newState: Game['state']) => {
     if (!game) return
@@ -277,7 +420,7 @@ export default function GamePage() {
       .replace('[AWAYTEAM]', game.awayTeam)
 
     try {
-      await addDoc(collection(db, 'games', gameId, 'questions'), {
+      const questionData: any = {
         question: questionText,
         type: 'YESNO',
         choices: ['Yes', 'No'],
@@ -285,7 +428,13 @@ export default function GamePage() {
         triggeredAt: Timestamp.now(),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
-      })
+      }
+
+      if (selectedEngineTag) {
+        questionData.engineTag = selectedEngineTag
+      }
+
+      await addDoc(collection(db, 'games', gameId, 'questions'), questionData)
     } catch (error) {
       console.error('Error creating question:', error)
       alert('Failed to create question')
@@ -529,6 +678,58 @@ export default function GamePage() {
                 )}
               </div>
 
+              {/* Engine Tag Statistics */}
+              {Object.keys(engineTagStats).length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                    📌 Engine Tag Performance
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {Object.entries(engineTagStats)
+                      .sort((a, b) => b[1].count - a[1].count)
+                      .map(([tag, stats]) => (
+                        <div
+                          key={tag}
+                          className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
+                        >
+                          <div className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                            {tag.replace(/_/g, ' ')}
+                          </div>
+                          <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
+                            <div className="flex justify-between">
+                              <span>Questions:</span>
+                              <span className="font-medium">{stats.count}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Avg Response Rate:</span>
+                              <span className="font-medium text-blue-600 dark:text-blue-400">
+                                {stats.avgResponseRate.toFixed(1)}%
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Total Responses:</span>
+                              <span className="font-medium">{stats.totalResponses}</span>
+                            </div>
+                            {stats.correctCount + stats.incorrectCount > 0 && (
+                              <div className="flex justify-between">
+                                <span>Accuracy:</span>
+                                <span className="font-medium text-green-600 dark:text-green-400">
+                                  {(
+                                    (stats.correctCount /
+                                      (stats.correctCount + stats.incorrectCount)) *
+                                    100
+                                  ).toFixed(1)}
+                                  %
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
               {/* Charts Section */}
               {chartData.length > 0 && (
                 <div className="mt-6 space-y-6">
@@ -740,6 +941,86 @@ export default function GamePage() {
           <h2 className="text-xl font-semibold mb-4">
             Quick Question Triggers
           </h2>
+
+          {/* Engine Tags */}
+          <div className="mb-6 space-y-3">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">
+                GAME MOMENT TAGS
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {['SCORE_EVENT', 'BIG_PLAY', 'START_OF_DRIVE', 'DEAD_TIME', 'RED_ZONE', 'FIELD_GOAL_SETUP', '4TH_DOWN', 'TWO_MINUTE_WARNING', 'CHALLENGE_REVIEW', 'RETURN_PLAY', 'TURNOVER', 'INJURY_TIMEOUT', 'HALFTIME', 'START_OF_QUARTER'].map(
+                  (tag) => (
+                    <button
+                      key={tag}
+                      onClick={() =>
+                        setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
+                      }
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                        selectedEngineTag === tag
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {tag.replace(/_/g, ' ')}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">
+                PACING TAGS
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {['ENGAGEMENT_BOOSTER', 'TIME_BASED_CADENCE'].map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() =>
+                      setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
+                    }
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                      selectedEngineTag === tag
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {tag.replace(/_/g, ' ')}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">
+                CONTENT TAGS
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {['LONGTERM', 'FUN_BREAK', 'DIFFICULTY_SPIKE'].map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() =>
+                      setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
+                    }
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                      selectedEngineTag === tag
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {tag.replace(/_/g, ' ')}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {selectedEngineTag && (
+              <div className="text-sm text-blue-600 font-medium">
+                Selected: {selectedEngineTag.replace(/_/g, ' ')}
+              </div>
+            )}
+          </div>
 
           {/* Game/Half/Quarter */}
           <div className="mb-6">
@@ -1003,6 +1284,63 @@ export default function GamePage() {
               </button>
             </div>
           </div>
+
+          {/* Special Situations */}
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-2 uppercase">
+              Special Situations
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will the kickoff return go 25+ yards?')
+                }
+                className="bg-purple-100 hover:bg-purple-200 text-purple-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🚀 Kickoff return 25+?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will the punt return gain 10+ yards?')
+                }
+                className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                ⚡ Punt return 10+?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will [HOMETEAM] score in the 2-minute drill?')
+                }
+                className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                ⏰ Score in 2-min drill?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will the challenge be successful?')
+                }
+                className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🚩 Challenge successful?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will play resume in under 5 minutes?')
+                }
+                className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🏥 Quick injury timeout?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will there be a turnover on the return?')
+                }
+                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🔄 Return turnover?
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white rounded-lg shadow">
@@ -1056,6 +1394,13 @@ export default function GamePage() {
                         Created:{' '}
                         {question.createdAt?.toDate?.()?.toLocaleString()}
                       </div>
+                      {question.engineTag && (
+                        <div className="mt-1">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
+                            🏷️ {question.engineTag.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      )}
 
                       {/* Show statistics for resolved or cancelled questions */}
                       {(question.state === 'resolved' ||
@@ -1291,6 +1636,99 @@ export default function GamePage() {
           </div>
         </div>
       </div>
+
+      {/* Floating Stats Display */}
+      {lastQuestionStats && (
+        <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 p-4 w-80 z-50">
+          <div className="space-y-3">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 pb-2">
+              <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                ⏱️ Last Question
+              </h3>
+              <div className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+                {Math.floor(lastQuestionStats.timeSinceLastMs / 60000)}:
+                {String(Math.floor((lastQuestionStats.timeSinceLastMs % 60000) / 1000)).padStart(2, '0')} ago
+              </div>
+            </div>
+
+            {/* Question Text */}
+            <div className="bg-gray-50 dark:bg-gray-900 rounded p-2">
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200 line-clamp-2">
+                {lastQuestionStats.question}
+              </p>
+            </div>
+
+            {/* Engine Tag */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Tag:</span>
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
+                {lastQuestionStats.engineTag.replace(/_/g, ' ')}
+              </span>
+            </div>
+
+            {/* State */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400">State:</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                lastQuestionStats.state === 'open'
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200'
+                  : lastQuestionStats.state === 'closed'
+                  ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-200'
+                  : 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-200'
+              }`}>
+                {lastQuestionStats.state.toUpperCase()}
+              </span>
+            </div>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Response Rate</div>
+                <div className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                  {lastQuestionStats.responseRate.toFixed(1)}%
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Avg Response Time</div>
+                <div className="text-lg font-bold text-green-600 dark:text-green-400">
+                  {lastQuestionStats.avgResponseTime}s
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Responses</div>
+                <div className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                  {lastQuestionStats.totalResponses}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Players</div>
+                <div className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                  {lastQuestionStats.totalPlayers}
+                </div>
+              </div>
+
+              {/* Show accuracy stats for resolved questions */}
+              {lastQuestionStats.state === 'resolved' && (lastQuestionStats.correctCount + lastQuestionStats.incorrectCount) > 0 && (
+                <>
+                  <div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">Accuracy</div>
+                    <div className="text-lg font-bold text-green-600 dark:text-green-400">
+                      {lastQuestionStats.accuracy.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400">Correct / Incorrect</div>
+                    <div className="text-lg font-bold text-gray-700 dark:text-gray-300">
+                      {lastQuestionStats.correctCount} / {lastQuestionStats.incorrectCount}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

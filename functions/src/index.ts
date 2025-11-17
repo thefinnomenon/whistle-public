@@ -146,36 +146,27 @@ exports.pushNewQuestion = onDocumentCreated(
       // Capture sentAt BEFORE sending to get accurate timing
       const sentAt = Date.now()
 
-      // Send standard FCM notification with category for action buttons
+      // Send data-only FCM message (background handler displays with action buttons)
       const message = {
         topic,
-        notification: {
-          title: '🏈 New Question!',
-          body: question.question,
-        },
         data: {
           type: 'question',
           gameId,
           questionId,
           question: question.question,
+          title: '🏈 New Question!',
+          body: question.question,
           sentAt: sentAt.toString(),
+          engineTag: question.engineTag || '',
         },
         android: {
           priority: 'high' as const,
-          notification: {
-            channelId: 'default',
-            sound: 'whistle',
-          },
         },
         apns: {
           payload: {
             aps: {
+              contentAvailable: true,
               sound: 'whistle.wav',
-              category: 'YESNO',
-              alert: {
-                title: '🏈 New Question!',
-                body: question.question,
-              },
             },
           },
           headers: {
@@ -355,20 +346,21 @@ const calculateQuestionStatistics = async (
     const predictionTime = doc.createTime?.toMillis()
     const predictionData = doc.data()
 
-    if (predictionTime) {
-      // Response time: from when question was created to when prediction was made
-      const responseTime = predictionTime - createdAtMillis
+    if (predictionTime && predictionData?.receivedAt) {
+      // Response time: from when notification was received to when user answered
+      // This is the most meaningful metric - how quickly users respond after seeing the notification
+      const responseTime = predictionTime - predictionData.receivedAt
       if (responseTime >= 0) {
         responseTimes.push(responseTime)
       }
+    }
 
-      // Delivery time: from when notification was sent to when it was received on device
-      // Use sentAt and receivedAt if available (stored in prediction document)
-      if (predictionData?.sentAt && predictionData?.receivedAt) {
-        const deliveryTime = predictionData.receivedAt - predictionData.sentAt
-        if (deliveryTime >= 0) {
-          deliveryTimes.push(deliveryTime)
-        }
+    // Delivery time: from when notification was sent to when it was received on device
+    // Use sentAt and receivedAt if available (stored in prediction document)
+    if (predictionData?.sentAt && predictionData?.receivedAt) {
+      const deliveryTime = predictionData.receivedAt - predictionData.sentAt
+      if (deliveryTime >= 0) {
+        deliveryTimes.push(deliveryTime)
       }
     }
   })

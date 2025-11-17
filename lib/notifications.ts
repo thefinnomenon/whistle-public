@@ -11,6 +11,7 @@ import {
   getFirestore,
   serverTimestamp,
   setDoc,
+  Timestamp,
 } from '@react-native-firebase/firestore'
 import {
   getMessaging,
@@ -52,7 +53,8 @@ export async function checkNotificationPermission(): Promise<NotificationPermiss
 export async function setupIOSCategories(): Promise<void> {
   if (Platform.OS !== 'ios') return
 
-  const categories: IOSNotificationCategory[] = [
+  // Set up Notifee categories (for Notifee-displayed notifications)
+  const notifeeCategories: IOSNotificationCategory[] = [
     {
       id: 'YESNO',
       actions: [
@@ -85,8 +87,28 @@ export async function setupIOSCategories(): Promise<void> {
     },
   ]
 
-  await notifee.setNotificationCategories(categories)
-  console.log('[Notifications] iOS categories set up')
+  await notifee.setNotificationCategories(notifeeCategories)
+  console.log('[Notifications] Notifee iOS categories set up')
+
+  // Also set up expo-notifications categories (for FCM native notifications)
+  const Notifications = require('expo-notifications')
+  await Notifications.setNotificationCategoryAsync('YESNO', [
+    {
+      identifier: 'yes',
+      buttonTitle: '✅ Yes',
+      options: {
+        opensAppToForeground: false,
+      },
+    },
+    {
+      identifier: 'no',
+      buttonTitle: '❌ No',
+      options: {
+        opensAppToForeground: false,
+      },
+    },
+  ])
+  console.log('[Notifications] Expo-notifications iOS categories set up')
 }
 
 /**
@@ -258,8 +280,15 @@ export async function handleNotificationActionPress(
     return
   }
 
-  const { gameId, questionId, triggeredAt, createdAt, sentAt, receivedAt } =
-    data || {}
+  const {
+    gameId,
+    questionId,
+    triggeredAt,
+    createdAt,
+    sentAt,
+    receivedAt,
+    engineTag,
+  } = data || {}
 
   if (!gameId || !questionId) {
     return
@@ -287,6 +316,7 @@ export async function handleNotificationActionPress(
     // Store timing metadata for delivery time calculations
     const predictionData: any = {
       prediction,
+      createdAt: Timestamp.now(),
     }
 
     if (sentAt) {
@@ -326,6 +356,7 @@ export async function handleNotificationActionPress(
       question_id: questionId,
       prediction,
       answered_at: answeredAt,
+      engine_tag: engineTag || null,
     }
 
     if (triggeredAt) {
@@ -366,8 +397,15 @@ export async function handleNotificationDismissed(
   data: Record<string, any> | undefined,
   analytics: { track: (event: string, data: any) => void }
 ): Promise<void> {
-  const { gameId, questionId, triggeredAt, createdAt, sentAt, receivedAt } =
-    data || {}
+  const {
+    gameId,
+    questionId,
+    triggeredAt,
+    createdAt,
+    sentAt,
+    receivedAt,
+    engineTag,
+  } = data || {}
 
   if (gameId && questionId) {
     try {
@@ -376,6 +414,7 @@ export async function handleNotificationDismissed(
         game_id: gameId,
         question_id: questionId,
         missed_at: missedAt,
+        engine_tag: engineTag || null,
       }
 
       if (triggeredAt) {

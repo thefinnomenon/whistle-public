@@ -70,6 +70,7 @@ export type Question = {
   resolvedAt?: FirestoreTimestamp
   cancelledAt?: FirestoreTimestamp
   changedAt?: FirestoreTimestamp
+  engineTag?: string
 
   // Statistics fields (set when question is closed/resolved/cancelled)
   totalResponses?: number
