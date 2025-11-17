@@ -7,11 +7,10 @@ import {
   addDoc,
   collection,
   doc,
-  getDoc,
   onSnapshot,
   orderBy,
   query,
-  updateDoc,
+  updateDoc
 } from 'firebase/firestore'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
@@ -42,8 +41,11 @@ export default function GamePage() {
   const [loading, setLoading] = useState(true)
   const [changingAnswerId, setChangingAnswerId] = useState<string | null>(null)
   const [selectedEngineTag, setSelectedEngineTag] = useState<string | null>(null)
-  const [currentTime, setCurrentTime] = useState(Date.now())
   const [livePredictions, setLivePredictions] = useState<any[]>([])
+  const [isStatsExpanded, setIsStatsExpanded] = useState(false)
+  const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set())
+  const timerRef = React.useRef<HTMLDivElement>(null)
+  const triggeredTimeRef = React.useRef<number>(0)
 
   // Calculate real-time game statistics from questions
   const gameStats = React.useMemo(() => {
@@ -252,7 +254,9 @@ export default function GamePage() {
 
     const lastQuestion = questions[0] // Already sorted by createdAt desc
     const triggeredTime = lastQuestion.triggeredAt?.toMillis?.() || lastQuestion.createdAt?.toMillis?.() || 0
-    const timeSinceLastMs = triggeredTime > 0 ? currentTime - triggeredTime : 0
+
+    // Update ref for timer (doesn't cause re-render)
+    triggeredTimeRef.current = triggeredTime
 
     // Use live predictions for open/closed questions, otherwise use stored stats
     let totalResponses = lastQuestion.totalResponses || 0
@@ -301,18 +305,18 @@ export default function GamePage() {
       avgResponseTime,
       totalResponses,
       totalPlayers,
-      timeSinceLastMs,
+      triggeredTime, // Return triggeredTime instead of calculating timeSince here
       correctCount,
       incorrectCount,
       accuracy,
     }
-  }, [questions, currentTime, livePredictions, game])
+  }, [questions, livePredictions, game])
 
   useEffect(() => {
     if (!user || !gameId) return
 
-    // Fetch game
-    getDoc(doc(db, 'games', gameId)).then((snapshot) => {
+    // Listen to game document for live updates
+    const gameUnsubscribe = onSnapshot(doc(db, 'games', gameId), (snapshot) => {
       if (snapshot.exists()) {
         setGame({ id: snapshot.id, ...snapshot.data() } as Game)
       }
@@ -324,7 +328,7 @@ export default function GamePage() {
       orderBy('createdAt', 'desc')
     )
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const questionsUnsubscribe = onSnapshot(q, (snapshot) => {
       const questionsData = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
@@ -334,7 +338,10 @@ export default function GamePage() {
       setLoading(false)
     })
 
-    return () => unsubscribe()
+    return () => {
+      gameUnsubscribe()
+      questionsUnsubscribe()
+    }
   }, [user, gameId])
 
   // Listen to predictions for the last question (for live stats)
@@ -359,11 +366,18 @@ export default function GamePage() {
     return () => unsubscribe()
   }, [user, gameId, questions])
 
-  // Update current time every second for live timer
+  // Update timer display every second (without triggering re-renders)
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(Date.now())
-    }, 1000)
+    const updateTimer = () => {
+      if (timerRef.current && triggeredTimeRef.current > 0) {
+        const timeSinceLastMs = Date.now() - triggeredTimeRef.current
+        const minutes = Math.floor(timeSinceLastMs / 60000)
+        const seconds = String(Math.floor((timeSinceLastMs % 60000) / 1000)).padStart(2, '0')
+        timerRef.current.textContent = `${minutes}:${seconds} ago`
+      }
+    }
+
+    const interval = setInterval(updateTimer, 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -732,9 +746,23 @@ export default function GamePage() {
 
               {/* Charts Section */}
               {chartData.length > 0 && (
-                <div className="mt-6 space-y-6">
-                  {/* Response Rate & Engagement Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                <div className="mt-6">
+                  <button
+                    onClick={() => setIsStatsExpanded(!isStatsExpanded)}
+                    className="w-full flex items-center justify-between bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 p-4 rounded-lg cursor-pointer transition-colors mb-4"
+                  >
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+                      📊 Per-Question Statistics & Charts
+                    </h3>
+                    <span className="text-2xl text-gray-600 dark:text-gray-400">
+                      {isStatsExpanded ? '−' : '+'}
+                    </span>
+                  </button>
+
+                  {isStatsExpanded && (
+                    <div className="space-y-6">
+                      {/* Response Rate & Engagement Chart */}
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
                     <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
                       Response Rate & Engagement Over Time
                     </h4>
@@ -930,6 +958,8 @@ export default function GamePage() {
                       Helps identify how quickly you&apos;re able to determine outcomes.
                     </div>
                   </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1087,7 +1117,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the next red zone drive end in a TD?')
+                  createQuickQuestion('Will this red zone drive end in a TD?')
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1128,7 +1158,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the next field goal be good?')
+                  createQuickQuestion('Will the field goal be good?')
                 }
                 className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1185,7 +1215,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will they convert the next 3rd down?')
+                  createQuickQuestion('Will they convert this 3rd down?')
                 }
                 className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1193,7 +1223,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will they convert the next 4th down?')
+                  createQuickQuestion('Will they convert this 4th down?')
                 }
                 className="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1309,7 +1339,7 @@ export default function GamePage() {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will [HOMETEAM] score in the 2-minute drill?')
+                  createQuickQuestion('Will there be a score in the final 2-minutes?')
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1406,10 +1436,29 @@ export default function GamePage() {
                       {(question.state === 'resolved' ||
                         question.state === 'cancelled') &&
                         question.totalResponses !== undefined && (
-                          <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900 rounded text-xs space-y-2">
-                            <div className="font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                              📊 Statistics
-                            </div>
+                          <div className="mt-3">
+                            <button
+                              onClick={() => {
+                                const newExpanded = new Set(expandedQuestions)
+                                if (newExpanded.has(question.id)) {
+                                  newExpanded.delete(question.id)
+                                } else {
+                                  newExpanded.add(question.id)
+                                }
+                                setExpandedQuestions(newExpanded)
+                              }}
+                              className="w-full flex items-center justify-between p-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-xs cursor-pointer transition-colors"
+                            >
+                              <span className="font-semibold text-gray-700 dark:text-gray-300">
+                                📊 Statistics
+                              </span>
+                              <span className="text-lg text-gray-600 dark:text-gray-400">
+                                {expandedQuestions.has(question.id) ? '−' : '+'}
+                              </span>
+                            </button>
+
+                            {expandedQuestions.has(question.id) && (
+                              <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded text-xs space-y-2">
 
                             {/* Response metrics */}
                             <div className="grid grid-cols-2 gap-2">
@@ -1541,6 +1590,8 @@ export default function GamePage() {
                                   </div>
                                 </div>
                               )}
+                              </div>
+                            )}
                           </div>
                         )}
                     </div>
@@ -1646,9 +1697,8 @@ export default function GamePage() {
               <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
                 ⏱️ Last Question
               </h3>
-              <div className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
-                {Math.floor(lastQuestionStats.timeSinceLastMs / 60000)}:
-                {String(Math.floor((lastQuestionStats.timeSinceLastMs % 60000) / 1000)).padStart(2, '0')} ago
+              <div ref={timerRef} className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+                0:00 ago
               </div>
             </div>
 

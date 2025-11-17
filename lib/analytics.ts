@@ -65,12 +65,19 @@ const track = (eventName: string, properties?: Record<string, any>) => {
   // Log to console in dev mode
   if (!isProduction()) {
     console.log(`[Mixpanel Dev] Event: ${eventName}`, properties || {})
+    console.log(`[Mixpanel Dev] APP_ENV: ${env.APP_ENV}`)
     return
   }
   if (!mixpanel) {
-    console.warn('Mixpanel not initialized')
+    console.warn(
+      '[Mixpanel] Not initialized. APP_ENV:',
+      env.APP_ENV,
+      'Token:',
+      env.MIXPANEL_TOKEN ? 'Present' : 'Missing'
+    )
     return
   }
+  console.log(`[Mixpanel] Tracking event: ${eventName}`, properties)
   mixpanel.track(eventName, properties)
 }
 

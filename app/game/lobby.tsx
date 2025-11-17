@@ -3,6 +3,7 @@ import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore'
 import { router, useFocusEffect } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppState, Image, Text, TouchableOpacity, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
 
 import { analytics } from '@/lib/analytics'
@@ -17,6 +18,7 @@ const db = getFirestore()
 export default function GameLobbyScreen() {
   const { user } = useAuth()
   const { game, setGame } = useGame()
+  const insets = useSafeAreaInsets()
   const [canJoin, setCanJoin] = useState(true)
   const [hasUserJoined, setHasUserJoined] = useState<boolean | null>(null)
   const [hasRedirected, setHasRedirected] = useState(false)
@@ -176,11 +178,13 @@ export default function GameLobbyScreen() {
   return (
     <View className="flex-1 items-center justify-start px-4">
       {/* Header with Settings Icon */}
-      <View className="w-full flex-row justify-end pt-12 px-4 absolute top-0 right-0 z-10">
-        <TouchableOpacity onPress={() => router.push('/settings')}>
-          <Ionicons name="settings-outline" size={28} color="slategray" />
-        </TouchableOpacity>
-      </View>
+      <TouchableOpacity
+        className="absolute right-4 z-10"
+        style={{ top: insets.top + 20 }}
+        onPress={() => router.push('/settings')}
+      >
+        <Ionicons name="settings-outline" size={24} color="slategray" />
+      </TouchableOpacity>
 
       {/* Team Logos - Top Third */}
       <View className="w-full h-1/3 flex-row items-center justify-center pt-12">
