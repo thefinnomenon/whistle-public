@@ -76,6 +76,8 @@ export type Question = {
   totalResponses?: number
   totalPlayers?: number
   responseRate?: number
+  latePredictionCount?: number
+  lateResponseRate?: number
   yesCount?: number
   noCount?: number
   correctCount?: number

@@ -330,11 +330,24 @@ const calculateQuestionStatistics = async (
       })
     : predictionsSnapshot.docs
 
+  // Count late predictions (submitted after question closed)
+  const latePredictions = question.closedAt
+    ? predictionsSnapshot.docs.filter((doc) => {
+        const createTime = doc.createTime?.toDate()
+        const closedAt = question.closedAt?.toDate()
+        return createTime && closedAt && createTime >= closedAt
+      })
+    : []
+
   console.log(`Found ${validPredictions.length} valid predictions`)
+  console.log(`Found ${latePredictions.length} late predictions`)
 
   const totalResponses = validPredictions.length
+  const latePredictionCount = latePredictions.length
   const responseRate =
     totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+  const lateResponseRate =
+    totalPlayers > 0 ? (latePredictionCount / totalPlayers) * 100 : 0
 
   // Calculate response times and delivery times
   const responseTimes: number[] = []
@@ -428,6 +441,8 @@ const calculateQuestionStatistics = async (
     totalResponses: number
     totalPlayers: number
     responseRate: number
+    latePredictionCount: number
+    lateResponseRate: number
     yesCount: number
     noCount: number
     questionOpenTimeMs: number
@@ -448,6 +463,8 @@ const calculateQuestionStatistics = async (
     totalResponses,
     totalPlayers,
     responseRate: Math.round(responseRate * 100) / 100, // Round to 2 decimal places
+    latePredictionCount,
+    lateResponseRate: Math.round(lateResponseRate * 100) / 100,
     yesCount,
     noCount,
     questionOpenTimeMs: Math.round(questionOpenTimeMs),

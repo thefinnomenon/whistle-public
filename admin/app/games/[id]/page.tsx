@@ -1052,6 +1052,31 @@ export default function GamePage() {
             )}
           </div>
 
+          {/* Kickoff / Pre-Game */}
+          <div className="mb-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-2 uppercase">
+              Kickoff / Pre-Game
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will [HOMETEAM] win?')
+                }
+                className="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🏆 Home team win?
+              </button>
+              <button
+                onClick={() =>
+                  createQuickQuestion('Will the coin toss be heads?')
+                }
+                className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🪙 Coin toss heads?
+              </button>
+            </div>
+          </div>
+
           {/* Game/Half/Quarter */}
           <div className="mb-6">
             <h3 className="text-sm font-semibold text-gray-600 mb-2 uppercase">
@@ -1479,6 +1504,19 @@ export default function GamePage() {
                                   {question.yesCount} / {question.noCount}
                                 </span>
                               </div>
+                              {question.latePredictionCount !== undefined && question.latePredictionCount > 0 && (
+                                <div className="col-span-2">
+                                  <span className="text-orange-600 dark:text-orange-400">
+                                    ⚠️ Late Responses:
+                                  </span>{' '}
+                                  <span className="font-medium text-orange-700 dark:text-orange-300">
+                                    {question.latePredictionCount} ({question.lateResponseRate?.toFixed(1)}%)
+                                  </span>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                                    (submitted after question closed)
+                                  </span>
+                                </div>
+                              )}
                               {question.correctCount !== undefined && (
                                 <>
                                   <div>
