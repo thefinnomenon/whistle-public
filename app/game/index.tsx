@@ -85,7 +85,7 @@ export default function GameScreen() {
   const handleLeaveGame = useCallback(() => {
     Alert.alert(
       'Leave Game',
-      'Are you sure you want to leave the game? You will forfeit your chance to win, will no longer receive questions, and will not be able to rejoin.',
+      'Are you sure you want to leave the game? You will forfeit your current score and will no longer receive questions.',
       [
         {
           text: 'Cancel',

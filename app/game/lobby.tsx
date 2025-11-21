@@ -19,7 +19,6 @@ export default function GameLobbyScreen() {
   const { user } = useAuth()
   const { game, setGame } = useGame()
   const insets = useSafeAreaInsets()
-  const [canJoin, setCanJoin] = useState(true)
   const [hasUserJoined, setHasUserJoined] = useState<boolean | null>(null)
   const [hasRedirected, setHasRedirected] = useState(false)
   const unsubscribeRef = useRef<(() => void) | undefined>(null)
@@ -36,16 +35,6 @@ export default function GameLobbyScreen() {
     const playerDoc = await getDoc(doc(db, `games/${gameId}/users`, userId))
     if (playerDoc.exists()) {
       console.log('User already joined game!')
-      return true
-    } else return false
-  }
-
-  const hasJoinedAndLeft = async (userId: string, gameId: string) => {
-    const userGameDoc = await getDoc(doc(db, `users/${userId}/games`, gameId))
-    if (userGameDoc.exists()) {
-      console.log(
-        'User already joined game and left! Not permitting to join again...'
-      )
       return true
     } else return false
   }
@@ -121,8 +110,6 @@ export default function GameLobbyScreen() {
           router.push({ pathname: '/game', params: { gameId: game.id } })
         }
       } else {
-        const alreadyJoinedAndLeft = await hasJoinedAndLeft(user.id, game.id)
-        if (alreadyJoinedAndLeft) setCanJoin(false)
         setHasUserJoined(false)
       }
     })()
@@ -172,8 +159,7 @@ export default function GameLobbyScreen() {
 
   if (!game || hasUserJoined === null) return null
 
-  const isJoinDisabled =
-    !canJoin || (hasUserJoined && game.state === 'scheduled')
+  const isJoinDisabled = hasUserJoined && game.state === 'scheduled'
 
   return (
     <View className="flex-1 items-center justify-start px-4">
@@ -264,9 +250,6 @@ export default function GameLobbyScreen() {
             </Text>
           )}
         </TouchableOpacity>
-        {!canJoin && (
-          <InfoCard message="You've already left this game and cannot rejoin." />
-        )}
         {hasUserJoined && game.state === 'scheduled' && (
           <InfoCard message="You're all set! We'll notify you when the game starts." />
         )}

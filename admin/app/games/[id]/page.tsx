@@ -1728,7 +1728,7 @@ export default function GamePage() {
 
       {/* Floating Stats Display */}
       {lastQuestionStats && (
-        <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 p-4 w-80 z-50">
+        <div className="fixed top-24 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 p-4 w-80 z-50">
           <div className="space-y-3">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 pb-2">
