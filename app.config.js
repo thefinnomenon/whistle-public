@@ -1,8 +1,8 @@
 import 'dotenv/config'
 import packageJson from './package.json'
 
-const IS_DEV = process.env.APP_ENV === 'development'
-const IS_STAGING = process.env.APP_ENV === 'staging'
+const IS_DEV = process.env.EXPO_PUBLIC_APP_ENV === 'development'
+const IS_STAGING = process.env.EXPO_PUBLIC_APP_ENV === 'staging'
 
 const getAppName = () => {
   if (IS_DEV) return 'Whistle (Dev)'
@@ -59,8 +59,10 @@ export default {
     ios: {
       supportsTablet: true,
       usesAppleSignIn: true,
-      bundleIdentifier: 'com.finnternet.whistle',
-      googleServicesFile: './GoogleService-Info.plist',
+      bundleIdentifier: getBundleIdentifier(),
+      googleServicesFile: IS_DEV
+        ? './GoogleService-Info.dev.plist'
+        : './GoogleService-Info.plist',
       config: {
         usesNonExemptEncryption: false,
       },
@@ -72,8 +74,10 @@ export default {
       },
     },
     android: {
-      package: 'com.finnternet.whistle',
-      googleServicesFile: './google-services.json',
+      package: getAndroidPackage(),
+      googleServicesFile: IS_DEV
+        ? './google-services.dev.json'
+        : './google-services.json',
       adaptiveIcon: {
         foregroundImage: './assets/images/adaptive-icon.png',
         backgroundColor: '#ffffff',
