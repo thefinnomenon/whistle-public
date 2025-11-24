@@ -277,6 +277,8 @@ function AuthGate() {
     const inOnboarding = pathname.startsWith('onboarding')
     const inUsername = pathname.startsWith('username')
     const inSignout = pathname.startsWith('signout')
+    const inGame = pathname.startsWith('game') && pathname !== 'game/lobby'
+    const inSettings = pathname.startsWith('settings')
 
     if (!user && !inAuthGroup && !inSignout) {
       // Redirect to sign-in if not authenticated and not already on sign-in page or signout
@@ -291,9 +293,12 @@ function AuthGate() {
       user &&
       hasCompletedOnboarding &&
       hasUsername &&
-      (inAuthGroup || inOnboarding || inUsername || pathname === '')
+      (inAuthGroup || inOnboarding || inUsername || pathname === '') &&
+      !inGame &&
+      !inSettings
     ) {
       // Redirect to game lobby after completing onboarding or from root index
+      // But don't redirect if already in a game or settings
       router.replace('/game/lobby')
     }
 

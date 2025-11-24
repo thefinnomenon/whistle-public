@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev:dev": "NODE_ENV=development next dev --turbopack",
-    "dev:prod": "NODE_ENV=production next dev --turbopack",
-    "build:dev": "NODE_ENV=development next build --turbopack",
-    "build:prod": "NODE_ENV=production next build --turbopack",
+    "dev:dev": "NEXT_PUBLIC_APP_ENV=development next dev --turbopack",
+    "dev:prod": "NEXT_PUBLIC_APP_ENV=production next dev --turbopack",
+    "build:dev": "NEXT_PUBLIC_APP_ENV=development next build --turbopack",
+    "build:prod": "NEXT_PUBLIC_APP_ENV=production next build --turbopack",
     "start": "next start",
     "lint": "eslint"
   },

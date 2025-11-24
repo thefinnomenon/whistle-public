@@ -76,12 +76,20 @@ export default function HomePage() {
     )
   }
 
+  const environment = process.env.NEXT_PUBLIC_APP_ENV === 'development' ? 'Development' : 'Production'
+  const envColor = process.env.NEXT_PUBLIC_APP_ENV === 'development' ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'
+
   return (
     <div className="min-h-screen p-8">
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-4xl font-bold">Whistle Admin</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-4xl font-bold">Whistle Admin</h1>
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${envColor}`}>
+                {environment}
+              </span>
+            </div>
             <p className="text-sm text-gray-600 mt-1">Signed in as {user.email}</p>
           </div>
           <div className="flex gap-3">

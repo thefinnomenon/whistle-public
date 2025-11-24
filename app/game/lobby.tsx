@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons'
-import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore'
 import { router, useFocusEffect } from 'expo-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { AppState, Image, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
@@ -13,14 +12,10 @@ import { subscribeToGameTopic } from '@/lib/fcm'
 import { getLatestGame, updateGamePlayer, updateUserGame } from '@/lib/firebase'
 import { NFL } from '@/logos'
 
-const db = getFirestore()
-
 export default function GameLobbyScreen() {
   const { user } = useAuth()
   const { game, setGame } = useGame()
   const insets = useSafeAreaInsets()
-  const [hasUserJoined, setHasUserJoined] = useState<boolean | null>(null)
-  const [hasRedirected, setHasRedirected] = useState(false)
   const unsubscribeRef = useRef<(() => void) | undefined>(null)
   const userRef = useRef(user)
   const setGameRef = useRef(setGame)
@@ -30,21 +25,6 @@ export default function GameLobbyScreen() {
     userRef.current = user
     setGameRef.current = setGame
   }, [user, setGame])
-
-  const hasAlreadyJoined = async (userId: string, gameId: string) => {
-    const playerDoc = await getDoc(doc(db, `games/${gameId}/users`, userId))
-    if (playerDoc.exists()) {
-      console.log('User already joined game!')
-      return true
-    } else return false
-  }
-
-  useEffect(() => {
-    const checkNofiticationPermissions = async () => {
-      // Check for notification permissions
-    }
-    checkNofiticationPermissions()
-  }, [])
 
   // Handle app state changes (background/foreground)
   useEffect(() => {
@@ -98,41 +78,9 @@ export default function GameLobbyScreen() {
     }, [setGame, user])
   )
 
-  useEffect(() => {
-    if (!user || hasRedirected) return
-
-    // If no game, set hasUserJoined to false so we can show the empty state
-    if (!game) {
-      setHasUserJoined(false)
-      return
-    }
-
-    ;(async () => {
-      const alreadyJoined = await hasAlreadyJoined(user.id, game.id)
-      if (alreadyJoined) {
-        setHasUserJoined(true)
-        // Auto-redirect if game is open
-        if (game.state === 'open') {
-          setHasRedirected(true)
-          router.push({ pathname: '/game', params: { gameId: game.id } })
-        }
-      } else {
-        setHasUserJoined(false)
-      }
-    })()
-  }, [game, user, hasRedirected])
-
   const joinGame = async () => {
     if (!game || !user) return
 
-    // If already joined, just navigate to the game
-    if (hasUserJoined) {
-      setHasRedirected(true)
-      router.push({ pathname: '/game', params: { gameId: game.id } })
-      return
-    }
-
-    // Otherwise, join the game
     console.log(`User ${user.id} is joining game ${game.id}`)
     try {
       await updateUserGame(user.id, game.id, { score: 0 })
@@ -152,9 +100,7 @@ export default function GameLobbyScreen() {
         game_state: game.state,
       })
 
-      setHasUserJoined(true)
       if (game?.state === 'open') {
-        setHasRedirected(true)
         router.push({ pathname: '/game', params: { gameId: game.id } })
       } else {
         toast.success("You're in! We'll notify you when the game starts.")
@@ -163,8 +109,6 @@ export default function GameLobbyScreen() {
       console.error('Failed to join game, ', e)
     }
   }
-
-  if (hasUserJoined === null) return null
 
   if (!game) {
     return (
@@ -190,8 +134,6 @@ export default function GameLobbyScreen() {
       </View>
     )
   }
-
-  const isJoinDisabled = hasUserJoined && game.state === 'scheduled'
 
   return (
     <View className="flex-1 items-center justify-start px-4">
@@ -263,35 +205,14 @@ export default function GameLobbyScreen() {
       {/* Join Button */}
       <View className="w-full items-center mt-12">
         <TouchableOpacity
-          className={`w-3/4 bg-blue-500 hover:bg-blue-700 py-4 px-6 rounded-lg ${
-            (isJoinDisabled || (hasUserJoined && game.state === 'scheduled')) &&
-            'bg-gray-300 hover:bg-gray-300'
-          }`}
-          disabled={
-            isJoinDisabled || (hasUserJoined && game.state === 'scheduled')
-          }
-          onPress={() => joinGame()}
+          className="w-3/4 bg-blue-500 hover:bg-blue-700 py-4 px-6 rounded-lg"
+          onPress={joinGame}
         >
-          {!hasUserJoined ? (
-            <Text className="text-white font-bold text-xl text-center">
-              JOIN GAME
-            </Text>
-          ) : (
-            <Text className="text-white font-bold text-xl text-center">
-              ENTER GAME
-            </Text>
-          )}
+          <Text className="text-white font-bold text-xl text-center">
+            JOIN GAME
+          </Text>
         </TouchableOpacity>
-        {hasUserJoined && game.state === 'scheduled' && (
-          <InfoCard message="You're all set! We'll notify you when the game starts." />
-        )}
       </View>
     </View>
   )
 }
-
-const InfoCard = ({ message }: { message: string }) => (
-  <View className="w-3/4 mt-4 p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800">
-    <Text className="text-gray-900 dark:text-white text-center">{message}</Text>
-  </View>
-)
