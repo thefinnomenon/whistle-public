@@ -36,6 +36,7 @@ type User = {
   loginMethod?: LoginType
   isAdmin?: boolean
   winnings?: number
+  onboardingComplete?: boolean
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   tokens: { [tokenId: string]: Token | FieldValue }

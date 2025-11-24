@@ -1,9 +1,5 @@
+import { initializeFCMToken, setupTokenRefreshListener } from '@/lib/fcm'
 import { addUser, getUser } from '@/lib/firebase'
-import {
-  clearFCMToken,
-  initializeFCMToken,
-  setupTokenRefreshListener,
-} from '@/lib/fcm'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
 import {
@@ -79,11 +75,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         )
 
-        // Fetch initial user record for analytics
+        // Fetch initial user record for analytics and state
         const userDoc = await getDoc(doc(db, 'users', fbUser.uid))
 
         if (userDoc.exists()) {
           const userData = userDoc.data() as User
+
+          // Set user state immediately (before real-time listener fires)
+          setUser(userData)
+          setHasUsername(!!userData.username)
 
           // Track login event in Mixpanel
           analytics.identify(fbUser.uid)
@@ -98,6 +98,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           // Setup token refresh listener
           tokenRefreshUnsubscribe = setupTokenRefreshListener(fbUser.uid)
+
+          // Check if user has completed onboarding (existing user)
+          // Check both AsyncStorage flag and Firestore onboardingComplete field
+          const onboardingStatus = await AsyncStorage.getItem(
+            `${ONBOARDING_KEY}_${fbUser.uid}`
+          )
+
+          // User has completed onboarding if they have AsyncStorage flag OR onboardingComplete in Firestore
+          const hasCompletedOnboardingFlag =
+            onboardingStatus === 'true' || !!userData.onboardingComplete
+          setHasCompletedOnboarding(hasCompletedOnboardingFlag)
+
+          // Update AsyncStorage if user has onboardingComplete but flag is not set
+          if (userData.onboardingComplete && !onboardingStatus) {
+            await AsyncStorage.setItem(
+              `${ONBOARDING_KEY}_${fbUser.uid}`,
+              'true'
+            )
+          }
         } else {
           // Create user record if it doesn't exist
           console.log('User record not found, creating...')
@@ -144,18 +163,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
             // Setup token refresh listener
             tokenRefreshUnsubscribe = setupTokenRefreshListener(fbUser.uid)
+
+            // New users haven't completed onboarding
+            setHasCompletedOnboarding(false)
           } catch (error) {
             console.error('Failed to create user record:', error)
             setUser(null)
             setHasUsername(false)
+            setHasCompletedOnboarding(false)
           }
         }
-
-        // Check if user has completed onboarding
-        const onboardingStatus = await AsyncStorage.getItem(
-          `${ONBOARDING_KEY}_${fbUser.uid}`
-        )
-        setHasCompletedOnboarding(onboardingStatus === 'true')
       } else {
         setUser(null)
         setHasCompletedOnboarding(false)
@@ -192,6 +209,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const completeOnboarding = async () => {
     if (firebaseUser) {
+      // Only mark onboarding as complete in AsyncStorage
+      // Don't set onboardingComplete in Firestore yet - wait until username is set
       await AsyncStorage.setItem(
         `${ONBOARDING_KEY}_${firebaseUser.uid}`,
         'true'
@@ -202,15 +221,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       analytics.track('Onboarding Completed', {
         user_id: firebaseUser.uid,
       })
-
-      // Refresh user record to check for username
-      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
-
-      if (userDoc.exists()) {
-        const userData = userDoc.data() as User
-        setUser(userData)
-        setHasUsername(!!userData.username)
-      }
     }
   }
 

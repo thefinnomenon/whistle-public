@@ -1,5 +1,15 @@
 import notifee, { EventType } from '@notifee/react-native'
 import { getApp } from '@react-native-firebase/app'
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  getFirestore,
+  limit,
+  orderBy,
+  query,
+} from '@react-native-firebase/firestore'
 import { getMessaging, onMessage } from '@react-native-firebase/messaging'
 import {
   DarkTheme,
@@ -269,9 +279,10 @@ function AuthGate() {
   const { user, loading, hasCompletedOnboarding, hasUsername } = useAuth()
   const segments = useSegments()
   const pathname = segments.join('/')
+  const [checkingActiveGame, setCheckingActiveGame] = React.useState(false)
 
   useEffect(() => {
-    if (loading) return
+    if (loading || checkingActiveGame) return
 
     const inAuthGroup = pathname.startsWith('sign-in')
     const inOnboarding = pathname.startsWith('onboarding')
@@ -283,31 +294,95 @@ function AuthGate() {
     if (!user && !inAuthGroup && !inSignout) {
       // Redirect to sign-in if not authenticated and not already on sign-in page or signout
       router.replace('/sign-in')
-    } else if (user && !hasCompletedOnboarding && !inOnboarding) {
-      // Redirect to onboarding if authenticated but hasn't completed onboarding
-      router.replace('/onboarding')
-    } else if (user && hasCompletedOnboarding && !hasUsername && !inUsername) {
-      // Redirect to username if authenticated, completed onboarding, but no username
-      router.replace('/username')
+      SplashScreen.hideAsync()
     } else if (
       user &&
-      hasCompletedOnboarding &&
+      !user.onboardingComplete &&
+      !inOnboarding &&
+      !inUsername
+    ) {
+      // Redirect to onboarding if authenticated but hasn't completed onboarding
+      router.replace('/onboarding')
+      SplashScreen.hideAsync()
+    } else if (user && user.onboardingComplete && !hasUsername && !inUsername) {
+      // Redirect to username if authenticated, completed onboarding, but no username
+      router.replace('/username')
+      SplashScreen.hideAsync()
+    } else if (
+      user &&
+      user.onboardingComplete &&
       hasUsername &&
       (inAuthGroup || inOnboarding || inUsername || pathname === '') &&
       !inGame &&
       !inSettings
     ) {
-      // Redirect to game lobby after completing onboarding or from root index
-      // But don't redirect if already in a game or settings
-      router.replace('/game/lobby')
+      // Check if user has an active game before redirecting to lobby
+      setCheckingActiveGame(true)
+      const checkActiveGame = async () => {
+        try {
+          const db = getFirestore()
+
+          // Get the latest game
+          const gamesQuery = query(
+            collection(db, 'games'),
+            orderBy('createdAt', 'desc'),
+            limit(1)
+          )
+
+          const gamesSnapshot = await getDocs(gamesQuery)
+
+          if (!gamesSnapshot.empty) {
+            const gameDoc = gamesSnapshot.docs[0]
+            const gameData = gameDoc.data()
+            const gameId = gameDoc.id
+
+            // Check if game is open and user is a player
+            if (gameData?.state === 'open') {
+              const playerDoc = await getDoc(
+                doc(db, `games/${gameId}/users`, user.id)
+              )
+
+              if (playerDoc.exists()) {
+                console.log(
+                  '[AuthGate] User has active game, redirecting to game screen'
+                )
+                router.replace({ pathname: '/game', params: { gameId } })
+                SplashScreen.hideAsync()
+                setCheckingActiveGame(false)
+                return
+              }
+            }
+          }
+
+          // No active game found, go to lobby
+          console.log('[AuthGate] No active game found, redirecting to lobby')
+          router.replace('/game/lobby')
+          SplashScreen.hideAsync()
+          setCheckingActiveGame(false)
+        } catch (error) {
+          console.error('[AuthGate] Error checking active game:', error)
+          router.replace('/game/lobby')
+          SplashScreen.hideAsync()
+          setCheckingActiveGame(false)
+        }
+      }
+
+      checkActiveGame()
+    } else {
+      // Hide splash screen once auth is loaded and routing is complete
+      SplashScreen.hideAsync()
     }
+  }, [
+    user,
+    loading,
+    hasCompletedOnboarding,
+    hasUsername,
+    pathname,
+    checkingActiveGame,
+  ])
 
-    // Hide splash screen once auth is loaded and routing is complete
-    SplashScreen.hideAsync()
-  }, [user, loading, hasCompletedOnboarding, hasUsername, pathname])
-
-  // Don't render anything while loading - splash screen will stay visible
-  if (loading) {
+  // Don't render anything while loading or checking for active game - splash screen will stay visible
+  if (loading || checkingActiveGame) {
     return null
   }
 

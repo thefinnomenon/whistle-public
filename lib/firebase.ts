@@ -238,7 +238,15 @@ export const setUsername = async (user: string, rawUsername: string) => {
     console.log('Setting username to ', username)
     const batch = writeBatch(db)
     batch.set(usernameRef, { user })
-    batch.set(doc(db, 'users', user), { username }, { merge: true })
+    batch.set(
+      doc(db, 'users', user),
+      {
+        username,
+        onboardingComplete: true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    )
     await batch.commit()
   }
 }
@@ -431,7 +439,31 @@ export const getGamePlayerStream = async (
 }
 
 export const deleteGamePlayer = async (gameId: string, playerId: string) => {
-  await deleteDoc(doc(db, `games/${gameId}/users`, playerId))
+  console.log(`[Firebase] Deleting player ${playerId} from game ${gameId}`)
+
+  // Get predictions before deleting parent document
+  const predictionsRef = collection(
+    db,
+    `users/${playerId}/games/${gameId}/predictions`
+  )
+  const predictionsSnapshot = await getDocs(predictionsRef)
+
+  // Delete predictions first
+  const batch = writeBatch(db)
+  predictionsSnapshot.docs.forEach((predDoc: any) => {
+    batch.delete(predDoc.ref)
+  })
+
+  // Parallelize all deletes
+  await Promise.all([
+    deleteDoc(doc(db, `games/${gameId}/users`, playerId)),
+    deleteDoc(doc(db, `users/${playerId}/games`, gameId)),
+    predictionsSnapshot.empty ? Promise.resolve() : batch.commit(),
+  ])
+
+  console.log(
+    `[Firebase] Deleted player from both collections and ${predictionsSnapshot.size} predictions`
+  )
 }
 
 /*************

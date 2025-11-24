@@ -1,7 +1,14 @@
 import { Ionicons } from '@expo/vector-icons'
 import { router, useFocusEffect } from 'expo-router'
-import { useCallback, useEffect, useRef } from 'react'
-import { AppState, Image, Text, TouchableOpacity, View } from 'react-native'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  ActivityIndicator,
+  AppState,
+  Image,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
 
@@ -19,6 +26,7 @@ export default function GameLobbyScreen() {
   const unsubscribeRef = useRef<(() => void) | undefined>(null)
   const userRef = useRef(user)
   const setGameRef = useRef(setGame)
+  const [joining, setJoining] = useState(false)
 
   // Keep refs updated
   useEffect(() => {
@@ -79,8 +87,9 @@ export default function GameLobbyScreen() {
   )
 
   const joinGame = async () => {
-    if (!game || !user) return
+    if (!game || !user || joining) return
 
+    setJoining(true)
     console.log(`User ${user.id} is joining game ${game.id}`)
     try {
       await updateUserGame(user.id, game.id, { score: 0 })
@@ -107,6 +116,8 @@ export default function GameLobbyScreen() {
       }
     } catch (e) {
       console.error('Failed to join game, ', e)
+    } finally {
+      setJoining(false)
     }
   }
 
@@ -207,10 +218,15 @@ export default function GameLobbyScreen() {
         <TouchableOpacity
           className="w-3/4 bg-blue-500 hover:bg-blue-700 py-4 px-6 rounded-lg"
           onPress={joinGame}
+          disabled={joining}
         >
-          <Text className="text-white font-bold text-xl text-center">
-            JOIN GAME
-          </Text>
+          {joining ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text className="text-white font-bold text-xl text-center">
+              JOIN GAME
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>

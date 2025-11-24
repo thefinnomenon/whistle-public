@@ -20,7 +20,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import * as Updates from 'expo-updates'
 
-import { unsubscribeFromGameTopic } from '@/lib/fcm'
+import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
+import {
+  checkNotificationPermission,
+  requestNotificationPermission,
+} from '@/lib/notifications'
 
 import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
@@ -48,6 +52,7 @@ export default function GameScreen() {
     new Map()
   )
   const isLeavingRef = useRef(false)
+  const isMountedRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeQuestionsRef = useRef<(() => void) | undefined>(null)
   const unsubscribeUserGameRef = useRef<(() => void) | undefined>(null)
@@ -128,15 +133,24 @@ export default function GameScreen() {
 
   // Prompt to leave game on hardware back press
   useEffect(() => {
+    // Delay setting up the listener to avoid triggering on initial mount/navigation
+    const timeout = setTimeout(() => {
+      isMountedRef.current = true
+    }, 500)
+
     const listener = navigation.addListener('beforeRemove', (e) => {
-      if (isLeavingRef.current) {
-        // Allow navigation if we're intentionally leaving
+      // Don't prevent if intentionally leaving or if just mounted
+      if (isLeavingRef.current || !isMountedRef.current) {
         return
       }
       e.preventDefault()
       handleLeaveGame()
     })
-    return () => listener()
+
+    return () => {
+      clearTimeout(timeout)
+      listener()
+    }
   }, [handleLeaveGame, navigation])
 
   // Handle app state changes (background/foreground)
@@ -238,6 +252,28 @@ export default function GameScreen() {
         console.log(
           `[Game] Successfully subscribed to game ${gameId} (5 subscriptions)`
         )
+
+        // Check and request notification permissions, then subscribe to FCM topic
+        const permissionStatus = await checkNotificationPermission()
+        console.log('[Game] Notification permission status:', permissionStatus)
+
+        if (!permissionStatus.granted) {
+          console.log('[Game] Requesting notification permission')
+          const granted = await requestNotificationPermission()
+          if (!granted) {
+            console.warn('[Game] Notification permission denied')
+            Alert.alert(
+              'Notifications Disabled',
+              "You won't receive game notifications. You can enable them in Settings.",
+              [{ text: 'OK' }]
+            )
+          }
+        }
+
+        // Resubscribe to FCM topic for notifications
+        // This handles the case where user signed out and back in
+        await subscribeToGameTopic(gameId)
+        console.log(`[Game] Resubscribed to FCM topic for game ${gameId}`)
       }
 
       subscribe()
@@ -266,12 +302,6 @@ export default function GameScreen() {
   const showLeaderboard = () => {
     router.push('/game/leaderboard')
   }
-
-  console.log('UPDATE')
-  console.log(Updates.channel)
-  console.log(Updates.runtimeVersion)
-  console.log(Updates.isEnabled)
-  console.log(Updates.runtimeVersion)
 
   if (!game || !userGame) return null
 

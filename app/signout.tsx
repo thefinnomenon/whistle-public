@@ -68,7 +68,8 @@ export default function SignOutScreen() {
         }
 
         console.log('[SignOut] Navigating to sign-in page')
-        // Navigate to sign-in page
+        // Navigate to sign-in page - AuthGate will handle the redirect
+        // Using replace to ensure clean navigation state
         router.replace('/sign-in')
       } catch (err: any) {
         console.error('[SignOut] Sign out error:', err)

@@ -215,8 +215,7 @@ export default function OnboardingScreen() {
       const granted = await requestNotificationPermission()
 
       if (granted) {
-        await completeOnboarding()
-        router.replace('/')
+        router.replace('/username')
       } else {
         // If denied, show the permission denied UI
         setPermissionDenied(true)
@@ -230,7 +229,6 @@ export default function OnboardingScreen() {
   }
 
   const handleFinish = async () => {
-    await completeOnboarding()
     router.replace('/username')
   }
 
