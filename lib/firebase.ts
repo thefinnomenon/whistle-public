@@ -300,7 +300,7 @@ export const getGameStream = async (
   )
 }
 
-export const getLatestGame = async (setGame: (game: Game) => void) => {
+export const getLatestGame = async (setGame: (game: Game | null) => void) => {
   const q = query(
     collection(db, 'games'),
     orderBy('createdAt', 'desc'),
@@ -311,6 +311,7 @@ export const getLatestGame = async (setGame: (game: Game) => void) => {
     (gamesSnap) => {
       if (!gamesSnap || gamesSnap.empty) {
         console.log('No games found')
+        setGame(null)
         return
       }
       const game = gamesSnap.docs.map((gameSnap: any) => {

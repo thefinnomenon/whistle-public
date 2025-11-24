@@ -62,10 +62,8 @@ const initializeMixpanel = async () => {
 }
 
 const track = (eventName: string, properties?: Record<string, any>) => {
-  // Log to console in dev mode
+  // Skip logging in dev mode
   if (!isProduction()) {
-    console.log(`[Mixpanel Dev] Event: ${eventName}`, properties || {})
-    console.log(`[Mixpanel Dev] APP_ENV: ${env.APP_ENV}`)
     return
   }
   if (!mixpanel) {
@@ -82,9 +80,8 @@ const track = (eventName: string, properties?: Record<string, any>) => {
 }
 
 const identify = (userId: string) => {
-  // Log to console in dev mode
+  // Skip logging in dev mode
   if (!isProduction()) {
-    console.log(`[Mixpanel Dev] Identify: ${userId}`)
     return
   }
   if (!mixpanel) {
@@ -113,9 +110,8 @@ const reset = () => {
 }
 
 const registerSuperProperties = (properties: Record<string, any>) => {
-  // Log to console in dev mode
+  // Skip logging in dev mode
   if (!isProduction()) {
-    console.log(`[Mixpanel Dev] Register Super Properties:`, properties)
     return
   }
   if (!mixpanel) {

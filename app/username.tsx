@@ -36,7 +36,10 @@ export default function UsernameScreen() {
       await completeOnboarding()
       router.replace('/')
     } catch (error: any) {
-      console.error('Error setting username:', error)
+      // Only log unexpected errors, not validation errors
+      if (!error.message?.includes('Username')) {
+        console.error('Error setting username:', error)
+      }
       setError(error.message || 'Something went wrong. Please try again.')
     } finally {
       setLoading(false)

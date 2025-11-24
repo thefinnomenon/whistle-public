@@ -99,7 +99,14 @@ export default function GameLobbyScreen() {
   )
 
   useEffect(() => {
-    if (!game || !user || hasRedirected) return
+    if (!user || hasRedirected) return
+
+    // If no game, set hasUserJoined to false so we can show the empty state
+    if (!game) {
+      setHasUserJoined(false)
+      return
+    }
+
     ;(async () => {
       const alreadyJoined = await hasAlreadyJoined(user.id, game.id)
       if (alreadyJoined) {
@@ -157,7 +164,32 @@ export default function GameLobbyScreen() {
     }
   }
 
-  if (!game || hasUserJoined === null) return null
+  if (hasUserJoined === null) return null
+
+  if (!game) {
+    return (
+      <View className="flex-1 items-center justify-center px-4">
+        {/* Header with Settings Icon */}
+        <TouchableOpacity
+          className="absolute right-4 z-10"
+          style={{ top: insets.top + 20 }}
+          onPress={() => router.push('/settings')}
+        >
+          <Ionicons name="settings-outline" size={24} color="slategray" />
+        </TouchableOpacity>
+
+        <View className="items-center gap-4">
+          <Ionicons name="calendar-outline" size={64} color="slategray" />
+          <Text className="text-2xl font-semibold text-gray-900 dark:text-white text-center">
+            No games scheduled
+          </Text>
+          <Text className="text-lg text-gray-600 dark:text-gray-400 text-center px-8">
+            Check back soon for upcoming games!
+          </Text>
+        </View>
+      </View>
+    )
+  }
 
   const isJoinDisabled = hasUserJoined && game.state === 'scheduled'
 

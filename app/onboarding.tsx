@@ -238,21 +238,7 @@ export default function OnboardingScreen() {
     return (
       <SafeAreaView className="flex-1 bg-background">
         <View className="flex-1 items-center justify-center px-6">
-          <Image
-            source={
-              colorScheme === 'dark'
-                ? require('@/assets/images/adaptive-icon-dark.png')
-                : require('@/assets/images/adaptive-icon.png')
-            }
-            style={{
-              width: 96,
-              height: 96,
-              borderRadius: 20,
-              marginBottom: 32,
-            }}
-          />
-
-          <Text className="text-3xl font-bold text-foreground mb-4 text-center">
+          <Text className="text-3xl font-bold text-foreground mb-6 text-center">
             How it works?
           </Text>
 
