@@ -8,9 +8,12 @@ import {
 } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   Image,
+  Modal,
+  Pressable,
   Text,
   TouchableOpacity,
   View,
@@ -30,6 +33,7 @@ import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import {
+  addPrediction,
   deleteGamePlayer,
   getGamePlayerStream,
   getGameStream,
@@ -44,13 +48,19 @@ export default function GameScreen() {
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { game, setGame } = useGame()
-  const { gameId } = useLocalSearchParams<{ gameId: string }>()
+  const { gameId, questionId } = useLocalSearchParams<{
+    gameId: string
+    questionId?: string
+  }>()
   const [questions, setQuestions] = useState<Question[]>([])
   const [userGame, setUserGame] = useState<UserGame>()
   const [gamePlayer, setGamePlayer] = useState<GamePlayer>()
   const [predictions, setPredictions] = useState<Map<string, boolean>>(
     new Map()
   )
+  const [autoOpenQuestionId, setAutoOpenQuestionId] = useState<
+    string | undefined
+  >(questionId)
   const isLeavingRef = useRef(false)
   const isMountedRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
@@ -376,9 +386,13 @@ export default function GameScreen() {
           <QuestionListItem
             question={item}
             prediction={predictions.get(item.id)}
+            gameId={gameId}
+            userId={user?.id}
+            autoOpen={item.id === autoOpenQuestionId}
+            onModalClose={() => setAutoOpenQuestionId(undefined)}
           />
         )}
-        extraData={predictions}
+        extraData={[predictions, autoOpenQuestionId]}
       />
     </View>
   )
@@ -387,11 +401,36 @@ export default function GameScreen() {
 type Props = {
   question: Question
   prediction?: boolean
+  gameId: string
+  userId?: string
+  autoOpen?: boolean
+  onModalClose?: () => void
 }
 
-const QuestionListItem = ({ question, prediction }: Props) => {
+const QuestionListItem = ({
+  question,
+  prediction,
+  gameId,
+  userId,
+  autoOpen,
+  onModalClose,
+}: Props) => {
   const colorScheme = useColorScheme()
   const isDark = colorScheme === 'dark'
+  const [showModal, setShowModal] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  // Auto-open modal if autoOpen is true and question is still open
+  useEffect(() => {
+    if (
+      autoOpen &&
+      question.state === 'open' &&
+      prediction === undefined &&
+      userId
+    ) {
+      setShowModal(true)
+    }
+  }, [autoOpen, question.state, prediction, userId])
 
   let questionState: UserQuestionState = question.state
   if (question.state === 'resolved' && prediction === undefined)
@@ -442,7 +481,53 @@ const QuestionListItem = ({ question, prediction }: Props) => {
       }
   }
 
-  return (
+  const canAnswer =
+    question.state === 'open' && prediction === undefined && userId
+
+  const handleAnswer = async (answer: boolean) => {
+    if (!userId) return
+
+    setSubmitting(true)
+    try {
+      // Write to question predictions collection (for scoring)
+      await addPrediction(gameId, question.id, userId, {
+        prediction: answer.toString(),
+      })
+
+      // Write to user predictions subcollection (for UI display)
+      const { doc, setDoc, serverTimestamp, getFirestore } = await import(
+        '@react-native-firebase/firestore'
+      )
+      const db = getFirestore()
+      const userPredictionRef = doc(
+        db,
+        `users/${userId}/games/${gameId}/predictions/${question.id}`
+      )
+
+      await setDoc(userPredictionRef, {
+        prediction: answer,
+        createdAt: serverTimestamp(),
+      })
+
+      analytics.track('Prediction Made', {
+        user_id: userId,
+        game_id: gameId,
+        question_id: question.id,
+        prediction: answer,
+        method: 'in-app',
+      })
+
+      setShowModal(false)
+      onModalClose?.()
+    } catch (error) {
+      console.error('Failed to submit prediction:', error)
+      Alert.alert('Error', 'Failed to submit prediction. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const content = (
     <View className={`flex flex-row items-center p-6 ${questionStyling.bg}`}>
       <Feather
         name={questionStyling.icon as any}
@@ -460,5 +545,86 @@ const QuestionListItem = ({ question, prediction }: Props) => {
         )}
       </View>
     </View>
+  )
+
+  if (!canAnswer) {
+    return content
+  }
+
+  return (
+    <>
+      <TouchableOpacity onPress={() => setShowModal(true)}>
+        {content}
+      </TouchableOpacity>
+
+      <Modal
+        visible={showModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!submitting) {
+            setShowModal(false)
+            onModalClose?.()
+          }
+        }}
+      >
+        <Pressable
+          className="flex-1 bg-black/50 items-center justify-center"
+          onPress={() => {
+            if (!submitting) {
+              setShowModal(false)
+              onModalClose?.()
+            }
+          }}
+        >
+          <Pressable
+            className="bg-white dark:bg-gray-800 rounded-2xl p-6 mx-6 w-5/6 max-w-md"
+            onPress={(e) => e.stopPropagation()}
+          >
+            <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 text-center">
+              {question.question}
+            </Text>
+
+            {submitting ? (
+              <View className="py-8">
+                <ActivityIndicator size="large" color="#3b82f6" />
+              </View>
+            ) : (
+              <View className="gap-3">
+                <TouchableOpacity
+                  className="bg-green-500 py-4 px-6 rounded-lg"
+                  onPress={() => handleAnswer(true)}
+                >
+                  <Text className="text-white font-bold text-lg text-center">
+                    ✅ Yes
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  className="bg-red-500 py-4 px-6 rounded-lg"
+                  onPress={() => handleAnswer(false)}
+                >
+                  <Text className="text-white font-bold text-lg text-center">
+                    ❌ No
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  className="bg-gray-200 dark:bg-gray-700 py-3 px-6 rounded-lg mt-2"
+                  onPress={() => {
+                    setShowModal(false)
+                    onModalClose?.()
+                  }}
+                >
+                  <Text className="text-gray-700 dark:text-gray-300 font-medium text-center">
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
   )
 }

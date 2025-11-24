@@ -441,24 +441,18 @@ export const getGamePlayerStream = async (
 export const deleteGamePlayer = async (gameId: string, playerId: string) => {
   console.log(`[Firebase] Deleting player ${playerId} from game ${gameId}`)
 
-  // Get predictions before deleting parent document
+  // Get predictions to delete them individually
   const predictionsRef = collection(
     db,
     `users/${playerId}/games/${gameId}/predictions`
   )
   const predictionsSnapshot = await getDocs(predictionsRef)
 
-  // Delete predictions first
-  const batch = writeBatch(db)
-  predictionsSnapshot.docs.forEach((predDoc: any) => {
-    batch.delete(predDoc.ref)
-  })
-
-  // Parallelize all deletes
+  // Parallelize all deletes (predictions + game documents)
   await Promise.all([
     deleteDoc(doc(db, `games/${gameId}/users`, playerId)),
     deleteDoc(doc(db, `users/${playerId}/games`, gameId)),
-    predictionsSnapshot.empty ? Promise.resolve() : batch.commit(),
+    ...predictionsSnapshot.docs.map((predDoc: any) => deleteDoc(predDoc.ref)),
   ])
 
   console.log(

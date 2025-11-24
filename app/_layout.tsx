@@ -179,7 +179,25 @@ if (!(global as any).__actionHandlerSetup) {
 
   // Handle background notification actions
   notifee.onBackgroundEvent(async ({ type, detail }) => {
-    await handleNotificationEvent(type, detail, analytics, 'Background')
+    if (type === EventType.PRESS) {
+      // User tapped on notification body - navigate to game with question
+      console.log('[Notification Background] Notification tapped')
+      const data = detail.notification?.data
+      if (data?.gameId && data?.questionId) {
+        console.log(
+          `[Notification Background] Opening game ${data.gameId} with question ${data.questionId}`
+        )
+        router.push({
+          pathname: '/game',
+          params: {
+            gameId: data.gameId as string,
+            questionId: data.questionId as string,
+          },
+        })
+      }
+    } else {
+      await handleNotificationEvent(type, detail, analytics, 'Background')
+    }
   })
 
   notifee.onForegroundEvent(async ({ type, detail }) => {
@@ -190,8 +208,27 @@ if (!(global as any).__actionHandlerSetup) {
     console.log(
       `[Notification Foreground] EventType.DISMISSED = ${EventType.DISMISSED}`
     )
+    console.log(
+      `[Notification Foreground] EventType.PRESS = ${EventType.PRESS}`
+    )
 
-    if (type === EventType.ACTION_PRESS) {
+    if (type === EventType.PRESS) {
+      // User tapped on notification body - navigate to game with question
+      console.log('[Notification] Notification tapped')
+      const data = detail.notification?.data
+      if (data?.gameId && data?.questionId) {
+        console.log(
+          `[Notification] Opening game ${data.gameId} with question ${data.questionId}`
+        )
+        router.push({
+          pathname: '/game',
+          params: {
+            gameId: data.gameId as string,
+            questionId: data.questionId as string,
+          },
+        })
+      }
+    } else if (type === EventType.ACTION_PRESS) {
       console.log('[Notification Foreground] Entering ACTION_PRESS handler')
 
       // Check for duplicates (foreground-only logic)
@@ -412,6 +449,31 @@ function ThemedApp() {
       setNativeWindColorScheme(colorScheme)
     }
   }, [colorScheme, setNativeWindColorScheme, theme])
+
+  // Handle notification that opened the app from killed state
+  useEffect(() => {
+    const checkInitialNotification = async () => {
+      const initialNotification = await notifee.getInitialNotification()
+      if (
+        initialNotification?.notification?.data?.gameId &&
+        initialNotification?.notification?.data?.questionId
+      ) {
+        console.log(
+          '[Notification] App opened from notification:',
+          initialNotification.notification.data
+        )
+        router.push({
+          pathname: '/game',
+          params: {
+            gameId: initialNotification.notification.data.gameId as string,
+            questionId: initialNotification.notification.data
+              .questionId as string,
+          },
+        })
+      }
+    }
+    checkInitialNotification()
+  }, [])
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
