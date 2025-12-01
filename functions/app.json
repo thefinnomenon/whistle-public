@@ -1,3 +1,10 @@
 {
-  "expo": {}
+  "expo": {
+    "android": {
+      "package": "com.thefinnomenon.functions"
+    },
+    "ios": {
+      "bundleIdentifier": "com.thefinnomenon.functions"
+    }
+  }
 }

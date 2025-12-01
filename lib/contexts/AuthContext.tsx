@@ -13,6 +13,7 @@ import {
   getFirestore,
   onSnapshot,
 } from '@react-native-firebase/firestore'
+import { requireNativeModule } from 'expo-modules-core'
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { toast } from 'sonner-native'
 import { analytics } from '../analytics'
@@ -22,6 +23,9 @@ type FirebaseUser = FirebaseAuthTypes.User
 const ONBOARDING_KEY = 'hasCompletedOnboarding'
 const auth = getAuth()
 const db = getFirestore()
+const WhistleSessionModule = requireNativeModule('WhistleSessionModule') as
+  | { setSession: (userId: string, authToken: string) => void }
+  | undefined
 
 interface AuthContextType {
   firebaseUser: FirebaseUser | null
@@ -41,6 +45,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false)
   const [hasUsername, setHasUsername] = useState(false)
+
+  const setNativeSession = async (fbUser: FirebaseUser) => {
+    if (!WhistleSessionModule?.setSession) {
+      console.warn('[WhistleSession] No setSession defined in native module')
+      return
+    }
+    try {
+      const idToken = await fbUser.getIdToken()
+      console.log(
+        '[WhistleSession] Setting native session for user',
+        fbUser.uid
+      )
+      WhistleSessionModule.setSession(fbUser.uid, idToken)
+    } catch (error) {
+      console.warn('[WhistleSession] Failed to set native session', error)
+    }
+  }
 
   useEffect(() => {
     let userUnsubscribe: (() => void) | null = null
@@ -92,6 +113,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             email: userData.email,
             user_id: fbUser.uid,
           })
+
+          await setNativeSession(fbUser)
 
           // Initialize FCM token
           await initializeFCMToken(fbUser.uid)
@@ -154,6 +177,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               email: fbUser.email,
             })
 
+            await setNativeSession(fbUser)
+
             console.log('User record created successfully')
             setUser(userCreated)
             setHasUsername(false)
@@ -174,6 +199,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } else {
+        if (WhistleSessionModule?.setSession) {
+          console.log('[WhistleSession] Clearing native session (no user)')
+          WhistleSessionModule.setSession('', '')
+        }
         setUser(null)
         setHasCompletedOnboarding(false)
         setHasUsername(false)
@@ -197,6 +226,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         analytics.track('User Signed Out', {
           user_id: firebaseUser.uid,
         })
+      }
+
+      if (WhistleSessionModule?.setSession) {
+        console.log('[WhistleSession] Clearing native session on sign out')
+        WhistleSessionModule.setSession('', '')
       }
 
       await signOut(auth)

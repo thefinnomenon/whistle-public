@@ -54,19 +54,20 @@ export async function setupIOSCategories(): Promise<void> {
   if (Platform.OS !== 'ios') return
 
   // Set up Notifee categories (for Notifee-displayed notifications)
+  // Register categories used by Notifee-displayed notifications (foreground) and keep in sync with native
   const notifeeCategories: IOSNotificationCategory[] = [
     {
-      id: 'YESNO',
+      id: 'question',
       actions: [
         {
           id: 'yes',
           title: '✅ Yes',
-          foreground: false,
+          foreground: false, // Background action - don't foreground app
         },
         {
           id: 'no',
           title: '❌ No',
-          foreground: false,
+          foreground: false, // Background action - don't foreground app
         },
       ],
     },
@@ -76,12 +77,12 @@ export async function setupIOSCategories(): Promise<void> {
         {
           id: 'yes',
           title: '✅ Yes',
-          foreground: true, // Open app for practice
+          foreground: true, // Practice flow can foreground app
         },
         {
           id: 'no',
           title: '❌ No',
-          foreground: true, // Open app for practice
+          foreground: true, // Practice flow can foreground app
         },
       ],
     },
@@ -89,26 +90,6 @@ export async function setupIOSCategories(): Promise<void> {
 
   await notifee.setNotificationCategories(notifeeCategories)
   console.log('[Notifications] Notifee iOS categories set up')
-
-  // Also set up expo-notifications categories (for FCM native notifications)
-  const Notifications = require('expo-notifications')
-  await Notifications.setNotificationCategoryAsync('YESNO', [
-    {
-      identifier: 'yes',
-      buttonTitle: '✅ Yes',
-      options: {
-        opensAppToForeground: false,
-      },
-    },
-    {
-      identifier: 'no',
-      buttonTitle: '❌ No',
-      options: {
-        opensAppToForeground: false,
-      },
-    },
-  ])
-  console.log('[Notifications] Expo-notifications iOS categories set up')
 }
 
 /**
@@ -276,6 +257,14 @@ export async function handleNotificationActionPress(
   analytics: { track: (event: string, data: any) => void },
   logContext: 'Background' | 'Foreground' = 'Foreground'
 ): Promise<void> {
+  // Skip practice/onboarding actions from writing predictions
+  if (data?.practice === 'true') {
+    console.log(
+      `[Notification ${logContext}] Practice notification action, skipping prediction`
+    )
+    return
+  }
+
   if (actionId !== 'yes' && actionId !== 'no') {
     return
   }
@@ -317,6 +306,7 @@ export async function handleNotificationActionPress(
     const predictionData: any = {
       prediction,
       createdAt: Timestamp.now(),
+      source: 'app',
     }
 
     if (sentAt) {
@@ -346,6 +336,7 @@ export async function handleNotificationActionPress(
     await setDoc(userPredictionRef, {
       prediction,
       createdAt: serverTimestamp(),
+      source: 'app',
     })
 
     console.log(`[Notification ${logContext}] Submitted answer: ${prediction}`)
@@ -397,6 +388,13 @@ export async function handleNotificationDismissed(
   data: Record<string, any> | undefined,
   analytics: { track: (event: string, data: any) => void }
 ): Promise<void> {
+  if (data?.practice === 'true') {
+    console.log(
+      '[Notification] Practice notification dismissed, skipping tracking'
+    )
+    return
+  }
+
   const {
     gameId,
     questionId,

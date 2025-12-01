@@ -1,7 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Text } from '@/components/ui/text'
-import { useAuth } from '@/lib/contexts/AuthContext'
 import {
   cancelNotification,
   checkNotificationPermission,
@@ -14,7 +13,6 @@ import {
 import notifee, { AndroidImportance, EventType } from '@notifee/react-native'
 import { router } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
-import { useColorScheme } from 'nativewind'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, Image, Platform, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -23,8 +21,6 @@ import { toast } from 'sonner-native'
 const videoSource = null
 
 export default function OnboardingScreen() {
-  const { completeOnboarding } = useAuth()
-  const { colorScheme } = useColorScheme()
   const [step, setStep] = useState<'intro' | 'practice'>('intro')
   const [loading, setLoading] = useState(false)
   const [videoStarted, setVideoStarted] = useState(false)
@@ -111,6 +107,9 @@ export default function OnboardingScreen() {
               { title: '✅ Yes', id: 'yes' },
               { title: '❌ No', id: 'no' },
             ],
+            data: {
+              practice: 'true',
+            },
           }
         )
       )

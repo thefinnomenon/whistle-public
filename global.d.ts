@@ -85,6 +85,7 @@ type Question = {
 type Prediction = {
   createdAt: FirestoreTimestamp
   prediction: string
+  source?: string
 }
 
 type LeaderboardItem = {

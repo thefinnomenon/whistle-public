@@ -17,7 +17,6 @@ import {
   ThemeProvider as NavigationThemeProvider,
 } from '@react-navigation/native'
 import { isRunningInExpoGo } from 'expo'
-import * as Notifications from 'expo-notifications'
 import {
   router,
   Stack,
@@ -71,11 +70,6 @@ configureGoogleSignIn()
 // Setup iOS notification categories on app start
 setupIOSCategories()
 
-// Track processed notifications to prevent duplicates (global to persist across hot reloads)
-const processedNotifications =
-  (global as any).__processedNotifications || new Set<string>()
-;(global as any).__processedNotifications = processedNotifications
-
 // Setup foreground notification handler (only once, even across hot reloads)
 if (!(global as any).__messageHandlerSetup) {
   ;(global as any).__messageHandlerSetup = true
@@ -85,21 +79,6 @@ if (!(global as any).__messageHandlerSetup) {
     console.log('[FCM] Setting up foreground message handler')
 
     onMessage(messaging, async (remoteMessage) => {
-      const messageId = remoteMessage.messageId
-      if (!messageId || processedNotifications.has(messageId)) {
-        console.log('[FCM] Skipping duplicate notification:', messageId)
-        return
-      }
-
-      processedNotifications.add(messageId)
-
-      // Clean up old entries (keep last 100)
-      if (processedNotifications.size > 100) {
-        const arr = Array.from(processedNotifications)
-        processedNotifications.clear()
-        arr.slice(-100).forEach((id) => processedNotifications.add(id))
-      }
-
       console.log('[FCM] 🔔 Foreground notification received!')
       console.log('[FCM] Message:', JSON.stringify(remoteMessage, null, 2))
 
@@ -132,6 +111,7 @@ if (!(global as any).__messageHandlerSetup) {
               ...remoteMessage.data,
               receivedAt: receivedAt.toString(),
             },
+            categoryId: isQuestion ? 'question' : undefined, // Single category with background actions
             actions: isQuestion
               ? [
                   { title: '✅ Yes', id: 'yes' },
@@ -164,53 +144,12 @@ if (!(global as any).__messageHandlerSetup) {
   }
 }
 
-// Track processed actions to prevent duplicates (global to persist across hot reloads)
-const processedActions = (global as any).__processedActions || new Set<string>()
-;(global as any).__processedActions = processedActions
-
-// Track answered notifications to prevent logging dismissed events for already-answered questions
-const answeredNotifications =
-  (global as any).__answeredNotifications || new Set<string>()
-;(global as any).__answeredNotifications = answeredNotifications
-
-// Setup notification action handler (for Yes/No buttons, only once)
-if (!(global as any).__actionHandlerSetup) {
-  ;(global as any).__actionHandlerSetup = true
-
-  // Handle background notification actions
-  notifee.onBackgroundEvent(async ({ type, detail }) => {
-    if (type === EventType.PRESS) {
-      // User tapped on notification body - navigate to game with question
-      console.log('[Notification Background] Notification tapped')
-      const data = detail.notification?.data
-      if (data?.gameId && data?.questionId) {
-        console.log(
-          `[Notification Background] Opening game ${data.gameId} with question ${data.questionId}`
-        )
-        router.push({
-          pathname: '/game',
-          params: {
-            gameId: data.gameId as string,
-            questionId: data.questionId as string,
-          },
-        })
-      }
-    } else {
-      await handleNotificationEvent(type, detail, analytics, 'Background')
-    }
-  })
+// Setup foreground notification handlers (Yes/No buttons, taps) only once
+if (!(global as any).__foregroundNotificationHandlerSetup) {
+  ;(global as any).__foregroundNotificationHandlerSetup = true
 
   notifee.onForegroundEvent(async ({ type, detail }) => {
     console.log(`[Notification Foreground] Event type: ${type}`)
-    console.log(
-      `[Notification Foreground] EventType.ACTION_PRESS = ${EventType.ACTION_PRESS}`
-    )
-    console.log(
-      `[Notification Foreground] EventType.DISMISSED = ${EventType.DISMISSED}`
-    )
-    console.log(
-      `[Notification Foreground] EventType.PRESS = ${EventType.PRESS}`
-    )
 
     if (type === EventType.PRESS) {
       // User tapped on notification body - navigate to game with question
@@ -230,33 +169,8 @@ if (!(global as any).__actionHandlerSetup) {
       }
     } else if (type === EventType.ACTION_PRESS) {
       console.log('[Notification Foreground] Entering ACTION_PRESS handler')
-
-      // Check for duplicates (foreground-only logic)
-      const actionKey = `${detail.notification?.id}-${detail.pressAction?.id}`
-      if (processedActions.has(actionKey)) {
-        console.log('[Notification] Skipping duplicate action')
-        return
-      }
-      processedActions.add(actionKey)
-
-      // Clean up old entries (keep last 50)
-      if (processedActions.size > 50) {
-        const arr = Array.from(processedActions)
-        processedActions.clear()
-        arr.slice(-50).forEach((key) => processedActions.add(key))
-      }
-
       console.log('[Notification] Action pressed:', detail.pressAction?.id)
       console.log('[Notification] Data:', detail.notification?.data)
-
-      // Mark this notification as answered to prevent tracking it as missed
-      if (detail.notification?.id) {
-        answeredNotifications.add(detail.notification.id)
-        console.log(
-          '[Notification] Marked as answered:',
-          detail.notification.id
-        )
-      }
 
       // Handle the action
       await handleNotificationEvent(type, detail, analytics, 'Foreground')
@@ -267,47 +181,8 @@ if (!(global as any).__actionHandlerSetup) {
       }
     } else if (type === EventType.DISMISSED) {
       console.log('[Notification Foreground] Entering DISMISSED handler')
-
-      // Don't track dismissed events for notifications that were already answered
-      const notificationId = detail.notification?.id
-      if (notificationId && answeredNotifications.has(notificationId)) {
-        console.log(
-          '[Notification] Skipping dismissed event for answered notification'
-        )
-        answeredNotifications.delete(notificationId) // Clean up
-        return
-      }
-
       console.log('[Notification] Processing dismissed event (not answered)')
       await handleNotificationEvent(type, detail, analytics, 'Foreground')
-    }
-  })
-
-  // Handle iOS notification action responses (for native category actions)
-  Notifications.addNotificationResponseReceivedListener((response) => {
-    console.log('[iOS Notification] Response received:', response)
-    const actionIdentifier = response.actionIdentifier
-
-    // iOS sends action identifiers for category actions
-    if (actionIdentifier === 'yes' || actionIdentifier === 'no') {
-      console.log('[iOS Notification] Action button pressed:', actionIdentifier)
-
-      // Convert to notifee-compatible format and handle
-      const notifeeDetail = {
-        notification: {
-          id: response.notification.request.identifier,
-          data: response.notification.request.content.data,
-        },
-        pressAction: {
-          id: actionIdentifier,
-        },
-      }
-
-      handleNotificationEvent(
-        EventType.ACTION_PRESS,
-        notifeeDetail as any,
-        analytics
-      )
     }
   })
 }

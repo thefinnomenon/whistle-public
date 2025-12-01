@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": ["WhistleSessionModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.whistlesessionmodule.WhistleSessionModule"]
+  }
+}

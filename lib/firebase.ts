@@ -467,11 +467,11 @@ export const addPrediction = async (
   gameId: string,
   questionId: string,
   userId: string,
-  prediction: Omit<Prediction, 'createdAt'>
+  prediction: Omit<Prediction, 'createdAt' | 'source'>
 ) => {
   await setDoc(
     doc(db, `games/${gameId}/questions/${questionId}/predictions`, userId),
-    { ...prediction, createdAt: serverTimestamp() }
+    { ...prediction, source: 'app', createdAt: serverTimestamp() }
   )
 }
 

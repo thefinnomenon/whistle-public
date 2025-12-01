@@ -1,7 +1,4 @@
-const {
-  withProjectBuildGradle,
-  withXcodeProject,
-} = require('@expo/config-plugins')
+const { withProjectBuildGradle } = require('@expo/config-plugins')
 const fs = require('fs')
 const path = require('path')
 

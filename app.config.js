@@ -33,10 +33,11 @@ const getBundleIdentifier = () => {
   return 'com.finnternet.whistle'
 }
 
-const getAndroidPackage = () => {
-  if (IS_DEV) return 'com.finnternet.whistle.dev'
-  if (IS_STAGING) return 'com.finnternet.whistle.staging'
-  return 'com.finnternet.whistle'
+const getPostUrl = () => {
+  if (IS_DEV)
+    return 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
+  // TODO: replace with prod when available
+  return 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
 }
 
 export default {
@@ -74,7 +75,7 @@ export default {
       },
     },
     android: {
-      package: getAndroidPackage(),
+      package: getBundleIdentifier(),
       googleServicesFile: IS_DEV
         ? './google-services.dev.json'
         : './google-services.json',
@@ -143,6 +144,13 @@ export default {
         'expo-notifications',
         {
           sounds: ['./assets/audio/whistle.wav'],
+        },
+      ],
+      [
+        './plugins/withWhistleNotifications',
+        {
+          postUrl: getPostUrl(),
+          appGroup: `group.${getBundleIdentifier()}`,
         },
       ],
     ],

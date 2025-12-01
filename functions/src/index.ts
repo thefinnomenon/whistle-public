@@ -5,61 +5,76 @@ import {
   onDocumentCreated,
   onDocumentUpdated,
 } from 'firebase-functions/v2/firestore'
-import { onCall } from 'firebase-functions/v2/https'
+import { onRequest } from 'firebase-functions/v2/https'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 
 setGlobalOptions({ region: 'us-east1' })
 
 admin.initializeApp()
 
-// Test function to send a notification to the app_notifications topic
-exports.testPushNotification = onCall(async (request) => {
-  const topic = 'app_notifications'
+// HTTP endpoint for native iOS notification actions to post predictions
+exports.submitPredictionFromNotification = onRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed')
+    return
+  }
 
   try {
-    console.log('[Test] Sending test notification to topic:', topic)
-    console.log('[Test] Request auth:', request.auth)
+    const authHeader = req.headers.authorization || ''
+    const token =
+      authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
 
-    const message = {
-      topic,
-      notification: {
-        title: '🧪 Test Notification',
-        body: 'This is a test push notification!',
-      },
-      android: {
-        priority: 'high' as const,
-        notification: {
-          channelId: 'default',
-          priority: 'high' as const,
-          sound: 'whistle',
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            alert: {
-              title: '🧪 Test Notification',
-              body: 'This is a test push notification!',
-            },
-            contentAvailable: true,
-            sound: 'whistle.wav',
-          },
-        },
-      },
+    if (!token) {
+      res.status(401).json({ error: 'Missing bearer token' })
+      return
     }
 
-    console.log('[Test] Message to send:', JSON.stringify(message, null, 2))
+    const decoded = await admin.auth().verifyIdToken(token)
+    const body = req.body || {}
+    const questionId = body.questionId as string | undefined
+    const gameId = body.gameId as string | undefined
+    const userId = (body.userId as string | undefined) || decoded.uid
+    let prediction: boolean | null = body.prediction
 
-    const response = await admin.messaging().send(message)
-    console.log(
-      '[Test] Successfully sent test notification. Message ID:',
-      response
-    )
+    if (typeof prediction !== 'boolean') {
+      res.status(400).json({ error: 'prediction must be boolean or YES/NO' })
+      return
+    }
 
-    return { success: true, messageId: response }
+    if (!questionId || !gameId) {
+      res.status(400).json({ error: 'gameId and questionId are required' })
+      return
+    }
+
+    if (userId !== decoded.uid) {
+      res.status(403).json({ error: 'userId mismatch' })
+      return
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp()
+
+    const predictionRef = admin
+      .firestore()
+      .doc(`games/${gameId}/questions/${questionId}/predictions/${userId}`)
+    const userPredictionRef = admin
+      .firestore()
+      .doc(`users/${userId}/games/${gameId}/predictions/${questionId}`)
+
+    const payload = {
+      prediction,
+      source: 'ios_notification',
+      createdAt: now,
+    }
+
+    await Promise.all([
+      predictionRef.set(payload, { merge: true }),
+      userPredictionRef.set(payload, { merge: true }),
+    ])
+
+    res.json({ ok: true })
   } catch (error) {
-    console.error('[Test] Failed to send test notification:', error)
-    throw error
+    console.error('[submitPredictionFromNotification] Error:', error)
+    res.status(500).json({ error: 'Internal Server Error' })
   }
 })
 
@@ -141,44 +156,67 @@ exports.pushNewQuestion = onDocumentCreated(
     }
 
     const topic = `game_${gameId}`
+    const fallbackId = `question-${questionId}`
 
     try {
       // Capture sentAt BEFORE sending to get accurate timing
       const sentAt = Date.now()
 
-      // Send data-only FCM message (background handler displays with action buttons)
-      const message = {
+      const baseData = {
+        type: 'question',
+        gameId,
+        questionId,
+        question: question.question,
+        sentAt: sentAt.toString(),
+        engineTag: question.engineTag || '',
+        fallbackId,
+      }
+
+      const alertMessage = {
         topic,
-        data: {
-          type: 'question',
-          gameId,
-          questionId,
-          question: question.question,
+        notification: {
           title: '🏈 New Question!',
           body: question.question,
-          sentAt: sentAt.toString(),
-          engineTag: question.engineTag || '',
         },
+        data: baseData,
         android: {
           priority: 'high' as const,
+          collapseKey: fallbackId,
+          notification: {
+            channelId: 'default',
+            priority: 'high' as const,
+            sound: 'whistle',
+          },
         },
         apns: {
           payload: {
             aps: {
-              contentAvailable: true,
+              alert: {
+                title: '🏈 New Question!',
+                body: question.question,
+              },
+              category: 'question',
               sound: 'whistle.wav',
             },
           },
           headers: {
+            'apns-push-type': 'alert',
             'apns-priority': '10',
+            'apns-collapse-id': fallbackId,
           },
         },
       }
 
-      const response = await admin.messaging().send(message)
-      console.log(`Successfully sent notification to topic ${topic}:`, response)
+      const response = await admin.messaging().send(alertMessage)
+      console.log(
+        `[PushNewQuestion] Sent notification to topic ${topic}:`,
+        response
+      )
     } catch (error) {
-      console.error(`Failed to send notification to topic ${topic}:`, error)
+      console.error(
+        `[PushNewQuestion] Failed to send notification to topic ${topic}:`,
+        error
+      )
     }
   }
 )
