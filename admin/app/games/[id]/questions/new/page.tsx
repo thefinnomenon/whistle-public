@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
-import { collection, addDoc, Timestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { useParams, useRouter } from 'next/navigation'
+import { addDoc, collection, Timestamp } from 'firebase/firestore'
 import Link from 'next/link'
+import { useParams, useRouter } from 'next/navigation'
+import { useState } from 'react'
 
 export default function NewQuestionPage() {
   const params = useParams()
@@ -12,6 +12,7 @@ export default function NewQuestionPage() {
   const gameId = params.id as string
 
   const [question, setQuestion] = useState('')
+  const [choicesText, setChoicesText] = useState('Yes,No')
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -22,14 +23,29 @@ export default function NewQuestionPage() {
       return
     }
 
+    const parsedChoices = choicesText
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .map((value) => ({
+        id: value.toLowerCase().replace(/\\s+/g, '-'),
+        value,
+      }))
+
+    if (parsedChoices.length === 0) {
+      alert('Please enter at least one choice')
+      return
+    }
+
     setLoading(true)
 
     try {
       await addDoc(collection(db, 'games', gameId, 'questions'), {
         question: question.trim(),
         type: 'YESNO',
-        choices: ['Yes', 'No'],
+        choices: parsedChoices,
         state: 'open',
+        timeoutAt: (Date.now() + 30 * 1000).toString(), // 30 seconds from now (ms string)
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       })
@@ -71,11 +87,23 @@ export default function NewQuestionPage() {
             </div>
 
             <div className="bg-gray-50 p-4 rounded">
+              <div className="text-sm text-gray-600 mb-2">
+                <label className="block font-medium mb-1">Choices (comma separated)</label>
+                <input
+                  type="text"
+                  value={choicesText}
+                  onChange={(e) => setChoicesText(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+            <div className="bg-gray-50 p-4 rounded">
               <div className="text-sm text-gray-600">
                 <strong>Type:</strong> Yes/No
               </div>
               <div className="text-sm text-gray-600 mt-1">
-                <strong>Choices:</strong> Yes, No
+                <strong>Choices:</strong> {choicesText}
               </div>
               <div className="text-sm text-gray-600 mt-1">
                 <strong>State:</strong> Open (users can answer immediately)

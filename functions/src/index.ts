@@ -25,29 +25,29 @@ exports.submitPredictionFromNotification = onRequest(async (req, res) => {
       authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
 
     if (!token) {
+      console.error('Missing bearer token')
       res.status(401).json({ error: 'Missing bearer token' })
       return
     }
 
     const decoded = await admin.auth().verifyIdToken(token)
-    const body = req.body || {}
-    const questionId = body.questionId as string | undefined
-    const gameId = body.gameId as string | undefined
-    const userId = (body.userId as string | undefined) || decoded.uid
-    let prediction: boolean | null = body.prediction
+    const userId = decoded.uid
 
-    if (typeof prediction !== 'boolean') {
-      res.status(400).json({ error: 'prediction must be boolean or YES/NO' })
+    if (!userId) {
+      console.error('Invalid auth token')
+      res.status(403).json({ error: 'Invalid auth token' })
       return
     }
 
-    if (!questionId || !gameId) {
-      res.status(400).json({ error: 'gameId and questionId are required' })
-      return
+    const { questionId, gameId, prediction } = req.body as {
+      questionId: string
+      gameId: string
+      prediction: string
     }
 
-    if (userId !== decoded.uid) {
-      res.status(403).json({ error: 'userId mismatch' })
+    if (!questionId || !gameId || !prediction) {
+      console.error('Malformed prediction', { body: req.body })
+      res.status(400).json({ error: 'Malformed prediction' })
       return
     }
 
@@ -159,20 +159,29 @@ exports.pushNewQuestion = onDocumentCreated(
     const fallbackId = `question-${questionId}`
 
     try {
-      // Capture sentAt BEFORE sending to get accurate timing
-      const sentAt = Date.now()
+      let timeoutAt: string | undefined
+      const rawTimeout: any = (question as any)?.timeoutAt
+      if (rawTimeout?.toMillis) {
+        timeoutAt = rawTimeout.toMillis().toString()
+      } else if (typeof rawTimeout === 'number') {
+        timeoutAt = rawTimeout.toString()
+      } else if (typeof rawTimeout === 'string') {
+        timeoutAt = rawTimeout
+      }
 
       const baseData = {
         type: 'question',
         gameId,
         questionId,
         question: question.question,
-        sentAt: sentAt.toString(),
+        sentAt: Date.now().toString(),
         engineTag: question.engineTag || '',
         fallbackId,
+        choices: JSON.stringify(question.choices),
+        ...(timeoutAt ? { timeoutAt } : {}),
       }
 
-      const alertMessage = {
+      const questionNotification = {
         topic,
         notification: {
           title: '🏈 New Question!',
@@ -181,6 +190,7 @@ exports.pushNewQuestion = onDocumentCreated(
         data: baseData,
         android: {
           priority: 'high' as const,
+          ttl: 10,
           collapseKey: fallbackId,
           notification: {
             channelId: 'default',
@@ -191,10 +201,6 @@ exports.pushNewQuestion = onDocumentCreated(
         apns: {
           payload: {
             aps: {
-              alert: {
-                title: '🏈 New Question!',
-                body: question.question,
-              },
               category: 'question',
               sound: 'whistle.wav',
             },
@@ -203,11 +209,14 @@ exports.pushNewQuestion = onDocumentCreated(
             'apns-push-type': 'alert',
             'apns-priority': '10',
             'apns-collapse-id': fallbackId,
+            'apns-expiration': Math.floor(
+              (Date.now() + 10000) / 1000
+            ).toString(),
           },
         },
       }
 
-      const response = await admin.messaging().send(alertMessage)
+      const response = await admin.messaging().send(questionNotification)
       console.log(
         `[PushNewQuestion] Sent notification to topic ${topic}:`,
         response

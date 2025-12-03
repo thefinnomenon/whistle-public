@@ -1,5 +1,4 @@
-import notifee, { EventType } from '@notifee/react-native'
-import { getApp } from '@react-native-firebase/app'
+import notifee from '@notifee/react-native'
 import {
   collection,
   doc,
@@ -10,7 +9,6 @@ import {
   orderBy,
   query,
 } from '@react-native-firebase/firestore'
-import { getMessaging, onMessage } from '@react-native-firebase/messaging'
 import {
   DarkTheme,
   DefaultTheme,
@@ -30,17 +28,12 @@ import './global.css'
 // Import background messaging handler for Android
 import '../backgroundMessaging'
 
-import { analytics } from '@/lib/analytics'
 import { configureGoogleSignIn } from '@/lib/auth'
 import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
-import {
-  displayNotification,
-  handleNotificationEvent,
-  setupIOSCategories,
-} from '@/lib/notifications'
 import { MixpanelProvider } from '@/lib/providers/MixpanelProvider'
+import messaging from '@react-native-firebase/messaging'
 import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
 import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
@@ -66,126 +59,6 @@ Sentry.init({
 
 // Configure Google Sign-In on app start
 configureGoogleSignIn()
-
-// Setup iOS notification categories on app start
-setupIOSCategories()
-
-// Setup foreground notification handler (only once, even across hot reloads)
-if (!(global as any).__messageHandlerSetup) {
-  ;(global as any).__messageHandlerSetup = true
-  try {
-    const app = getApp()
-    const messaging = getMessaging(app)
-    console.log('[FCM] Setting up foreground message handler')
-
-    onMessage(messaging, async (remoteMessage) => {
-      console.log('[FCM] 🔔 Foreground notification received!')
-      console.log('[FCM] Message:', JSON.stringify(remoteMessage, null, 2))
-
-      // Check if this is a question notification (has questionId in data)
-      const isQuestion = remoteMessage.data?.questionId
-      const receivedAt = Date.now()
-
-      // Log latency if timing data available
-      if (isQuestion && remoteMessage.data?.sentAt) {
-        const deliveryLatency =
-          receivedAt - parseInt(remoteMessage.data.sentAt as string)
-        console.log(
-          `[Timing] Notification delivery latency: ${deliveryLatency}ms`
-        )
-      }
-
-      // Display the notification using notifee
-      if (isQuestion || remoteMessage.notification) {
-        console.log('[FCM] Displaying notification via notifee')
-
-        const notificationId = await displayNotification(
-          remoteMessage.data?.title?.toString() ||
-            remoteMessage.notification?.title ||
-            'Notification',
-          remoteMessage.data?.body?.toString() ||
-            remoteMessage.notification?.body ||
-            '',
-          {
-            data: {
-              ...remoteMessage.data,
-              receivedAt: receivedAt.toString(),
-            },
-            categoryId: isQuestion ? 'question' : undefined, // Single category with background actions
-            actions: isQuestion
-              ? [
-                  { title: '✅ Yes', id: 'yes' },
-                  { title: '❌ No', id: 'no' },
-                ]
-              : undefined,
-          }
-        )
-        console.log('[FCM] Notification displayed')
-
-        // Auto-dismiss question notifications after 30 seconds
-        if (isQuestion) {
-          setTimeout(async () => {
-            try {
-              await notifee.cancelNotification(notificationId)
-              console.log('[FCM] Auto-dismissed notification after 30s')
-            } catch (error) {
-              console.log('[FCM] Failed to auto-dismiss:', error)
-            }
-          }, 30000)
-        }
-      } else {
-        console.log('[FCM] No notification payload in message')
-      }
-    })
-
-    console.log('[FCM] Foreground message handler registered')
-  } catch (error) {
-    console.error('[FCM] Error setting up foreground handler:', error)
-  }
-}
-
-// Setup foreground notification handlers (Yes/No buttons, taps) only once
-if (!(global as any).__foregroundNotificationHandlerSetup) {
-  ;(global as any).__foregroundNotificationHandlerSetup = true
-
-  notifee.onForegroundEvent(async ({ type, detail }) => {
-    console.log(`[Notification Foreground] Event type: ${type}`)
-
-    if (type === EventType.PRESS) {
-      // User tapped on notification body - navigate to game with question
-      console.log('[Notification] Notification tapped')
-      const data = detail.notification?.data
-      if (data?.gameId && data?.questionId) {
-        console.log(
-          `[Notification] Opening game ${data.gameId} with question ${data.questionId}`
-        )
-        router.push({
-          pathname: '/game',
-          params: {
-            gameId: data.gameId as string,
-            questionId: data.questionId as string,
-          },
-        })
-      }
-    } else if (type === EventType.ACTION_PRESS) {
-      console.log('[Notification Foreground] Entering ACTION_PRESS handler')
-      console.log('[Notification] Action pressed:', detail.pressAction?.id)
-      console.log('[Notification] Data:', detail.notification?.data)
-
-      // Handle the action
-      await handleNotificationEvent(type, detail, analytics, 'Foreground')
-
-      // Dismiss the notification (foreground-only logic)
-      if (detail.notification?.id) {
-        await notifee.cancelNotification(detail.notification.id)
-      }
-    } else if (type === EventType.DISMISSED) {
-      console.log('[Notification Foreground] Entering DISMISSED handler')
-      console.log('[Notification] Processing dismissed event (not answered)')
-      await handleNotificationEvent(type, detail, analytics, 'Foreground')
-    }
-  })
-}
 
 function AuthGate() {
   const { user, loading, hasCompletedOnboarding, hasUsername } = useAuth()
@@ -324,6 +197,41 @@ function ThemedApp() {
       setNativeWindColorScheme(colorScheme)
     }
   }, [colorScheme, setNativeWindColorScheme, theme])
+
+  // Foreground FCM -> force a visible notification (iOS + Android)
+  useEffect(() => {
+    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+      console.log('[FCM] Foreground message', remoteMessage)
+      const title =
+        remoteMessage.notification?.title ??
+        (remoteMessage.data?.question as string | undefined) ??
+        'New Question'
+      const body = remoteMessage.notification?.body ?? ''
+
+      // Display via Notifee to ensure banner while app is foreground
+      await notifee.displayNotification({
+        title,
+        body,
+        data: remoteMessage.data,
+        android: {
+          channelId: 'default',
+          pressAction: { id: 'default' },
+          sound: 'whistle',
+        },
+        ios: {
+          categoryId: 'question',
+          foregroundPresentationOptions: {
+            alert: true,
+            sound: true,
+            badge: true,
+          },
+          sound: 'whistle.wav',
+        },
+      })
+    })
+
+    return unsubscribe
+  }, [])
 
   // Handle notification that opened the app from killed state
   useEffect(() => {

@@ -29,7 +29,7 @@ import {
 } from 'recharts'
 
 // Import types from parent project
-import type { Game, Question } from '@/types'
+import type { Game, Prediction, Question } from '@/types'
 
 export default function GamePage() {
   const params = useParams()
@@ -41,7 +41,7 @@ export default function GamePage() {
   const [loading, setLoading] = useState(true)
   const [changingAnswerId, setChangingAnswerId] = useState<string | null>(null)
   const [selectedEngineTag, setSelectedEngineTag] = useState<string | null>(null)
-  const [livePredictions, setLivePredictions] = useState<any[]>([])
+  const [livePredictions, setLivePredictions] = useState<Prediction[]>([])
   const [isStatsExpanded, setIsStatsExpanded] = useState(false)
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set())
   const timerRef = React.useRef<HTMLDivElement>(null)
@@ -275,7 +275,7 @@ export default function GamePage() {
       // Calculate average response time (from when notification was received to when user answered)
       // This is the most meaningful metric - how quickly users respond after seeing the notification
       const validResponseTimes = livePredictions
-        .map((p: any) => {
+        .map((p: Prediction) => {
           const predictionCreatedAt = p.createdAt?.toMillis?.() || 0
           const receivedAt = p.receivedAt || 0
           // Response time = time from notification received to answer
@@ -358,7 +358,7 @@ export default function GamePage() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const predictionsData = snapshot.docs.map((doc) => ({
         id: doc.id,
-        ...doc.data(),
+        ...(doc.data() as Prediction),
       }))
       setLivePredictions(predictionsData)
     })
@@ -434,15 +434,18 @@ export default function GamePage() {
       .replace('[AWAYTEAM]', game.awayTeam)
 
     try {
-      const questionData: any = {
+      const questionData: Omit<Question, 'id'> = {
         question: questionText,
         type: 'YESNO',
-        choices: ['Yes', 'No'],
+        choices: [{id: 'yes', value: 'Yes'}, {id: 'no', value: 'No'}],
         state: 'open',
+        timeoutAt: (Date.now() + 30 * 1000).toString(), // 30 seconds from now (ms string)
         triggeredAt: Timestamp.now(),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       }
+
+      console.log('TIMEOUT', new Date(Date.now() + 30 * 1000).toString())
 
       if (selectedEngineTag) {
         questionData.engineTag = selectedEngineTag
@@ -1438,7 +1441,10 @@ export default function GamePage() {
                         </span>
                       </div>
                       <div className="text-sm text-gray-600">
-                        Choices: {question.choices.join(', ')}
+                        Choices:{' '}
+                        {question.choices
+                          .map((c) => (typeof c === 'string' ? c : c.value))
+                          .join(', ')}
                       </div>
                       {question.answer !== undefined && (
                         <div className="text-sm text-green-600 mt-1">

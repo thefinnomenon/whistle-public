@@ -66,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let userUnsubscribe: (() => void) | null = null
     let tokenRefreshUnsubscribe: (() => void) | null = null
+    let idTokenUnsubscribe: (() => void) | null = null
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser)
@@ -78,6 +79,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (tokenRefreshUnsubscribe) {
         tokenRefreshUnsubscribe()
         tokenRefreshUnsubscribe = null
+      }
+      if (idTokenUnsubscribe) {
+        idTokenUnsubscribe()
+        idTokenUnsubscribe = null
       }
 
       if (fbUser) {
@@ -208,6 +213,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setHasUsername(false)
       }
 
+      // Keep native session token fresh
+      if (fbUser) {
+        idTokenUnsubscribe = auth.onIdTokenChanged(async (user) => {
+          if (user) {
+            await setNativeSession(user)
+          }
+        })
+      }
+
       setLoading(false)
     })
 
@@ -215,6 +229,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubscribe()
       if (userUnsubscribe) {
         userUnsubscribe()
+      }
+      if (tokenRefreshUnsubscribe) {
+        tokenRefreshUnsubscribe()
+      }
+      if (idTokenUnsubscribe) {
+        idTokenUnsubscribe()
       }
     }
   }, [])

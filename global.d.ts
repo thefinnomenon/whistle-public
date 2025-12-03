@@ -66,14 +66,17 @@ type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
 type UserQuestionState = QuestionState | 'correct' | 'incorrect'
 type QuestionType = 'YESNO'
 
+type Choice = { id: string; value: string }
+
 type Question = {
   id: string
   state: QuestionState
   type: QuestionType
   question: string
-  choices: string[]
+  choices: Choice[]
   answer?: boolean
   engineTag?: string
+  timeoutAt: string
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt: FirestoreTimestamp

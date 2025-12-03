@@ -10,7 +10,11 @@ export const createQuestionFromTrigger = async (
     state: 'open',
     type: 'YESNO',
     question: 'Will the next play be a pass?',
-    choices: ['Yes', 'No'],
+    choices: [
+      { id: 'yes', value: 'Yes' },
+      { id: 'no', value: 'No' },
+    ],
+    timeoutAt: (Date.now() + 30 * 1000).toString(), // 30 seconds from now (ms string),
     updatedAt: serverTimestamp() as any,
   })
 }

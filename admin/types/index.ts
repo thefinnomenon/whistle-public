@@ -56,13 +56,19 @@ export type LeaderboardItem = {
 export type QuestionType = 'YESNO' | 'MULTIPLE_CHOICE'
 export type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
 
+export type Choice = {
+  id: string
+  value: string
+}
+
 export type Question = {
   id: string
   state: QuestionState
   type: QuestionType
   question: string
-  choices: string[]
+  choices: Choice[]
   answer?: boolean
+  timeoutAt: string
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
@@ -97,6 +103,7 @@ export type Question = {
 }
 
 export type Prediction = {
+  receivedAt: number
   prediction: string
   createdAt: FirestoreTimestamp
 }

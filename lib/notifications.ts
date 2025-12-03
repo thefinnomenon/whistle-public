@@ -2,7 +2,6 @@ import notifee, {
   AndroidImportance,
   AuthorizationStatus,
   EventType,
-  IOSNotificationCategory,
 } from '@notifee/react-native'
 import { getApp } from '@react-native-firebase/app'
 import { getAuth } from '@react-native-firebase/auth'
@@ -48,58 +47,10 @@ export async function checkNotificationPermission(): Promise<NotificationPermiss
 }
 
 /**
- * Setup iOS notification categories for action buttons
- */
-export async function setupIOSCategories(): Promise<void> {
-  if (Platform.OS !== 'ios') return
-
-  // Set up Notifee categories (for Notifee-displayed notifications)
-  // Register categories used by Notifee-displayed notifications (foreground) and keep in sync with native
-  const notifeeCategories: IOSNotificationCategory[] = [
-    {
-      id: 'question',
-      actions: [
-        {
-          id: 'yes',
-          title: '✅ Yes',
-          foreground: false, // Background action - don't foreground app
-        },
-        {
-          id: 'no',
-          title: '❌ No',
-          foreground: false, // Background action - don't foreground app
-        },
-      ],
-    },
-    {
-      id: 'practice',
-      actions: [
-        {
-          id: 'yes',
-          title: '✅ Yes',
-          foreground: true, // Practice flow can foreground app
-        },
-        {
-          id: 'no',
-          title: '❌ No',
-          foreground: true, // Practice flow can foreground app
-        },
-      ],
-    },
-  ]
-
-  await notifee.setNotificationCategories(notifeeCategories)
-  console.log('[Notifications] Notifee iOS categories set up')
-}
-
-/**
  * Request notification permission
  * Returns true if granted, false otherwise
  */
 export async function requestNotificationPermission(): Promise<boolean> {
-  // Setup iOS categories before requesting permission
-  await setupIOSCategories()
-
   const currentStatus = await checkNotificationPermission()
 
   // Already granted
@@ -209,34 +160,30 @@ export async function displayNotification(
     )
   }
 
-  return await notifee.displayNotification({
-    title,
-    body,
-    data: options?.data,
-    android: {
-      channelId: channelId!,
-      importance: AndroidImportance.HIGH,
-      smallIcon: 'ic_small_icon',
-      color: '#000000', // Black background for notification icon
-      sound: 'whistle',
-      pressAction: {
-        id: 'default',
+  if (Platform.OS === 'android') {
+    return await notifee.displayNotification({
+      title,
+      body,
+      data: options?.data,
+      android: {
+        channelId: channelId!,
+        importance: AndroidImportance.HIGH,
+        smallIcon: 'ic_small_icon',
+        color: '#000000',
+        sound: 'whistle',
+        pressAction: {
+          id: 'default',
+        },
+        actions: options?.actions?.map((action) => ({
+          title: action.title,
+          pressAction: { id: action.id },
+        })),
       },
-      actions: options?.actions?.map((action) => ({
-        title: action.title,
-        pressAction: { id: action.id },
-      })),
-    },
-    ios: {
-      categoryId: options?.categoryId || 'YESNO',
-      sound: 'whistle.wav',
-      foregroundPresentationOptions: {
-        alert: true,
-        badge: true,
-        sound: true,
-      },
-    },
-  })
+    })
+  }
+
+  // iOS: let the OS handle display (no-op here)
+  return 'ios-os-display'
 }
 
 /**
