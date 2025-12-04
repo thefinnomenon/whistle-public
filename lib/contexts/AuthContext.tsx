@@ -1,3 +1,4 @@
+import { env } from '@/lib/env'
 import { initializeFCMToken, setupTokenRefreshListener } from '@/lib/fcm'
 import { addUser, getUser } from '@/lib/firebase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -24,7 +25,7 @@ const ONBOARDING_KEY = 'hasCompletedOnboarding'
 const auth = getAuth()
 const db = getFirestore()
 const WhistleSessionModule = requireNativeModule('WhistleSessionModule') as
-  | { setSession: (userId: string, authToken: string) => void }
+  | { setSession: (authToken: string) => void }
   | undefined
 
 interface AuthContextType {
@@ -53,11 +54,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const idToken = await fbUser.getIdToken()
+      let sessionToken = idToken
+
+      try {
+        const resp = await fetch(env.WHISTLE_TOKEN_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        if (resp.ok) {
+          const data = await resp.json()
+          if (data?.token) {
+            sessionToken = data.token
+          }
+        } else {
+          console.warn('[WhistleSession] issueWhistleToken failed', resp.status)
+        }
+      } catch (err) {
+        console.warn('[WhistleSession] Failed to fetch long-lived token', err)
+      }
+
       console.log(
         '[WhistleSession] Setting native session for user',
         fbUser.uid
       )
-      WhistleSessionModule.setSession(fbUser.uid, idToken)
+      WhistleSessionModule.setSession(sessionToken)
     } catch (error) {
       console.warn('[WhistleSession] Failed to set native session', error)
     }
@@ -206,7 +229,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         if (WhistleSessionModule?.setSession) {
           console.log('[WhistleSession] Clearing native session (no user)')
-          WhistleSessionModule.setSession('', '')
+          WhistleSessionModule.setSession('')
         }
         setUser(null)
         setHasCompletedOnboarding(false)
@@ -250,7 +273,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (WhistleSessionModule?.setSession) {
         console.log('[WhistleSession] Clearing native session on sign out')
-        WhistleSessionModule.setSession('', '')
+        WhistleSessionModule.setSession('')
       }
 
       await signOut(auth)

@@ -445,8 +445,6 @@ export default function GamePage() {
         updatedAt: Timestamp.now(),
       }
 
-      console.log('TIMEOUT', new Date(Date.now() + 30 * 1000).toString())
-
       if (selectedEngineTag) {
         questionData.engineTag = selectedEngineTag
       }

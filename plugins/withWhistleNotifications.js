@@ -267,22 +267,17 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-    var payload: [String: Any] = [
+    let payload: [String: Any] = [
       "questionId": qId,
       "gameId": gId,
-      "choice": choiceId,
-      "source": "ios_notification_extension",
+      "prediction": choiceId,
     ]
 
     let appGroup =
       (info["WhistleAppGroup"] as? String) ?? "${appGroup}"
     if let defaults = UserDefaults(suiteName: appGroup) {
-      let userId = defaults.string(forKey: "WhistleUserId")
       let authToken = defaults.string(forKey: "WhistleAuthToken")
-      print("[WhistleExtension] Defaults found userId=\\(userId ?? "nil") tokenNil=\\(authToken == nil)")
-      if let userId {
-        payload["userId"] = userId
-      }
+      print("[WhistleExtension] Defaults found tokenNil=\\(authToken == nil)")
       if let authToken {
         request.setValue("Bearer \\(authToken)", forHTTPHeaderField: "Authorization")
       }

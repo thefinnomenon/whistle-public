@@ -1,5 +1,6 @@
-import { createHash } from 'crypto'
+import { createHash, createHmac } from 'crypto'
 import admin from 'firebase-admin'
+import { defineSecret } from 'firebase-functions/params'
 import { setGlobalOptions } from 'firebase-functions/v2'
 import {
   onDocumentCreated,
@@ -12,71 +13,161 @@ setGlobalOptions({ region: 'us-east1' })
 
 admin.initializeApp()
 
+const WHISTLE_JWT_SECRET = defineSecret('WHISTLE_JWT_SECRET')
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60
+
+const base64url = (input: Buffer | string) =>
+  Buffer.from(input)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+
+const getJwtSecret = () => {
+  const value = WHISTLE_JWT_SECRET.value()
+  if (!value) throw new Error('Missing WHISTLE_JWT_SECRET')
+  return value
+}
+
+const signJwt = (secret: string, payload: Record<string, any>) => {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const encodedHeader = base64url(JSON.stringify(header))
+  const encodedPayload = base64url(JSON.stringify(payload))
+  const data = `${encodedHeader}.${encodedPayload}`
+  const signature = createHmac('sha256', secret)
+    .update(data)
+    .digest('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+  return `${data}.${signature}`
+}
+
+const verifyJwt = (
+  secret: string,
+  token: string
+): { uid: string; exp?: number } | null => {
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  const [encodedHeader, encodedPayload, signature] = parts
+  const data = `${encodedHeader}.${encodedPayload}`
+  const expectedSig = createHmac('sha256', secret)
+    .update(data)
+    .digest('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+  if (expectedSig !== signature) return null
+  const payload = JSON.parse(
+    Buffer.from(encodedPayload, 'base64').toString('utf8')
+  ) as { uid: string; exp?: number }
+  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    return null
+  }
+  return payload
+}
+
+// Callable to issue a long-lived JWT for the native extension
+exports.issueWhistleToken = onRequest(
+  { secrets: [WHISTLE_JWT_SECRET] },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).send('Method Not Allowed')
+      return
+    }
+
+    const secret = getJwtSecret()
+
+    try {
+      const authHeader = req.headers.authorization || ''
+      const idToken =
+        authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
+      if (!idToken) {
+        res.status(401).json({ error: 'Missing bearer token' })
+        return
+      }
+      const decoded = await admin.auth().verifyIdToken(idToken)
+      const uid = decoded.uid
+      const exp = Math.floor(Date.now() / 1000) + THIRTY_DAYS_SECONDS
+      const token = signJwt(secret, { uid, exp })
+      res.json({ token, expiresAt: exp })
+    } catch (error) {
+      console.error('[issueWhistleToken] Error:', error)
+      res.status(500).json({ error: 'Internal Server Error' })
+    }
+  }
+)
+
 // HTTP endpoint for native iOS notification actions to post predictions
-exports.submitPredictionFromNotification = onRequest(async (req, res) => {
-  if (req.method !== 'POST') {
-    res.status(405).send('Method Not Allowed')
-    return
+exports.submitPredictionFromNotification = onRequest(
+  { secrets: [WHISTLE_JWT_SECRET] },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).send('Method Not Allowed')
+      return
+    }
+
+    const secret = getJwtSecret()
+
+    try {
+      const authHeader = req.headers.authorization || ''
+      const token =
+        authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
+
+      if (!token) {
+        console.error('Missing bearer token')
+        res.status(401).json({ error: 'Missing bearer token' })
+        return
+      }
+
+      const decoded = verifyJwt(secret, token)
+      const userId = decoded?.uid
+
+      if (!userId) {
+        console.error('Invalid auth token')
+        res.status(403).json({ error: 'Invalid auth token' })
+        return
+      }
+
+      const { questionId, gameId, prediction } = req.body as {
+        questionId: string
+        gameId: string
+        prediction: string
+      }
+
+      if (!questionId || !gameId || !prediction) {
+        console.error('Malformed prediction', { body: req.body })
+        res.status(400).json({ error: 'Malformed prediction' })
+        return
+      }
+
+      const now = admin.firestore.FieldValue.serverTimestamp()
+
+      const predictionRef = admin
+        .firestore()
+        .doc(`games/${gameId}/questions/${questionId}/predictions/${userId}`)
+      const userPredictionRef = admin
+        .firestore()
+        .doc(`users/${userId}/games/${gameId}/predictions/${questionId}`)
+
+      const payload = {
+        prediction,
+        source: 'ios_notification',
+        createdAt: now,
+      }
+
+      await Promise.all([
+        predictionRef.set(payload, { merge: true }),
+        userPredictionRef.set(payload, { merge: true }),
+      ])
+
+      res.json({ ok: true })
+    } catch (error) {
+      console.error('[submitPredictionFromNotification] Error:', error)
+      res.status(500).json({ error: 'Internal Server Error' })
+    }
   }
-
-  try {
-    const authHeader = req.headers.authorization || ''
-    const token =
-      authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
-
-    if (!token) {
-      console.error('Missing bearer token')
-      res.status(401).json({ error: 'Missing bearer token' })
-      return
-    }
-
-    const decoded = await admin.auth().verifyIdToken(token)
-    const userId = decoded.uid
-
-    if (!userId) {
-      console.error('Invalid auth token')
-      res.status(403).json({ error: 'Invalid auth token' })
-      return
-    }
-
-    const { questionId, gameId, prediction } = req.body as {
-      questionId: string
-      gameId: string
-      prediction: string
-    }
-
-    if (!questionId || !gameId || !prediction) {
-      console.error('Malformed prediction', { body: req.body })
-      res.status(400).json({ error: 'Malformed prediction' })
-      return
-    }
-
-    const now = admin.firestore.FieldValue.serverTimestamp()
-
-    const predictionRef = admin
-      .firestore()
-      .doc(`games/${gameId}/questions/${questionId}/predictions/${userId}`)
-    const userPredictionRef = admin
-      .firestore()
-      .doc(`users/${userId}/games/${gameId}/predictions/${questionId}`)
-
-    const payload = {
-      prediction,
-      source: 'ios_notification',
-      createdAt: now,
-    }
-
-    await Promise.all([
-      predictionRef.set(payload, { merge: true }),
-      userPredictionRef.set(payload, { merge: true }),
-    ])
-
-    res.json({ ok: true })
-  } catch (error) {
-    console.error('[submitPredictionFromNotification] Error:', error)
-    res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
+)
 
 // Send notification to game topic when game starts (state changes to "open")
 exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
