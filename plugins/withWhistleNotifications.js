@@ -158,6 +158,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     print("[WhistleExtension] parsed timeoutAt ms:", timeoutAt as Any)
 
     gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    choiceButtons.removeAll()
 
     var choicesArray: [[String: Any]] = []
     if let choicesString = notification.request.content.userInfo["choices"] as? String,
@@ -180,11 +181,12 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       button.layer.cornerRadius = 10
       button.contentEdgeInsets = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
       button.heightAnchor.constraint(equalToConstant: 52).isActive = true
-      button.contentEdgeInsets = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
-      button.addAction(UIAction(handler: { [weak self] _ in
-        self?.post(choiceId: id)
+      button.addAction(UIAction(handler: { [weak self, weak button] _ in
+        guard let self = self, let button = button else { return }
+        self.startSubmitting(chosenButton: button, choiceId: id)
       }), for: .touchUpInside)
       rowButtons.append(button)
+      choiceButtons.append(button)
       if rowButtons.count == 2 {
         addRow(with: rowButtons)
         rowButtons.removeAll()
@@ -202,6 +204,20 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     }
 
     startCountdown()
+  }
+
+  private func startSubmitting(chosenButton: UIButton, choiceId: String) {
+    // Disable all buttons and show spinner on the chosen one
+    choiceButtons.forEach { $0.isEnabled = false; $0.alpha = 0.6 }
+    let spinner = UIActivityIndicatorView(style: .medium)
+    spinner.translatesAutoresizingMaskIntoConstraints = false
+    spinner.startAnimating()
+    chosenButton.addSubview(spinner)
+    NSLayoutConstraint.activate([
+      spinner.centerXAnchor.constraint(equalTo: chosenButton.centerXAnchor),
+      spinner.centerYAnchor.constraint(equalTo: chosenButton.centerYAnchor),
+    ])
+    post(choiceId: choiceId)
   }
 
   private func addRow(with buttons: [UIButton]) {
@@ -232,14 +248,15 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       totalDurationMs = max(remaining, 0)
     }
     if remaining <= 0 {
-      countdownLabel.text = "Expired"
+      countdownLabel.text = "0"
       progressLayer.strokeEnd = 0
       countdownTimer?.invalidate()
       gridStack.isUserInteractionEnabled = false
       gridStack.alpha = 0.5
+      dismissAllImmediate()
     } else {
       let seconds = Int(remaining / 1000)
-      countdownLabel.text = "Time left: \\(seconds)s"
+      countdownLabel.text = "\\(seconds)"
       if let total = totalDurationMs, total > 0 {
         let progress = max(0, min(1, remaining / total))
         progressLayer.strokeEnd = CGFloat(progress)
@@ -304,9 +321,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       } else {
         print("[WhistleExtension] POST completed with unknown response")
       }
-      DispatchQueue.main.async {
-        self.extensionContext?.dismissNotificationContentExtension()
-      }
+      self.dismissAll()
     }
     print("[WhistleExtension] Resuming POST task")
     task.resume()
@@ -366,6 +381,25 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       countdownLabel.widthAnchor.constraint(equalTo: radialContainer.widthAnchor),
       countdownLabel.heightAnchor.constraint(equalTo: radialContainer.heightAnchor),
     ])
+  }
+
+  private func dismissNotification() {
+    if let id = notificationId {
+      UNUserNotificationCenter.current()
+        .removeDeliveredNotifications(withIdentifiers: [id])
+    }
+  }
+
+  private func dismissAll() {
+    DispatchQueue.main.async {
+      self.extensionContext?.dismissNotificationContentExtension()
+      self.dismissNotification()
+    }
+  }
+
+  private func dismissAllImmediate() {
+    extensionContext?.dismissNotificationContentExtension()
+    dismissNotification()
   }
 }
 `
