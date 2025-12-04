@@ -76,9 +76,8 @@ exports.issueWhistleToken = onRequest(
       return
     }
 
-    const secret = getJwtSecret()
-
     try {
+      const secret = getJwtSecret()
       const authHeader = req.headers.authorization || ''
       const idToken =
         authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
@@ -107,9 +106,8 @@ exports.submitPredictionFromNotification = onRequest(
       return
     }
 
-    const secret = getJwtSecret()
-
     try {
+      const secret = getJwtSecret()
       const authHeader = req.headers.authorization || ''
       const token =
         authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
@@ -185,6 +183,7 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
     console.log(`Game ${gameId} started, notifying all app users`)
 
     const topic = 'app_notifications'
+    const collapseId = `game_${gameId}`
 
     try {
       // Send FCM message to main app topic
@@ -201,8 +200,10 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
         },
         android: {
           priority: 'high' as const,
+          collapseKey: collapseId,
           notification: {
             channelId: 'default',
+            tag: collapseId,
             priority: 'high' as const,
             sound: 'whistle',
           },
@@ -210,9 +211,13 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
         apns: {
           payload: {
             aps: {
-              contentAvailable: true,
               sound: 'whistle.wav',
             },
+          },
+          headers: {
+            'apns-push-type': 'alert',
+            'apns-priority': '10',
+            'apns-collapse-id': collapseId,
           },
         },
       }
@@ -247,19 +252,9 @@ exports.pushNewQuestion = onDocumentCreated(
     }
 
     const topic = `game_${gameId}`
-    const fallbackId = `question-${questionId}`
+    const collapseId = topic
 
     try {
-      let timeoutAt: string | undefined
-      const rawTimeout: any = (question as any)?.timeoutAt
-      if (rawTimeout?.toMillis) {
-        timeoutAt = rawTimeout.toMillis().toString()
-      } else if (typeof rawTimeout === 'number') {
-        timeoutAt = rawTimeout.toString()
-      } else if (typeof rawTimeout === 'string') {
-        timeoutAt = rawTimeout
-      }
-
       const baseData = {
         type: 'question',
         gameId,
@@ -267,9 +262,9 @@ exports.pushNewQuestion = onDocumentCreated(
         question: question.question,
         sentAt: Date.now().toString(),
         engineTag: question.engineTag || '',
-        fallbackId,
+        collapseId,
         choices: JSON.stringify(question.choices),
-        ...(timeoutAt ? { timeoutAt } : {}),
+        timeoutAt: question.timeoutAt,
       }
 
       const questionNotification = {
@@ -281,10 +276,12 @@ exports.pushNewQuestion = onDocumentCreated(
         data: baseData,
         android: {
           priority: 'high' as const,
+          // If not delivered within 10 seconds, don't deliver
           ttl: 10,
-          collapseKey: fallbackId,
+          collapseKey: collapseId,
           notification: {
             channelId: 'default',
+            tag: collapseId,
             priority: 'high' as const,
             sound: 'whistle',
           },
@@ -299,7 +296,8 @@ exports.pushNewQuestion = onDocumentCreated(
           headers: {
             'apns-push-type': 'alert',
             'apns-priority': '10',
-            'apns-collapse-id': fallbackId,
+            'apns-collapse-id': collapseId,
+            // If not delivered within 10 seconds, don't deliver
             'apns-expiration': Math.floor(
               (Date.now() + 10000) / 1000
             ).toString(),
@@ -321,6 +319,7 @@ exports.pushNewQuestion = onDocumentCreated(
   }
 )
 
+// Get user IDs of users who answered correctly for a @questionId in @gameId
 const getCorrectUsers = async (
   gameId: string,
   questionId: string,
@@ -376,12 +375,8 @@ const getCorrectUsers = async (
   return correctPredictions.map((p) => p.id)
 }
 
-const updateScores = async (
-  gameId: string,
-  questionId: string,
-  users: string[],
-  value: number
-) => {
+// Update scores for a @users for @gameId by @value (can be positive or negative)
+const updateScores = async (gameId: string, users: string[], value: number) => {
   // Firestore batch limit is 500 operations
   const BATCH_SIZE = 500
   const batches = []
@@ -409,6 +404,8 @@ const updateScores = async (
 
 type LeaderboardDoc =
   admin.firestore.QueryDocumentSnapshot<admin.firestore.DocumentData>[]
+
+// Calculate places for leaderboard
 const calculatePlaces = (leaderboardDocs: LeaderboardDoc) => {
   console.log('Calculating places...')
   let currentScore = -1
@@ -431,6 +428,7 @@ const calculatePlaces = (leaderboardDocs: LeaderboardDoc) => {
   return places
 }
 
+// Calculate statistics for a @questionId in @gameId
 const calculateQuestionStatistics = async (
   gameId: string,
   questionId: string,
@@ -641,6 +639,7 @@ const calculateQuestionStatistics = async (
   console.log('Successfully saved question statistics')
 }
 
+// When a question is resolved, update scores for correct users, updates the scoreboard, and calculate question statistics
 exports.calculateScores = onDocumentUpdated(
   'games/{gameId}/questions/{questionId}',
   async (event) => {
@@ -670,7 +669,7 @@ exports.calculateScores = onDocumentUpdated(
       )
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
       if (correctUsers.length > 0) {
-        await updateScores(gameId, questionId, correctUsers, 1)
+        await updateScores(gameId, correctUsers, 1)
       }
 
       // Calculate all statistics
@@ -682,7 +681,7 @@ exports.calculateScores = onDocumentUpdated(
       console.log('Question was cancelled! Reverting scores...')
       const correctUsers = await getCorrectUsers(gameId, questionId, question)
       if (correctUsers.length > 0) {
-        await updateScores(gameId, questionId, correctUsers, -1)
+        await updateScores(gameId, correctUsers, -1)
       }
     }
 
@@ -709,8 +708,8 @@ exports.calculateScores = onDocumentUpdated(
       if (oldCorrectUsers.length === 0 && correctUsers.length === 0) return
 
       await Promise.all([
-        updateScores(gameId, questionId, oldCorrectUsers, -1),
-        updateScores(gameId, questionId, correctUsers, 1),
+        updateScores(gameId, oldCorrectUsers, -1),
+        updateScores(gameId, correctUsers, 1),
       ])
     }
 
@@ -756,6 +755,7 @@ exports.calculateScores = onDocumentUpdated(
 )
 
 // TODO: Save on invocations by scheduling this specifically during game hours on game days
+// Every minute, update user counts for open and scheduled games
 exports.updatePlayerCountForGames = onSchedule('every 1 minutes', async () => {
   console.log('Updating game user counts for open and scheduled games!')
 
@@ -799,6 +799,7 @@ exports.updatePlayerCountForGames = onSchedule('every 1 minutes', async () => {
   )
 })
 
+// Calculate global game statistics for @gameId
 const calculateGameStatistics = async (gameId: string) => {
   console.log(`Calculating global statistics for game ${gameId}`)
 
@@ -969,6 +970,7 @@ const calculateGameStatistics = async (gameId: string) => {
   console.log('Successfully saved game statistics')
 }
 
+// When game is resolved, calculate final statistics, distribute winnings, notify winners, and send end of game notification
 exports.handleGameEnd = onDocumentUpdated(
   { document: 'games/{gameId}' },
   async (event) => {
@@ -1000,6 +1002,7 @@ exports.handleGameEnd = onDocumentUpdated(
   }
 )
 
+// Distribute winnings to first place winners
 const distributeWinnings = async (
   gameId: string,
   game: Game
@@ -1055,6 +1058,7 @@ const distributeWinnings = async (
   return winnerNotifications
 }
 
+// Notify winners via FCM
 const notifyWinners = async (
   winnerNotifications: { userId: string; amount: number }[],
   game: Game
@@ -1127,9 +1131,12 @@ const notifyWinners = async (
             apns: {
               payload: {
                 aps: {
-                  contentAvailable: true,
                   sound: 'whistle.wav',
                 },
+              },
+              headers: {
+                'apns-push-type': 'alert',
+                'apns-priority': '10',
               },
             },
           }
@@ -1149,11 +1156,13 @@ const notifyWinners = async (
   )
 }
 
+// Send end of game notification to all users subscribed to the game topic
 const sendNotificationsToGameUsers = async (
   gameId: string,
   message: string
 ) => {
   const topic = `game_${gameId}`
+  const collapseId = topic
 
   try {
     console.log(`Sending game end notification to topic ${topic}`)
@@ -1169,6 +1178,7 @@ const sendNotificationsToGameUsers = async (
       },
       android: {
         priority: 'high' as const,
+        collapseKey: collapseId,
         notification: {
           channelId: 'default',
           priority: 'high' as const,
@@ -1178,8 +1188,12 @@ const sendNotificationsToGameUsers = async (
       apns: {
         payload: {
           aps: {
-            contentAvailable: true,
             sound: 'whistle.wav',
+          },
+          headers: {
+            'apns-push-type': 'alert',
+            'apns-priority': '10',
+            'apns-collapse-id': collapseId,
           },
         },
       },
