@@ -25,9 +25,6 @@ import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
 import './global.css'
 
-// Import background messaging handler for Android
-import '../backgroundMessaging'
-
 import { configureGoogleSignIn } from '@/lib/auth'
 import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
@@ -40,6 +37,9 @@ import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
 import React, { useEffect } from 'react'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
+
+// Background FCM handler registration (headless)
+import '../backgroundMessaging'
 
 // Keep splash screen visible while app loads
 SplashScreen.preventAutoHideAsync()
@@ -202,6 +202,20 @@ function ThemedApp() {
   useEffect(() => {
     const unsubscribe = messaging().onMessage(async (remoteMessage) => {
       console.log('[FCM] Foreground message', remoteMessage)
+      const collapseId = remoteMessage.data?.collapseId as string
+
+      // Handle dismiss/expired messages
+      if (remoteMessage.data?.type === 'question_expired' && collapseId) {
+        try {
+          await notifee.cancelDisplayedNotification(collapseId)
+          await notifee.cancelNotification(collapseId)
+          console.log('[FCM] Cancelled notification for', collapseId)
+        } catch (err) {
+          console.warn('[FCM] Failed to cancel notification', err)
+        }
+        return
+      }
+
       const title =
         remoteMessage.notification?.title ??
         (remoteMessage.data?.question as string | undefined) ??
@@ -210,6 +224,7 @@ function ThemedApp() {
 
       // Display via Notifee to ensure banner while app is foreground
       await notifee.displayNotification({
+        id: collapseId,
         title,
         body,
         data: remoteMessage.data,

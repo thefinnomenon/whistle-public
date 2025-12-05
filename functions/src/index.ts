@@ -67,6 +67,45 @@ const verifyJwt = (
   return payload
 }
 
+const sendDismissNotification = async (
+  gameId: string,
+  questionId: string,
+  collapseId: string
+) => {
+  const topic = `game_${gameId}`
+  const message = {
+    topic,
+    data: {
+      type: 'question_expired',
+      gameId,
+      questionId,
+      collapseId,
+    },
+    android: {
+      collapseKey: collapseId,
+      priority: 'high' as const,
+      notification: {
+        tag: collapseId,
+        channelId: 'default',
+      },
+    },
+    apns: {
+      headers: {
+        'apns-push-type': 'background',
+        'apns-priority': '5',
+        'apns-collapse-id': collapseId,
+      },
+      payload: {
+        aps: {
+          'content-available': 1,
+        },
+      },
+    },
+  }
+
+  await admin.messaging().send(message as any)
+}
+
 // Callable to issue a long-lived JWT for the native extension
 exports.issueWhistleToken = onRequest(
   { secrets: [WHISTLE_JWT_SECRET] },
@@ -235,6 +274,38 @@ exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
     }
   }
 })
+
+// Send dismiss on question close/cancel
+exports.dismissOnQuestionClose = onDocumentUpdated(
+  'games/{gameId}/questions/{questionId}',
+  async (event) => {
+    const { gameId, questionId } = event.params
+    const before = event.data?.before.data() as Question
+    const after = event.data?.after.data() as Question
+    if (!before || !after) return
+
+    const wasOpen = before.state === 'open'
+    const nowClosed =
+      after.state === 'closed' ||
+      after.state === 'cancelled' ||
+      after.state === 'resolved'
+
+    if (wasOpen && nowClosed) {
+      const collapseId = `game_${gameId}`
+      try {
+        await sendDismissNotification(gameId, questionId, collapseId)
+        console.log(
+          `[dismissOnQuestionClose] Sent dismiss for game ${gameId}, question ${questionId}`
+        )
+      } catch (err) {
+        console.error(
+          `[dismissOnQuestionClose] Failed to send dismiss for game ${gameId}, question ${questionId}`,
+          err
+        )
+      }
+    }
+  }
+)
 
 // Send notification to game topic when new question is created
 exports.pushNewQuestion = onDocumentCreated(

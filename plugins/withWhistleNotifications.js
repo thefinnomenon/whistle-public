@@ -111,9 +111,12 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private let progressLayer = CAShapeLayer()
   private var questionId: String?
   private var gameId: String?
+  private var notificationId: String?
   private var countdownTimer: Timer?
   private var timeoutAt: TimeInterval?
   private var totalDurationMs: Double?
+  private var choiceButtons: [UIButton] = []
+  private var hasExpiredHandled = false
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -152,12 +155,14 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     print("[WhistleExtension] didReceive payload:", notification.request.content.userInfo)
     titleLabel.text = notification.request.content.title
     bodyLabel.text = notification.request.content.body
+    notificationId = notification.request.identifier
     questionId = notification.request.content.userInfo["questionId"] as? String
     gameId = notification.request.content.userInfo["gameId"] as? String
     timeoutAt = parseTimeout(notification.request.content.userInfo["timeoutAt"])
     print("[WhistleExtension] parsed timeoutAt ms:", timeoutAt as Any)
 
     gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    choiceButtons.removeAll()
     choiceButtons.removeAll()
 
     var choicesArray: [[String: Any]] = []
@@ -209,7 +214,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private func startSubmitting(chosenButton: UIButton, choiceId: String) {
     // Disable all buttons and show spinner on the chosen one
     choiceButtons.forEach { $0.isEnabled = false; $0.alpha = 0.6 }
-    let spinner = UIActivityIndicatorView(style: .medium)
+    let spinner = UIActivityIndicatorView(style: .large)
     spinner.translatesAutoresizingMaskIntoConstraints = false
     spinner.startAnimating()
     chosenButton.addSubview(spinner)
@@ -248,12 +253,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       totalDurationMs = max(remaining, 0)
     }
     if remaining <= 0 {
-      countdownLabel.text = "0"
-      progressLayer.strokeEnd = 0
-      countdownTimer?.invalidate()
-      gridStack.isUserInteractionEnabled = false
-      gridStack.alpha = 0.5
-      dismissAllImmediate()
+      handleExpired()
     } else {
       let seconds = Int(remaining / 1000)
       countdownLabel.text = "\\(seconds)"
@@ -400,6 +400,20 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private func dismissAllImmediate() {
     extensionContext?.dismissNotificationContentExtension()
     dismissNotification()
+  }
+
+  private func handleExpired() {
+    if hasExpiredHandled { return }
+    hasExpiredHandled = true
+    countdownLabel.text = "0"
+    progressLayer.strokeEnd = 0
+    gridStack.isUserInteractionEnabled = false
+    gridStack.alpha = 0.5
+    countdownTimer?.invalidate()
+    bodyLabel.text = "Question closed"
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+      self.dismissAllImmediate()
+    }
   }
 }
 `
