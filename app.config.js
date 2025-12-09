@@ -58,6 +58,7 @@ export default {
       url: 'https://u.expo.dev/00000000-0000-0000-0000-000000000000',
     },
     ios: {
+      appleTeamId: process.env.APPLE_TEAM_ID,
       supportsTablet: true,
       usesAppleSignIn: true,
       bundleIdentifier: getBundleIdentifier(),
@@ -69,9 +70,13 @@ export default {
       },
       entitlements: {
         'aps-environment': 'production',
+        'com.apple.security.application-groups': [
+          `group.${getBundleIdentifier()}`,
+        ],
       },
       infoPlist: {
         UIBackgroundModes: ['remote-notification'],
+        WhistleAppGroup: `group.${getBundleIdentifier()}`,
       },
     },
     android: {
@@ -100,6 +105,7 @@ export default {
       'expo-updates',
       'expo-video',
       'expo-router',
+      '@bacons/apple-targets',
       [
         'expo-splash-screen',
         {
@@ -146,13 +152,13 @@ export default {
           sounds: ['./assets/audio/whistle.wav'],
         },
       ],
-      [
-        './plugins/withWhistleNotifications',
-        {
-          postUrl: getPostUrl(),
-          appGroup: `group.${getBundleIdentifier()}`,
-        },
-      ],
+      // [
+      //   './plugins/withWhistleNotifications',
+      //   {
+      //     postUrl: getPostUrl(),
+      //     appGroup: `group.${getBundleIdentifier()}`,
+      //   },
+      // ],
     ],
     experiments: {
       typedRoutes: true,

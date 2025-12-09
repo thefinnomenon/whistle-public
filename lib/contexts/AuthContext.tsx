@@ -1,4 +1,4 @@
-import { env } from '@/lib/env'
+import { env, isProduction } from '@/lib/env'
 import { initializeFCMToken, setupTokenRefreshListener } from '@/lib/fcm'
 import { addUser, getUser } from '@/lib/firebase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -25,7 +25,10 @@ const ONBOARDING_KEY = 'hasCompletedOnboarding'
 const auth = getAuth()
 const db = getFirestore()
 const WhistleSessionModule = requireNativeModule('WhistleSessionModule') as
-  | { setSession: (authToken: string) => void }
+  | {
+      setSession: (authToken: string) => void
+      setPostUrl?: (url: string) => void
+    }
   | undefined
 
 interface AuthContextType {
@@ -80,6 +83,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         '[WhistleSession] Setting native session for user',
         fbUser.uid
       )
+      const postUrl = isProduction()
+        ? 'https://us-east1-whistle-91e9b.cloudfunctions.net/submitPredictionFromNotification'
+        : 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
+      if (WhistleSessionModule.setPostUrl) {
+        WhistleSessionModule.setPostUrl(postUrl)
+        console.log('[WhistleSession] Set native post URL:', postUrl)
+      }
       WhistleSessionModule.setSession(sessionToken)
     } catch (error) {
       console.warn('[WhistleSession] Failed to set native session', error)

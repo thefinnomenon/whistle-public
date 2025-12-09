@@ -173,10 +173,31 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   private func post(choiceId: String) {
     let info = Bundle.main.infoDictionary ?? [:]
+    let appGroup: String = {
+      if let group = info["WhistleAppGroup"] as? String, !group.isEmpty {
+        return group
+      }
+      if let bundleId = Bundle.main.bundleIdentifier, bundleId.contains(".dev") {
+        return "group.com.finnternet.whistle.dev"
+      }
+      return "group.com.finnternet.whistle"
+    }()
+
+    let defaults = UserDefaults(suiteName: appGroup)
+    let defaultUrl = {
+      if let bundleId = Bundle.main.bundleIdentifier, bundleId.contains(".dev") {
+        return "https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification"
+      }
+      return "https://us-east1-whistle-91e9b.cloudfunctions.net/submitPredictionFromNotification"
+    }()
+
     let urlString =
-      (info["WhistlePostURL"] as? String) ??
-      "https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification"
-    print("[WhistleExtension] Using WhistlePostURL:", urlString)
+      defaults?.string(forKey: "WhistlePostURL") ??
+      defaultUrl
+
+    print("[WhistleExtension] App group:", appGroup)
+    print("[WhistleExtension] WhistlePostURL (defaults):", defaults?.string(forKey: "WhistlePostURL") as Any)
+    print("[WhistleExtension] WhistlePostURL (final):", urlString)
     guard
       let url = URL(string: urlString),
       let qId = questionId,
@@ -197,9 +218,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       "prediction": choiceId,
     ]
 
-    let appGroup =
-      (info["WhistleAppGroup"] as? String) ?? "group.com.finnternet.whistle.dev"
-    if let defaults = UserDefaults(suiteName: appGroup) {
+    if let defaults = defaults {
       let authToken = defaults.string(forKey: "WhistleAuthToken")
       print("[WhistleExtension] Defaults found tokenNil=\(authToken == nil)")
       if let authToken {
