@@ -50,7 +50,7 @@ export default {
     scheme: getAppScheme(),
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
-    runtimeVersion: '1.0.0',
+    runtimeVersion: '2.0.0',
     updates: {
       enabled: false,
       checkAutomatically: 'ON_LOAD',

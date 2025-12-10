@@ -1,7 +1,7 @@
 {
   "name": "whistle",
   "main": "expo-router/entry",
-  "version": "1.0.5",
+  "version": "2.0.6",
   "scripts": {
     "start:dev": "expo start --dev-client --tunnel",
     "start:prod": "expo start --dev-client",
@@ -18,6 +18,8 @@
     "build:prod": "eas build --profile production",
     "build:prod:ios": "eas build --profile production --platform ios",
     "build:prod:android": "eas build --profile production --platform android",
+    "submit:ios": "eas submit --platform ios --latest --profile production",
+    "submit:android": "eas submit --platform android",
     "fb:deploy:functions:dev": "firebase use dev && cd functions && npm run deploy:functions",
     "fb:deploy:functions:prod": "firebase use prod && cd functions && npm run deploy:functions",
     "fb:deploy:rules:dev": "firebase use dev && cd functions && npm run deploy:rules",
