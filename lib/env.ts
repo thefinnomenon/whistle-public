@@ -12,7 +12,5 @@ export const env = {
   SENTRY_DSN: process.env.EXPO_PUBLIC_SENTRY_DSN || '',
   RESEND_API_KEY: process.env.EXPO_PUBLIC_RESEND_API_KEY || '',
   EMAIL_FROM: process.env.EMAIL_FROM || 'configure@example.com',
-  WHISTLE_TOKEN_ENDPOINT:
-    process.env.EXPO_PUBLIC_WHISTLE_TOKEN_ENDPOINT ||
-    'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/issueWhistleToken',
+  WHISTLE_TOKEN_ENDPOINT: process.env.EXPO_PUBLIC_WHISTLE_TOKEN_ENDPOINT || '',
 }

@@ -12,6 +12,8 @@ export default function HomePage() {
   const { user, loading: authLoading, signInWithGoogle, signOut } = useAuth()
   const [games, setGames] = useState<Game[]>([])
   const [loading, setLoading] = useState(true)
+  const [sendingTest, setSendingTest] = useState(false)
+  const [testStatus, setTestStatus] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -36,6 +38,34 @@ export default function HomePage() {
 
     return () => unsubscribe()
   }, [user])
+
+  const sendTestQuestion = async () => {
+    if (!user) return
+    setSendingTest(true)
+    setTestStatus(null)
+    try {
+      const idToken = await user.getIdToken()
+      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
+      const url = `https://us-east1-${projectId}.cloudfunctions.net/sendTestQuestion`
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      })
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}))
+        throw new Error(body?.error || `HTTP ${resp.status}`)
+      }
+      const body = await resp.json()
+      setTestStatus(`Sent: ${body.sent || 0}, Failed: ${body.failed || 0}`)
+    } catch (err: any) {
+      console.error('Failed to send test question', err)
+      setTestStatus(`Error: ${err.message || err}`)
+    } finally {
+      setSendingTest(false)
+    }
+  }
 
   if (authLoading) {
     return (
@@ -100,6 +130,13 @@ export default function HomePage() {
               Create Game
             </Link>
             <button
+              onClick={sendTestQuestion}
+              disabled={sendingTest}
+              className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 disabled:opacity-50"
+            >
+              {sendingTest ? 'Sending...' : 'Send Test Question'}
+            </button>
+            <button
               onClick={signOut}
               className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
             >
@@ -111,6 +148,9 @@ export default function HomePage() {
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b">
             <h2 className="text-2xl font-semibold">Games</h2>
+            {testStatus && (
+              <p className="text-sm text-gray-600 mt-2">{testStatus}</p>
+            )}
           </div>
 
           <div className="divide-y">

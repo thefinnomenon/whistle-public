@@ -173,31 +173,32 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   private func post(choiceId: String) {
     let info = Bundle.main.infoDictionary ?? [:]
-    let appGroup: String = {
-      if let group = info["WhistleAppGroup"] as? String, !group.isEmpty {
-        return group
-      }
-      if let bundleId = Bundle.main.bundleIdentifier, bundleId.contains(".dev") {
-        return "group.com.finnternet.whistle.dev"
-      }
-      return "group.com.finnternet.whistle"
-    }()
+    guard
+      let appGroup = info["WhistleAppGroup"] as? String,
+      !appGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      print("[WhistleExtension] Missing WhistleAppGroup in plist")
+      extensionContext?.dismissNotificationContentExtension()
+      return
+    }
 
-    let defaults = UserDefaults(suiteName: appGroup)
-    let defaultUrl = {
-      if let bundleId = Bundle.main.bundleIdentifier, bundleId.contains(".dev") {
-        return "https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification"
-      }
-      return "https://us-east1-whistle-91e9b.cloudfunctions.net/submitPredictionFromNotification"
-    }()
+    guard let defaults = UserDefaults(suiteName: appGroup) else {
+      print("[WhistleExtension] Unable to load defaults for appGroup \(appGroup)")
+      extensionContext?.dismissNotificationContentExtension()
+      return
+    }
 
-    let urlString =
-      defaults?.string(forKey: "WhistlePostURL") ??
-      defaultUrl
+    guard
+      let urlString = defaults.string(forKey: "WhistlePostURL")?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !urlString.isEmpty
+    else {
+      print("[WhistleExtension] Missing WhistlePostURL in defaults for group \(appGroup)")
+      extensionContext?.dismissNotificationContentExtension()
+      return
+    }
 
     print("[WhistleExtension] App group:", appGroup)
-    print("[WhistleExtension] WhistlePostURL (defaults):", defaults?.string(forKey: "WhistlePostURL") as Any)
-    print("[WhistleExtension] WhistlePostURL (final):", urlString)
+    print("[WhistleExtension] WhistlePostURL (defaults):", urlString)
     guard
       let url = URL(string: urlString),
       let qId = questionId,
@@ -218,14 +219,10 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       "prediction": choiceId,
     ]
 
-    if let defaults = defaults {
-      let authToken = defaults.string(forKey: "WhistleAuthToken")
-      print("[WhistleExtension] Defaults found tokenNil=\(authToken == nil)")
-      if let authToken {
-        request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-      }
-    } else {
-      print("[WhistleExtension] Unable to load defaults for appGroup \(appGroup)")
+    let authToken = defaults.string(forKey: "WhistleAuthToken")
+    print("[WhistleExtension] Defaults found tokenNil=\(authToken == nil)")
+    if let authToken {
+      request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
     }
 
     if let body = try? JSONSerialization.data(withJSONObject: payload, options: []) {

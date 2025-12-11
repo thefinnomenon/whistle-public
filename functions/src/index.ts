@@ -206,6 +206,120 @@ exports.submitPredictionFromNotification = onRequest(
   }
 )
 
+// Send a test question notification to a single user (hardcoded email)
+exports.sendTestQuestion = onRequest(async (req, res) => {
+  // Basic CORS for admin dashboard
+  res.set('Access-Control-Allow-Origin', '*')
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('')
+    return
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed')
+    return
+  }
+
+  try {
+    const authHeader = req.headers.authorization || ''
+    const idToken =
+      authHeader.startsWith('Bearer ') && authHeader.slice('Bearer '.length)
+    if (!idToken) {
+      res.status(401).json({ error: 'Missing bearer token' })
+      return
+    }
+
+    await admin.auth().verifyIdToken(idToken)
+
+    const targetEmail = 'configure@example.com'
+    const userRecord = await admin.auth().getUserByEmail(targetEmail)
+    const uid = userRecord.uid
+
+    const userDoc = await admin.firestore().doc(`users/${uid}`).get()
+    const tokensMap = (userDoc.data()?.tokens as any) || {}
+    const tokens: string[] = Object.values(tokensMap)
+      .map((t: any) => t?.token)
+      .filter((t: any) => typeof t === 'string' && t.length > 0)
+
+    if (!tokens.length) {
+      res.status(400).json({ error: 'No device tokens for target user' })
+      return
+    }
+
+    const now = Date.now()
+    const questionId = `test-${now}`
+    const gameId = 'test'
+    const collapseId = `test_${now}`
+    const questionText = 'Is this a test question?'
+    const choices = [
+      { id: 'yes', value: 'Yes' },
+      { id: 'no', value: 'No' },
+    ]
+
+    const baseData = {
+      type: 'question',
+      gameId,
+      questionId,
+      question: questionText,
+      sentAt: now.toString(),
+      engineTag: 'manual_test',
+      collapseId,
+      choices: JSON.stringify(choices),
+      timeoutAt: (now + 30_000).toString(),
+    }
+
+    const message: admin.messaging.MulticastMessage = {
+      tokens,
+      notification: {
+        title: '🏈 Test Question',
+        body: questionText,
+      },
+      data: baseData,
+      android: {
+        priority: 'high',
+        ttl: 10,
+        collapseKey: collapseId,
+        notification: {
+          channelId: 'default',
+          tag: collapseId,
+          priority: 'high',
+          sound: 'whistle',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            category: 'question',
+            sound: 'whistle.wav',
+          },
+        },
+        headers: {
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'apns-collapse-id': collapseId,
+          'apns-expiration': Math.floor((now + 30_000) / 1000).toString(),
+        },
+      },
+    }
+
+    const response = await admin.messaging().sendEachForMulticast(message)
+    res.json({
+      sent: response.successCount,
+      failed: response.failureCount,
+      results: response.responses.map((r) => ({
+        success: r.success,
+        error: r.error?.message,
+      })),
+    })
+  } catch (error) {
+    console.error('[sendTestQuestion] Error:', error)
+    res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
 // Send notification to game topic when game starts (state changes to "open")
 exports.notifyGameStart = onDocumentUpdated('games/{gameId}', async (event) => {
   const { gameId } = event.params

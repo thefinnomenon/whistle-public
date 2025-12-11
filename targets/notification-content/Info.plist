@@ -21,6 +21,6 @@
     <string>$(PRODUCT_MODULE_NAME).NotificationViewController</string>
   </dict>
   <key>WhistleAppGroup</key>
-  <string>$(APP_GROUP_ID)</string>
+  <string>group.com.finnternet.whistle</string>
 </dict>
 </plist>

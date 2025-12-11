@@ -5,7 +5,4 @@ module.exports = (config) => ({
     'com.apple.security.application-groups':
       config.ios.entitlements['com.apple.security.application-groups'],
   },
-  buildSettings: {
-    APP_GROUP_ID: `group.${config.ios.bundleIdentifier}`,
-  },
 })
