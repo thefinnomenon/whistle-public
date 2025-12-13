@@ -33,7 +33,8 @@ yarn-error.*
 # local env files
 .env
 .env*.local
-# Note: .env.development, .env.staging, .env.production are tracked
+.env.development
+.env.production
 # Only ignore .env.local files which contain sensitive local overrides
 
 # typescript

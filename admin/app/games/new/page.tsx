@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { collection, addDoc, Timestamp } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { apiRequest } from '@/lib/api'
+import { useAuth } from '@/components/AuthProvider'
 
 // Import NFL teams type from parent project
 type NFL_Team =
@@ -49,6 +49,7 @@ const NFL_TEAMS: { code: NFL_Team; name: string }[] = [
 
 export default function NewGamePage() {
   const router = useRouter()
+  const { user } = useAuth()
 
   const [homeTeam, setHomeTeam] = useState<NFL_Team | ''>('')
   const [awayTeam, setAwayTeam] = useState<NFL_Team | ''>('')
@@ -75,29 +76,34 @@ export default function NewGamePage() {
       return
     }
 
+    if (!user) {
+      alert('You must be signed in')
+      return
+    }
+
     setLoading(true)
 
     try {
-      // Combine date and time into a Timestamp
       const dateTimeString = `${startDate}T${startTime}`
       const startDateTime = new Date(dateTimeString)
 
-      await addDoc(collection(db, 'games'), {
-        homeTeam,
-        awayTeam,
-        startTime: Timestamp.fromDate(startDateTime),
-        prize: parseFloat(prize) || 0,
-        state: 'scheduled',
-        userCount: 0,
-        leaderboard: [],
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+      await apiRequest<{ id: string }>('/api/games', {
+        method: 'POST',
+        body: {
+          homeTeam,
+          awayTeam,
+          startTime: startDateTime.toISOString(),
+          prize: parseFloat(prize) || 0,
+          state: 'scheduled',
+          userCount: 0,
+          leaderboard: [],
+        },
       })
 
       router.push('/')
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating game:', error)
-      alert('Failed to create game')
+      alert(`Failed to create game: ${error.message || error}`)
       setLoading(false)
     }
   }

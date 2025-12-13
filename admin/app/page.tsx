@@ -5,6 +5,7 @@ import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/components/AuthProvider'
 import Link from 'next/link'
+import { apiRequest } from '@/lib/api'
 
 import type { Game } from '@/types'
 
@@ -44,20 +45,12 @@ export default function HomePage() {
     setSendingTest(true)
     setTestStatus(null)
     try {
-      const idToken = await user.getIdToken()
-      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
-      const url = `https://us-east1-${projectId}.cloudfunctions.net/sendTestQuestion`
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-        },
-      })
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body?.error || `HTTP ${resp.status}`)
-      }
-      const body = await resp.json()
+      const body = await apiRequest<{ sent?: number; failed?: number }>(
+        '/api/games/test-question',
+        {
+          method: 'POST',
+        }
+      )
       setTestStatus(`Sent: ${body.sent || 0}, Failed: ${body.failed || 0}`)
     } catch (err: any) {
       console.error('Failed to send test question', err)

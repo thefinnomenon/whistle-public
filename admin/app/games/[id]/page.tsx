@@ -2,9 +2,9 @@
 
 import { useAuth } from '@/components/AuthProvider'
 import { db } from '@/lib/firebase'
+import { apiRequest } from '@/lib/api'
 import {
   Timestamp,
-  addDoc,
   collection,
   doc,
   onSnapshot,
@@ -385,14 +385,18 @@ export default function GamePage() {
     if (!game) return
 
     try {
-      await updateDoc(doc(db, 'games', gameId), {
-        state: newState,
-        ...(newState === 'open' ? { openedAt: Timestamp.now() } : {}),
-        ...(newState === 'resolved' ? { closedAt: Timestamp.now() } : {}),
-      })
-    } catch (error) {
+      if (newState === 'open') {
+        await apiRequest('/api/games/' + gameId + '/start', { method: 'POST' })
+      } else if (newState === 'resolved') {
+        await apiRequest('/api/games/' + gameId + '/end', { method: 'POST' })
+      } else {
+        await updateDoc(doc(db, 'games', gameId), {
+          state: newState,
+        })
+      }
+    } catch (error: any) {
       console.error('Error updating game state:', error)
-      alert('Failed to update game state')
+      alert(`Failed to update game state: ${error.message || error}`)
     }
   }
 
@@ -401,11 +405,20 @@ export default function GamePage() {
     newState: Question['state']
   ) => {
     try {
-      await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
-        state: newState,
-        ...(newState === 'closed' ? { closedAt: Timestamp.now() } : {}),
-        ...(newState === 'resolved' ? { resolvedAt: Timestamp.now() } : {}),
-      })
+      if (newState === 'closed') {
+        await apiRequest(`/api/games/${gameId}/questions/${questionId}/close`, {
+          method: 'POST',
+        })
+      } else if (newState === 'cancelled') {
+        await apiRequest(`/api/games/${gameId}/questions/${questionId}/cancel`, {
+          method: 'POST',
+        })
+      } else {
+        await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
+          state: newState,
+          ...(newState === 'resolved' ? { resolvedAt: Timestamp.now() } : {}),
+        })
+      }
     } catch (error) {
       console.error('Error updating question state:', error)
       alert('Failed to update question state')
@@ -414,11 +427,9 @@ export default function GamePage() {
 
   const resolveQuestion = async (questionId: string, answer: boolean) => {
     try {
-      await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
-        state: 'resolved',
-        answer: answer,
-        resolvedAt: Timestamp.now(),
-        changedAt: Timestamp.now(),
+      await apiRequest(`/api/games/${gameId}/questions/${questionId}/resolve`, {
+        method: 'POST',
+        body: { answer },
       })
     } catch (error) {
       console.error('Error resolving question:', error)
@@ -434,22 +445,19 @@ export default function GamePage() {
       .replace('[AWAYTEAM]', game.awayTeam)
 
     try {
-      const questionData: Omit<Question, 'id'> = {
-        question: questionText,
-        type: 'YESNO',
-        choices: [{id: 'yes', value: 'Yes'}, {id: 'no', value: 'No'}],
-        state: 'open',
-        timeoutAt: (Date.now() + 30 * 1000).toString(), // 30 seconds from now (ms string)
-        triggeredAt: Timestamp.now(),
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-      }
-
-      if (selectedEngineTag) {
-        questionData.engineTag = selectedEngineTag
-      }
-
-      await addDoc(collection(db, 'games', gameId, 'questions'), questionData)
+      await apiRequest(`/api/games/${gameId}/questions`, {
+        method: 'POST',
+        body: {
+          question: questionText,
+          choices: [
+            { id: 'yes', value: 'Yes' },
+            { id: 'no', value: 'No' },
+          ],
+          timeoutAt: (Date.now() + 30 * 1000).toString(),
+          engineTag: selectedEngineTag || '',
+          type: 'YESNO',
+        },
+      })
     } catch (error) {
       console.error('Error creating question:', error)
       alert('Failed to create question')
