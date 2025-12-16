@@ -22,6 +22,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private var hasExpiredHandled = false
   private var notificationViewedAt: TimeInterval?
   private var notificationSentAt: TimeInterval?
+  private var notificationReceivedAt: TimeInterval?
   private let userDefaults: UserDefaults? = {
     guard
       let info = Bundle.main.infoDictionary,
@@ -237,7 +238,13 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       request.httpBody = data
     }
 
-    URLSession.shared.dataTask(with: request).resume()
+    // Use ephemeral session with short timeout to avoid blocking extension
+    let config = URLSessionConfiguration.ephemeral
+    config.timeoutIntervalForRequest = 2
+    config.timeoutIntervalForResource = 2
+
+    let session = URLSession(configuration: config)
+    session.dataTask(with: request).resume()
   }
 
   override func viewDidLoad() {
@@ -284,6 +291,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     gameId = notification.request.content.userInfo["gameId"] as? String
     timeoutAt = parseTimeout(notification.request.content.userInfo["timeoutAt"])
     notificationSentAt = parseTimeout(notification.request.content.userInfo["sentAt"])
+    notificationReceivedAt = parseTimeout(notification.request.content.userInfo["notificationReceivedAt"])
 
     // Track notification viewed event
     var eventProps: [String: Any] = [
@@ -452,6 +460,11 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     // Include timestamp of when notification was sent
     if let sentAt = notificationSentAt {
       payload["notificationSentAt"] = sentAt
+    }
+
+    // Include timestamp of when notification was received on device
+    if let receivedAt = notificationReceivedAt {
+      payload["notificationReceivedAt"] = receivedAt
     }
 
     // Include question timeout for server-side time remaining calculation

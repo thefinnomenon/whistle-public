@@ -17,23 +17,26 @@ if (!group) {
   process.exit(1)
 }
 
-const plistPath = path.join(
-  projectRoot,
-  'targets',
-  'notification-content',
-  'Info.plist'
-)
+const plistPaths = [
+  path.join(projectRoot, 'targets', 'notification-content', 'Info.plist'),
+  path.join(projectRoot, 'targets', 'notification-service', 'Info.plist'),
+]
 
 const key = '<key>WhistleAppGroup</key>'
 const pattern = new RegExp(`${key}\\s*<string>.*?<\\/string>`)
 const replacement = `${key}\n  <string>${group}</string>`
 
-const content = fs.readFileSync(plistPath, 'utf8')
-const next = pattern.test(content)
-  ? content.replace(pattern, replacement)
-  : content.replace('</dict>', `  ${key}\n  <string>${group}</string>\n</dict>`)
+plistPaths.forEach((plistPath) => {
+  const content = fs.readFileSync(plistPath, 'utf8')
+  const next = pattern.test(content)
+    ? content.replace(pattern, replacement)
+    : content.replace(
+        '</dict>',
+        `  ${key}\n  <string>${group}</string>\n</dict>`
+      )
 
-fs.writeFileSync(plistPath, next)
-console.log(
-  `[set-extension-group] Set WhistleAppGroup to ${group} (mode: ${mode})`
-)
+  fs.writeFileSync(plistPath, next)
+  console.log(
+    `[set-extension-group] Set WhistleAppGroup to ${group} in ${path.basename(path.dirname(plistPath))} (mode: ${mode})`
+  )
+})

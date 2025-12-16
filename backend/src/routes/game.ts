@@ -210,6 +210,7 @@ router.post('/test-question', async (_req, res) => {
           aps: {
             category: 'question',
             sound: 'whistle.wav',
+            'mutable-content': 1,
           },
         },
         headers: {
@@ -313,6 +314,7 @@ router.post('/:gameId/questions', async (req, res) => {
           aps: {
             category: 'question',
             sound: 'whistle.wav',
+            'mutable-content': 1,
           },
         },
         headers: {
@@ -505,6 +507,7 @@ router.post(
       prediction,
       notificationViewedAt,
       notificationSentAt,
+      notificationReceivedAt,
       source,
       questionTimeoutAt,
     } = req.body || {}
@@ -554,15 +557,52 @@ router.post(
         .collection('predictions')
         .doc(questionId)
 
+      // Derive timing metrics (ms) when data is available
+      const createdAtMs = Date.now()
+      const deliveryMs =
+        notificationSentAt !== undefined && notificationReceivedAt !== undefined
+          ? notificationReceivedAt - notificationSentAt
+          : undefined
+      const openMs =
+        notificationReceivedAt !== undefined &&
+        notificationViewedAt !== undefined
+          ? notificationViewedAt - notificationReceivedAt
+          : undefined
+      const respondMs =
+        notificationReceivedAt !== undefined
+          ? createdAtMs - notificationReceivedAt
+          : undefined
+      const timeRemainingAtReceive =
+        notificationReceivedAt !== undefined && questionTimeoutAt !== undefined
+          ? questionTimeoutAt - notificationReceivedAt
+          : undefined
+      const timeRemainingAtOpen =
+        notificationViewedAt !== undefined && questionTimeoutAt !== undefined
+          ? questionTimeoutAt - notificationViewedAt
+          : undefined
+
       const payload: any = {
         prediction,
         source,
-        notificationViewedAt,
-        notificationSentAt,
         questionTimeoutAt,
         timeRemaining,
         createdAt: now,
+        createdAtMs,
       }
+
+      if (notificationViewedAt !== undefined)
+        payload.notificationViewedAt = notificationViewedAt
+      if (notificationSentAt !== undefined)
+        payload.notificationSentAt = notificationSentAt
+      if (notificationReceivedAt !== undefined)
+        payload.notificationReceivedAt = notificationReceivedAt
+      if (deliveryMs !== undefined) payload.deliveryMs = deliveryMs
+      if (openMs !== undefined) payload.openMs = openMs
+      if (respondMs !== undefined) payload.respondMs = respondMs
+      if (timeRemainingAtReceive !== undefined)
+        payload.timeRemainingAtReceive = timeRemainingAtReceive
+      if (timeRemainingAtOpen !== undefined)
+        payload.timeRemainingAtOpen = timeRemainingAtOpen
 
       await Promise.all([
         predictionRef.set(payload, { merge: true }),
@@ -574,15 +614,25 @@ router.post(
         questionId,
         userId,
         prediction,
-        notificationViewedAt,
-        notificationSentAt,
         source,
       }
 
-      if (timeRemaining !== undefined) {
-        eventProps.timeRemaining = timeRemaining
+      if (notificationViewedAt !== undefined)
+        eventProps.notificationViewedAt = notificationViewedAt
+      if (notificationSentAt !== undefined)
+        eventProps.notificationSentAt = notificationSentAt
+      if (notificationReceivedAt !== undefined)
+        eventProps.notificationReceivedAt = notificationReceivedAt
+      if (deliveryMs !== undefined) eventProps.deliveryMs = deliveryMs
+      if (openMs !== undefined) eventProps.openMs = openMs
+      if (respondMs !== undefined) eventProps.respondMs = respondMs
+      if (timeRemainingAtReceive !== undefined)
+        eventProps.timeRemainingAtReceive = timeRemainingAtReceive
+      if (timeRemainingAtOpen !== undefined)
+        eventProps.timeRemainingAtOpen = timeRemainingAtOpen
+      if (timeRemaining !== undefined) eventProps.timeRemaining = timeRemaining
+      if (timeRemaining !== undefined)
         eventProps.timeRemainingSeconds = Math.floor(timeRemaining / 1000)
-      }
 
       trackEvent('prediction_submitted', eventProps, userId)
 
