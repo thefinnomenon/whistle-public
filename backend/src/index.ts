@@ -10,7 +10,7 @@ import gameRouter, {
 import logsRouter from './routes/logs'
 
 Sentry.init({
-  //enabled: process.env.NODE_ENV === 'production',
+  enabled: process.env.NODE_ENV === 'production',
   dsn: process.env.SENTRY_DSN,
   tracesSampleRate: 0.1,
   environment: process.env.NODE_ENV,

@@ -10,12 +10,6 @@ const getAppName = () => {
   return 'Whistle'
 }
 
-const getAppSlug = () => {
-  if (IS_DEV) return 'whistle-dev'
-  if (IS_STAGING) return 'whistle-staging'
-  return 'whistle'
-}
-
 const getAppScheme = () => {
   if (IS_DEV) return 'whistle-dev'
   if (IS_STAGING) return 'whistle-staging'
@@ -152,13 +146,6 @@ export default {
           sounds: ['./assets/audio/whistle.wav'],
         },
       ],
-      // [
-      //   './plugins/withWhistleNotifications',
-      //   {
-      //     postUrl: getPostUrl(),
-      //     appGroup: `group.${getBundleIdentifier()}`,
-      //   },
-      // ],
     ],
     experiments: {
       typedRoutes: true,

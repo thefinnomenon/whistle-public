@@ -1,5 +1,6 @@
-import { Router } from 'express'
 import * as Sentry from '@sentry/node'
+import { Router } from 'express'
+import { trackEvent } from '../lib/mixpanel'
 import { optionalAuthMiddleware } from '../middleware/optionalAuth'
 
 const router = Router()
@@ -17,6 +18,40 @@ router.post('/error', optionalAuthMiddleware, async (req, res) => {
     }
     return scope
   })
+
+  trackEvent(
+    'client_error_logged',
+    {
+      userId: req.user?.uid,
+      message,
+      source: context?.source,
+      hasUser: !!req.user?.uid,
+    },
+    req.user?.uid
+  )
+
+  return res.json({ ok: true })
+})
+
+// POST /api/log/event
+// Accepts: { eventName: string, properties?: any }
+// Logs events from notification content extension and other clients
+router.post('/event', optionalAuthMiddleware, async (req, res) => {
+  const { eventName, properties } = req.body || {}
+
+  if (!eventName) {
+    return res.status(400).json({ error: 'eventName is required' })
+  }
+
+  trackEvent(
+    eventName,
+    {
+      ...properties,
+      userId: req.user?.uid,
+    },
+    req.user?.uid
+  )
+
   return res.json({ ok: true })
 })
 

@@ -1,11 +1,22 @@
-import { Router } from 'express'
 import { createHmac } from 'crypto'
+import { Router } from 'express'
+import { trackEvent } from '../lib/mixpanel'
 import { authMiddleware } from '../middleware/auth'
 
 const router = Router()
 
 router.get('/me', authMiddleware, async (req, res) => {
   console.log('[auth/me] user', req.user?.uid)
+
+  trackEvent(
+    'auth_me',
+    {
+      userId: req.user?.uid,
+      hasEmail: !!req.user?.email,
+    },
+    req.user?.uid
+  )
+
   return res.json({ uid: req.user?.uid, email: req.user?.email || null })
 })
 
@@ -47,9 +58,28 @@ router.post('/issue-token', authMiddleware, async (req, res) => {
 
     const token = `${data}.${signature}`
 
+    trackEvent(
+      'token_issued',
+      {
+        userId: uid,
+        expiresAt: exp,
+      },
+      uid
+    )
+
     return res.json({ token, expiresAt: exp })
   } catch (err) {
     console.error('[issue-token] error', err)
+
+    trackEvent(
+      'token_issue_error',
+      {
+        userId: uid,
+        error: String(err),
+      },
+      uid
+    )
+
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })

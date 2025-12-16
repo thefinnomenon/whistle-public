@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { admin, db } from '../firebase'
+import { trackEvent } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
@@ -37,9 +38,27 @@ router.post('/', async (req, res) => {
       docRef = await db.collection('games').add(payload)
     }
 
+    trackEvent(
+      'game_created',
+      {
+        gameId: docRef.id,
+        userId: req.user?.uid,
+        startTime: startTime || null,
+      },
+      req.user?.uid
+    )
+
     return res.json({ id: docRef.id, ...payload })
   } catch (err) {
     console.error('[games/create] error', err)
+    trackEvent(
+      'game_create_error',
+      {
+        userId: req.user?.uid,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -49,9 +68,26 @@ router.post('/:id/start', async (req, res) => {
   console.log('[games/start] game', id)
   try {
     await startGameById(id)
+    trackEvent(
+      'game_started',
+      {
+        gameId: id,
+        userId: req.user?.uid,
+      },
+      req.user?.uid
+    )
     return res.json({ ok: true })
   } catch (err) {
     console.error('[games/start] error', err)
+    trackEvent(
+      'game_start_error',
+      {
+        gameId: id,
+        userId: req.user?.uid,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     if ((err as any)?.status === 404) {
       return res.status(404).json({ error: 'Game not found' })
     }
@@ -86,9 +122,29 @@ router.post('/:id/end', async (req, res) => {
     const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
     await sendNotificationsToGameUsers(id, message)
 
+    trackEvent(
+      'game_ended',
+      {
+        gameId: id,
+        userId: req.user?.uid,
+        homeTeam: game.homeTeam,
+        awayTeam: game.awayTeam,
+      },
+      req.user?.uid
+    )
+
     return res.json({ ok: true })
   } catch (err) {
     console.error('[games/end] error', err)
+    trackEvent(
+      'game_end_error',
+      {
+        gameId: id,
+        userId: req.user?.uid,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -165,17 +221,19 @@ router.post('/test-question', async (_req, res) => {
       },
     }
 
-    const response = await admin.messaging().sendEachForMulticast(message)
-    return res.json({
-      sent: response.successCount,
-      failed: response.failureCount,
-      results: response.responses.map((r) => ({
-        success: r.success,
-        error: r.error?.message,
-      })),
+    await admin.messaging().sendEachForMulticast(message)
+
+    trackEvent('test_question_sent', {
+      targetEmail,
+      questionId,
     })
+
+    return res.json({ success: true })
   } catch (error) {
     console.error('[sendTestQuestion] Error:', error)
+    trackEvent('test_question_error', {
+      error: String(error),
+    })
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -268,9 +326,31 @@ router.post('/:gameId/questions', async (req, res) => {
 
     await admin.messaging().send(questionNotification as any)
 
+    trackEvent(
+      'question_created',
+      {
+        gameId,
+        questionId: qRef.id,
+        type,
+        timeoutAt,
+        choices,
+        engineTag: engineTag || '',
+      },
+      req.user?.uid
+    )
+
     return res.json({ id: qRef.id })
   } catch (err) {
     console.error('[questions/create] error', err)
+    trackEvent(
+      'question_create_error',
+      {
+        gameId,
+        userId: req.user?.uid,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -293,9 +373,28 @@ router.post('/:gameId/questions/:questionId/close', async (req, res) => {
         { merge: true }
       )
     await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+    trackEvent(
+      'question_closed',
+      {
+        gameId,
+        questionId,
+      },
+      req.user?.uid
+    )
+
     return res.json({ ok: true })
   } catch (err) {
     console.error('[questions/close] error', err)
+    trackEvent(
+      'question_close_error',
+      {
+        gameId,
+        questionId,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -319,9 +418,28 @@ router.post('/:gameId/questions/:questionId/cancel', async (req, res) => {
       )
     await calculateScores(gameId, questionId, { revertIfResolved: true })
     await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+    trackEvent(
+      'question_cancelled',
+      {
+        gameId,
+        questionId,
+      },
+      req.user?.uid
+    )
+
     return res.json({ ok: true })
   } catch (err) {
     console.error('[questions/cancel] error', err)
+    trackEvent(
+      'question_cancel_error',
+      {
+        gameId,
+        questionId,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -350,12 +468,141 @@ router.post('/:gameId/questions/:questionId/resolve', async (req, res) => {
       )
     await calculateScores(gameId, questionId)
     await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+    trackEvent(
+      'question_resolved',
+      {
+        gameId,
+        questionId,
+        answer,
+      },
+      req.user?.uid
+    )
+
     return res.json({ ok: true })
   } catch (err) {
     console.error('[questions/resolve] error', err)
+    trackEvent(
+      'question_resolve_error',
+      {
+        gameId,
+        questionId,
+        error: String(err),
+      },
+      req.user?.uid
+    )
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
+
+// PREDICTION ROUTES
+router.post(
+  '/:gameId/questions/:questionId/prediction',
+  authMiddleware,
+  async (req, res) => {
+    const { gameId, questionId } = req.params
+    const {
+      prediction,
+      notificationViewedAt,
+      notificationSentAt,
+      source,
+      questionTimeoutAt,
+    } = req.body || {}
+
+    console.log(
+      '[questions/prediction]',
+      gameId,
+      questionId,
+      'prediction',
+      prediction,
+      'source',
+      source
+    )
+
+    if (!req.user?.uid) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    if (!prediction) {
+      return res.status(400).json({ error: 'prediction is required' })
+    }
+
+    try {
+      const userId = req.user.uid
+      const now = admin.firestore.FieldValue.serverTimestamp()
+      const nowMs = Date.now()
+
+      // Calculate time remaining server-side for accuracy
+      let timeRemaining: number | undefined
+      if (questionTimeoutAt) {
+        timeRemaining = questionTimeoutAt - nowMs
+      }
+
+      const predictionRef = db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .doc(questionId)
+        .collection('predictions')
+        .doc(userId)
+
+      const userPredictionRef = db
+        .collection('users')
+        .doc(userId)
+        .collection('games')
+        .doc(gameId)
+        .collection('predictions')
+        .doc(questionId)
+
+      const payload: any = {
+        prediction,
+        source,
+        notificationViewedAt,
+        notificationSentAt,
+        questionTimeoutAt,
+        timeRemaining,
+        createdAt: now,
+      }
+
+      await Promise.all([
+        predictionRef.set(payload, { merge: true }),
+        userPredictionRef.set(payload, { merge: true }),
+      ])
+
+      const eventProps: any = {
+        gameId,
+        questionId,
+        userId,
+        prediction,
+        notificationViewedAt,
+        notificationSentAt,
+        source,
+      }
+
+      if (timeRemaining !== undefined) {
+        eventProps.timeRemaining = timeRemaining
+        eventProps.timeRemainingSeconds = Math.floor(timeRemaining / 1000)
+      }
+
+      trackEvent('prediction_submitted', eventProps, userId)
+
+      return res.json({ ok: true })
+    } catch (err) {
+      console.error('[questions/prediction] error', err)
+      trackEvent(
+        'prediction_submit_error',
+        {
+          gameId,
+          questionId,
+          userId: req.user?.uid,
+          error: String(err),
+        },
+        req.user?.uid
+      )
+      return res.status(500).json({ error: 'Internal Server Error' })
+    }
+  }
+)
 
 export default router
 

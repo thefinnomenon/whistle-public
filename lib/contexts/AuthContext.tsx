@@ -22,12 +22,16 @@ import { analytics } from '../analytics'
 type FirebaseUser = FirebaseAuthTypes.User
 
 const ONBOARDING_KEY = 'hasCompletedOnboarding'
+const WHISTLE_TOKEN_KEY = 'whistleToken'
+const WHISTLE_TOKEN_EXPIRY_KEY = 'whistleTokenExpiry'
+const TOKEN_REFRESH_THRESHOLD_DAYS = 7
+
 const auth = getAuth()
 const db = getFirestore()
 const WhistleSessionModule = requireNativeModule('WhistleSessionModule') as
   | {
       setSession: (authToken: string) => void
-      setPostUrl?: (url: string) => void
+      setDomain?: (url: string) => void
     }
   | undefined
 
@@ -58,36 +62,84 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const idToken = await fbUser.getIdToken()
       let sessionToken = idToken
+      let shouldFetchNewToken = true
 
+      // Check if we have a cached token that's still valid
       try {
-        const tokenUrl = `${env.DOMAIN}/issueWhistleToken`
-        const resp = await fetch(tokenUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${idToken}`,
-            'Content-Type': 'application/json',
-          },
-        })
-        if (resp.ok) {
-          const data = await resp.json()
-          if (data?.token) {
-            sessionToken = data.token
+        const cachedToken = await AsyncStorage.getItem(
+          `${WHISTLE_TOKEN_KEY}_${fbUser.uid}`
+        )
+        const cachedExpiry = await AsyncStorage.getItem(
+          `${WHISTLE_TOKEN_EXPIRY_KEY}_${fbUser.uid}`
+        )
+
+        if (cachedToken && cachedExpiry) {
+          const expiryTime = parseInt(cachedExpiry, 10)
+          const now = Date.now() / 1000 // Convert to seconds
+          const daysSinceIssued =
+            (now - (expiryTime - 30 * 24 * 60 * 60)) / (60 * 60 * 24) // 30 days total lifespan
+
+          // Refresh token if it's been more than 7 days since issuance
+          if (daysSinceIssued <= TOKEN_REFRESH_THRESHOLD_DAYS) {
+            console.log(
+              `[WhistleSession] Using cached token (${daysSinceIssued.toFixed(1)} days old)`
+            )
+            sessionToken = cachedToken
+            shouldFetchNewToken = false
+          } else {
+            console.log(
+              `[WhistleSession] Cached token is old (${daysSinceIssued.toFixed(1)} days), refreshing`
+            )
           }
-        } else {
-          console.warn('[WhistleSession] issueWhistleToken failed', resp.status)
         }
       } catch (err) {
-        console.warn('[WhistleSession] Failed to fetch long-lived token', err)
+        console.warn('[WhistleSession] Failed to read cached token', err)
+      }
+
+      // Fetch new token if needed
+      if (shouldFetchNewToken) {
+        try {
+          const tokenUrl = `${env.DOMAIN}/api/issue-token`
+          const resp = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${idToken}`,
+              'Content-Type': 'application/json',
+            },
+          })
+          if (resp.ok) {
+            const data = await resp.json()
+            if (data?.token && data?.expiresAt) {
+              sessionToken = data.token
+              // Cache the token and expiry
+              await AsyncStorage.setItem(
+                `${WHISTLE_TOKEN_KEY}_${fbUser.uid}`,
+                data.token
+              )
+              await AsyncStorage.setItem(
+                `${WHISTLE_TOKEN_EXPIRY_KEY}_${fbUser.uid}`,
+                String(data.expiresAt)
+              )
+              console.log('[WhistleSession] Cached new token')
+            }
+          } else {
+            console.warn(
+              '[WhistleSession] issueWhistleToken failed',
+              resp.status
+            )
+          }
+        } catch (err) {
+          console.warn('[WhistleSession] Failed to fetch long-lived token', err)
+        }
       }
 
       console.log(
         '[WhistleSession] Setting native session for user',
         fbUser.uid
       )
-      const postUrl = `${env.DOMAIN}/submitPredictionFromNotification`
-      if (WhistleSessionModule.setPostUrl) {
-        WhistleSessionModule.setPostUrl(postUrl)
-        console.log('[WhistleSession] Set native post URL:', postUrl)
+      if (WhistleSessionModule.setDomain && env.DOMAIN) {
+        WhistleSessionModule.setDomain(env.DOMAIN)
+        console.log('[WhistleSession] Set native domain:', env.DOMAIN)
       }
       WhistleSessionModule.setSession(sessionToken)
     } catch (error) {
@@ -278,6 +330,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         analytics.track('User Signed Out', {
           user_id: firebaseUser.uid,
         })
+
+        // Clear cached token
+        try {
+          await AsyncStorage.removeItem(
+            `${WHISTLE_TOKEN_KEY}_${firebaseUser.uid}`
+          )
+          await AsyncStorage.removeItem(
+            `${WHISTLE_TOKEN_EXPIRY_KEY}_${firebaseUser.uid}`
+          )
+        } catch (err) {
+          console.warn('[WhistleSession] Failed to clear cached token', err)
+        }
       }
 
       if (WhistleSessionModule?.setSession) {

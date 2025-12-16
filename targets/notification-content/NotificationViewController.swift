@@ -20,6 +20,8 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private var totalDurationMs: Double?
   private var choiceButtons: [UIButton] = []
   private var hasExpiredHandled = false
+  private var notificationViewedAt: TimeInterval?
+  private var notificationSentAt: TimeInterval?
   private let userDefaults: UserDefaults? = {
     guard
       let info = Bundle.main.infoDictionary,
@@ -32,14 +34,10 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private func backendBaseURL() -> URL? {
     guard
       let defaults = userDefaults,
-      let postUrlString = defaults.string(forKey: "WhistlePostURL"),
-      let postUrl = URL(string: postUrlString)
+      let domainString = defaults.string(forKey: "WhistleDomain"),
+      let domain = URL(string: domainString)
     else { return nil }
-    var comps = URLComponents(url: postUrl, resolvingAgainstBaseURL: false)
-    comps?.path = ""
-    comps?.query = nil
-    comps?.fragment = nil
-    return comps?.url
+    return domain
   }
 
   private func getNetworkStatus() -> [String: Any] {
@@ -166,6 +164,82 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     }.resume()
   }
 
+  private func logEvent(_ eventName: String, properties: [String: Any] = [:]) {
+    guard let base = backendBaseURL() else { return }
+    let url = base.appendingPathComponent("api/log/event")
+
+    var eventProperties = properties
+    eventProperties["source"] = "ios_notification_content_extension"
+    eventProperties["questionId"] = questionId ?? ""
+    eventProperties["gameId"] = gameId ?? ""
+    eventProperties["notificationId"] = notificationId ?? ""
+
+    // Add device info
+    let device = UIDevice.current
+    var deviceContext: [String: Any] = [
+      "systemName": device.systemName,
+      "systemVersion": device.systemVersion,
+      "model": device.model,
+      "localizedModel": device.localizedModel,
+      "name": device.name,
+      "identifierForVendor": device.identifierForVendor?.uuidString ?? "",
+    ]
+
+    // Battery info
+    device.isBatteryMonitoringEnabled = true
+    deviceContext["batteryLevel"] = device.batteryLevel
+    deviceContext["batteryState"] = String(describing: device.batteryState)
+
+    // Screen info
+    let screen = UIScreen.main
+    deviceContext["screenBounds"] = [
+      "width": screen.bounds.width,
+      "height": screen.bounds.height,
+    ]
+    deviceContext["screenScale"] = screen.scale
+    deviceContext["screenNativeScale"] = screen.nativeScale
+
+    // Memory info
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+    let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+      }
+    }
+    if kerr == KERN_SUCCESS {
+      deviceContext["memoryUsageMB"] = Double(info.resident_size) / 1024.0 / 1024.0
+    }
+
+    // Locale and timezone
+    deviceContext["locale"] = Locale.current.identifier
+    deviceContext["timezone"] = TimeZone.current.identifier
+
+    // Network status
+    deviceContext["networkStatus"] = getNetworkStatus()
+
+    eventProperties["device"] = deviceContext
+
+    let payload: [String: Any] = [
+      "eventName": eventName,
+      "properties": eventProperties,
+    ]
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+    if let token = userDefaults?.string(forKey: "WhistleAuthToken") {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    if let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+      request.httpBody = data
+    }
+
+    URLSession.shared.dataTask(with: request).resume()
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     view.backgroundColor = .systemBackground
@@ -201,6 +275,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   func didReceive(_ notification: UNNotification) {
     print("[WhistleExtension] didReceive payload:", notification.request.content.userInfo)
+    notificationViewedAt = Date().timeIntervalSince1970 * 1000
     lastNotificationContent = notification.request.content
     titleLabel.text = notification.request.content.title
     bodyLabel.text = notification.request.content.body
@@ -208,6 +283,20 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     questionId = notification.request.content.userInfo["questionId"] as? String
     gameId = notification.request.content.userInfo["gameId"] as? String
     timeoutAt = parseTimeout(notification.request.content.userInfo["timeoutAt"])
+    notificationSentAt = parseTimeout(notification.request.content.userInfo["sentAt"])
+
+    // Track notification viewed event
+    var eventProps: [String: Any] = [
+      "questionText": notification.request.content.body,
+    ]
+    if let timeout = timeoutAt {
+      eventProps["timeoutAt"] = timeout
+      let remaining = timeout - Date().timeIntervalSince1970 * 1000
+      eventProps["remainingTimeMs"] = remaining
+      eventProps["alreadyExpired"] = remaining <= 0
+    }
+    logEvent("notification_viewed", properties: eventProps)
+
     if questionId == nil || gameId == nil {
       logError("Missing questionId or gameId in notification", context: [
         "payload": notification.request.content
@@ -329,59 +418,49 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   }
 
   private func post(choiceId: String) {
-    let info = Bundle.main.infoDictionary ?? [:]
     guard
-      let appGroup = info["WhistleAppGroup"] as? String,
-      !appGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-      print("[WhistleExtension] Missing WhistleAppGroup in plist")
-      extensionContext?.dismissNotificationContentExtension()
-      return
-    }
-
-    guard let defaults = UserDefaults(suiteName: appGroup) else {
-      print("[WhistleExtension] Unable to load defaults for appGroup \(appGroup)")
-      extensionContext?.dismissNotificationContentExtension()
-      return
-    }
-
-    guard
-      let urlString = defaults.string(forKey: "WhistlePostURL")?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !urlString.isEmpty
-    else {
-      print("[WhistleExtension] Missing WhistlePostURL in defaults for group \(appGroup)")
-      extensionContext?.dismissNotificationContentExtension()
-      return
-    }
-
-    print("[WhistleExtension] App group:", appGroup)
-    print("[WhistleExtension] WhistlePostURL (defaults):", urlString)
-    guard
-      let url = URL(string: urlString),
+      let base = backendBaseURL(),
       let qId = questionId,
       let gId = gameId
     else {
-      print("[WhistleExtension] Missing URL or ids, dismissing")
-      logError("Missing URL or ids", context: [
-        "urlString": urlString,
+      print("[WhistleExtension] Missing domain or ids, dismissing")
+      logError("Missing domain or ids", context: [
         "questionId": questionId ?? "nil",
         "gameId": gameId ?? "nil",
       ])
       return
     }
 
+    let url = base.appendingPathComponent("api/games/\(gId)/questions/\(qId)/prediction")
+
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-    let payload: [String: Any] = [
+    var payload: [String: Any] = [
       "questionId": qId,
       "gameId": gId,
       "prediction": choiceId,
+      "source": "ios-notification-content-extension",
     ]
 
-    let authToken = defaults.string(forKey: "WhistleAuthToken")
-    print("[WhistleExtension] Defaults found tokenNil=\(authToken == nil)")
+    // Include timestamp of when notification was viewed for response time tracking
+    if let viewedAt = notificationViewedAt {
+      payload["notificationViewedAt"] = viewedAt
+    }
+
+    // Include timestamp of when notification was sent
+    if let sentAt = notificationSentAt {
+      payload["notificationSentAt"] = sentAt
+    }
+
+    // Include question timeout for server-side time remaining calculation
+    if let timeout = timeoutAt {
+      payload["questionTimeoutAt"] = timeout
+    }
+
+    let authToken = userDefaults?.string(forKey: "WhistleAuthToken")
+    print("[WhistleExtension] Auth token found: \(authToken != nil)")
     if let authToken {
       request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
     } else {
@@ -502,6 +581,18 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     if hasExpiredHandled { return }
     hasExpiredHandled = true
     countdownTimer?.invalidate()
+
+    // Track timeout event - expired while user was viewing
+    var timeoutProps: [String: Any] = [
+      "expiredWhileViewing": true,
+      "alreadyExpiredOnOpen": false,
+    ]
+    if let viewedAt = notificationViewedAt {
+      let viewDurationMs = Date().timeIntervalSince1970 * 1000 - viewedAt
+      timeoutProps["viewDurationMs"] = viewDurationMs
+    }
+    logEvent("question_timed_out", properties: timeoutProps)
+
     dismissAllImmediate()
   }
 
@@ -514,6 +605,18 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     gridStack.isUserInteractionEnabled = false
     gridStack.alpha = 0.5
     bodyLabel.text = "Question closed"
+
+    // Track timeout event - already expired when opened
+    var timeoutProps: [String: Any] = [
+      "expiredWhileViewing": false,
+      "alreadyExpiredOnOpen": true,
+    ]
+    if let timeout = timeoutAt, let viewedAt = notificationViewedAt {
+      let expiredForMs = viewedAt - timeout
+      timeoutProps["expiredForMs"] = expiredForMs
+    }
+    logEvent("question_timed_out", properties: timeoutProps)
+
     dismissAllWithDelay()
   }
 }
