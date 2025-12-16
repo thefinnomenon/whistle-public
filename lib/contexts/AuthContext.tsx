@@ -1,4 +1,4 @@
-import { env, isProduction } from '@/lib/env'
+import { env } from '@/lib/env'
 import { initializeFCMToken, setupTokenRefreshListener } from '@/lib/fcm'
 import { addUser, getUser } from '@/lib/firebase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -60,7 +60,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let sessionToken = idToken
 
       try {
-        const resp = await fetch(env.WHISTLE_TOKEN_ENDPOINT, {
+        const tokenUrl = `${env.DOMAIN}/issueWhistleToken`
+        const resp = await fetch(tokenUrl, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${idToken}`,
@@ -83,9 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         '[WhistleSession] Setting native session for user',
         fbUser.uid
       )
-      const postUrl = isProduction()
-        ? 'https://us-east1-whistle-91e9b.cloudfunctions.net/submitPredictionFromNotification'
-        : 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
+      const postUrl = `${env.DOMAIN}/submitPredictionFromNotification`
       if (WhistleSessionModule.setPostUrl) {
         WhistleSessionModule.setPostUrl(postUrl)
         console.log('[WhistleSession] Set native post URL:', postUrl)

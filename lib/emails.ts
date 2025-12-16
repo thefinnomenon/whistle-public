@@ -1,7 +1,7 @@
 import { render } from '@react-email/render'
+import { ReactElement } from 'react'
 import { Resend } from 'resend'
 import { env } from './env'
-import { ReactElement } from 'react'
 
 const resend = new Resend(env.RESEND_API_KEY)
 
@@ -20,6 +20,10 @@ export async function sendEmail({
 }: SendEmailOptions) {
   try {
     const html = await render(react)
+
+    if (!from) {
+      throw new Error('EMAIL_FROM is not set')
+    }
 
     const { data, error } = await resend.emails.send({
       from,

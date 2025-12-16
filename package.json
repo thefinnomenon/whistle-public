@@ -5,6 +5,7 @@
   "scripts": {
     "start:dev": "expo start --dev-client --tunnel",
     "start:prod": "expo start --dev-client",
+    "prebuild:dev": "EXPO_PUBLIC_APP_ENV=development expo prebuild",
     "build:dev": "EXPO_PUBLIC_APP_ENV=development node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=development eas build --profile development",
     "build:dev:ios": "EXPO_PUBLIC_APP_ENV=development node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=development eas build --profile development --platform ios",
     "build:dev:android": "EXPO_PUBLIC_APP_ENV=development node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=development eas build --profile development --platform android",
@@ -15,6 +16,7 @@
     "build:preview": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile preview",
     "build:preview:ios": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile preview --platform ios",
     "build:preview:android": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile preview --platform android",
+    "prebuild:prod": "EXPO_PUBLIC_APP_ENV=production expo prebuild",
     "build:prod": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile production",
     "build:prod:ios": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile production --platform ios",
     "build:prod:android": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile production --platform android",

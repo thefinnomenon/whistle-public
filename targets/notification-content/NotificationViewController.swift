@@ -1,6 +1,7 @@
 import UIKit
 import UserNotifications
 import UserNotificationsUI
+import Network
 
 class NotificationViewController: UIViewController, UNNotificationContentExtension {
   private let titleLabel = UILabel()
@@ -13,11 +14,157 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private var questionId: String?
   private var gameId: String?
   private var notificationId: String?
+  private var lastNotificationContent: UNNotificationContent?
   private var countdownTimer: Timer?
   private var timeoutAt: TimeInterval?
   private var totalDurationMs: Double?
   private var choiceButtons: [UIButton] = []
   private var hasExpiredHandled = false
+  private let userDefaults: UserDefaults? = {
+    guard
+      let info = Bundle.main.infoDictionary,
+      let appGroup = info["WhistleAppGroup"] as? String,
+      !appGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return nil }
+    return UserDefaults(suiteName: appGroup)
+  }()
+
+  private func backendBaseURL() -> URL? {
+    guard
+      let defaults = userDefaults,
+      let postUrlString = defaults.string(forKey: "WhistlePostURL"),
+      let postUrl = URL(string: postUrlString)
+    else { return nil }
+    var comps = URLComponents(url: postUrl, resolvingAgainstBaseURL: false)
+    comps?.path = ""
+    comps?.query = nil
+    comps?.fragment = nil
+    return comps?.url
+  }
+
+  private func getNetworkStatus() -> [String: Any] {
+    let monitor = NWPathMonitor()
+    let path = monitor.currentPath
+
+    var status: [String: Any] = [
+      "reachable": path.status == .satisfied,
+      "connectionType": "none"
+    ]
+
+    if path.status == .satisfied {
+      if path.usesInterfaceType(.wifi) {
+        status["connectionType"] = "wifi"
+      } else if path.usesInterfaceType(.cellular) {
+        status["connectionType"] = "cellular"
+      } else if path.usesInterfaceType(.wiredEthernet) {
+        status["connectionType"] = "ethernet"
+      } else {
+        status["connectionType"] = "other"
+      }
+    }
+
+    return status
+  }
+
+  private func logError(_ message: String, context: [String: Any] = [:]) {
+    guard let base = backendBaseURL() else { return }
+    let url = base.appendingPathComponent("api/log/error")
+
+    var mergedContext = context.merging(["source": "ios_notification_content_extension"]) { $1 }
+    // Attach notification and device info for richer context
+    if let content = lastNotificationContent {
+      var notificationContext: [String: Any] = [
+        "title": content.title,
+        "body": content.body,
+        "subtitle": content.subtitle,
+        "userInfo": content.userInfo,
+        "identifier": notificationId ?? "",
+        "categoryIdentifier": content.categoryIdentifier,
+        "threadIdentifier": content.threadIdentifier,
+        "questionId": questionId ?? "",
+        "gameId": gameId ?? "",
+      ]
+
+      if #available(iOS 15.0, *) {
+        notificationContext["interruptionLevel"] = String(describing: content.interruptionLevel)
+        notificationContext["relevanceScore"] = content.relevanceScore
+      }
+
+      if #available(iOS 16.0, *) {
+        notificationContext["filterCriteria"] = content.filterCriteria ?? ""
+      }
+
+      mergedContext["notification"] = notificationContext
+    }
+
+    let device = UIDevice.current
+    var deviceContext: [String: Any] = [
+      "systemName": device.systemName,
+      "systemVersion": device.systemVersion,
+      "model": device.model,
+      "localizedModel": device.localizedModel,
+      "name": device.name,
+      "identifierForVendor": device.identifierForVendor?.uuidString ?? "",
+    ]
+
+    // Battery info
+    device.isBatteryMonitoringEnabled = true
+    deviceContext["batteryLevel"] = device.batteryLevel
+    deviceContext["batteryState"] = String(describing: device.batteryState)
+
+    // Screen info
+    let screen = UIScreen.main
+    deviceContext["screenBounds"] = [
+      "width": screen.bounds.width,
+      "height": screen.bounds.height,
+    ]
+    deviceContext["screenScale"] = screen.scale
+    deviceContext["screenNativeScale"] = screen.nativeScale
+
+    // Memory info
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+    let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+      }
+    }
+    if kerr == KERN_SUCCESS {
+      deviceContext["memoryUsageMB"] = Double(info.resident_size) / 1024.0 / 1024.0
+    }
+
+    // Locale and timezone
+    deviceContext["locale"] = Locale.current.identifier
+    deviceContext["timezone"] = TimeZone.current.identifier
+
+    // Network status
+    deviceContext["networkStatus"] = getNetworkStatus()
+
+    mergedContext["device"] = deviceContext
+
+    var payload: [String: Any] = [
+      "message": message,
+      "context": mergedContext,
+    ]
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+    if let token = userDefaults?.string(forKey: "WhistleAuthToken") {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    if let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+      request.httpBody = data
+    }
+
+    URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+      DispatchQueue.main.async {
+        self?.dismissAllImmediate()
+      }
+    }.resume()
+  }
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -54,12 +201,18 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   func didReceive(_ notification: UNNotification) {
     print("[WhistleExtension] didReceive payload:", notification.request.content.userInfo)
+    lastNotificationContent = notification.request.content
     titleLabel.text = notification.request.content.title
     bodyLabel.text = notification.request.content.body
     notificationId = notification.request.identifier
     questionId = notification.request.content.userInfo["questionId"] as? String
     gameId = notification.request.content.userInfo["gameId"] as? String
     timeoutAt = parseTimeout(notification.request.content.userInfo["timeoutAt"])
+    if questionId == nil || gameId == nil {
+      logError("Missing questionId or gameId in notification", context: [
+        "payload": notification.request.content
+      ])
+    }
 
     gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
     choiceButtons.removeAll()
@@ -69,6 +222,10 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
        let data = choicesString.data(using: .utf8),
        let decoded = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
       choicesArray = decoded
+    } else {
+      logError("Failed to decode choices", context: [
+        "choices": notification.request.content.userInfo["choices"] ?? "nil"
+      ])
     }
 
     // Build a 2-column grid
@@ -205,7 +362,11 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       let gId = gameId
     else {
       print("[WhistleExtension] Missing URL or ids, dismissing")
-      extensionContext?.dismissNotificationContentExtension()
+      logError("Missing URL or ids", context: [
+        "urlString": urlString,
+        "questionId": questionId ?? "nil",
+        "gameId": gameId ?? "nil",
+      ])
       return
     }
 
@@ -223,12 +384,15 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     print("[WhistleExtension] Defaults found tokenNil=\(authToken == nil)")
     if let authToken {
       request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+    } else {
+      logError("No auth token found")
+      return
     }
 
     if let body = try? JSONSerialization.data(withJSONObject: payload, options: []) {
       request.httpBody = body
     } else {
-      extensionContext?.dismissNotificationContentExtension()
+      logError("Failed to encode payload", context: ["payload": payload])
       return
     }
 
@@ -238,13 +402,22 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     let task = session.dataTask(with: request) { data, response, error in
       if let error = error {
         print("[WhistleExtension] POST error:", error.localizedDescription)
-      } else if let http = response as? HTTPURLResponse {
+        self.logError("Submit prediction error", context: ["error": error.localizedDescription])
+        return
+      }
+      if let http = response as? HTTPURLResponse {
         let bodyString = data.flatMap { String(data: $0, encoding: .utf8) } ?? "<nil>"
         print("[WhistleExtension] POST status: \(http.statusCode) body: \(bodyString)")
-      } else {
-        print("[WhistleExtension] POST completed with unknown response")
+        if !(200...299).contains(http.statusCode) {
+          self.logError("Submit prediction non-2xx", context: ["status": http.statusCode, "body": bodyString])
+          return
+        }
+        // Success path: dismiss after successful post
+        self.dismissAllImmediate()
+        return
       }
-      self.dismissAllImmediate()
+      print("[WhistleExtension] POST completed with unknown response")
+      self.logError("Submit prediction completed with unknown response")
     }
     print("[WhistleExtension] Resuming POST task")
     task.resume()

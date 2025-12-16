@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
 import { useAuth } from '@/components/AuthProvider'
-import Link from 'next/link'
 import { apiRequest } from '@/lib/api'
+import { db } from '@/lib/firebase'
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
+import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 import type { Game } from '@/types'
 
