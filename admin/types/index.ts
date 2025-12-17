@@ -45,6 +45,7 @@ export type Game = {
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   leaderboard?: LeaderboardItem[]
+  statistics?: GameStatistics
 }
 
 export type LeaderboardItem = {
@@ -61,13 +62,35 @@ export type Choice = {
   value: string
 }
 
+export type MetricSummary = {
+  avg: number
+  p50: number
+  p95: number
+}
+
+export type QuestionStatistics = {
+  totalResponses: number
+  correctCount: number
+  incorrectCount: number
+  playerCount?: number
+  responseRate?: number
+  unanswered?: number
+  nseMissingCount?: number
+  delivery?: MetricSummary
+  open?: MetricSummary
+  respond?: MetricSummary
+  timeRemainingAtReceive?: MetricSummary
+  timeRemainingAtOpen?: MetricSummary
+  choiceCounts?: Record<string, number>
+}
+
 export type Question = {
   id: string
   state: QuestionState
   type: QuestionType
   question: string
   choices: Choice[]
-  answer?: boolean
+  answer?: 'yes' | 'no'
   timeoutAt: string
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
@@ -77,29 +100,23 @@ export type Question = {
   cancelledAt?: FirestoreTimestamp
   changedAt?: FirestoreTimestamp
   engineTag?: string
+  statistics?: QuestionStatistics
+}
 
-  // Statistics fields (set when question is closed/resolved/cancelled)
-  totalResponses?: number
-  totalPlayers?: number
-  responseRate?: number
-  latePredictionCount?: number
-  lateResponseRate?: number
-  yesCount?: number
-  noCount?: number
-  correctCount?: number
-  incorrectCount?: number
-  questionOpenTimeMs?: number
-  questionResolutionTimeMs?: number
-  avgResponseTimeMs?: number
-  medianResponseTimeMs?: number
-  p95ResponseTimeMs?: number
-  minResponseTimeMs?: number
-  maxResponseTimeMs?: number
-  avgDeliveryTimeMs?: number
-  medianDeliveryTimeMs?: number
-  p95DeliveryTimeMs?: number
-  minDeliveryTimeMs?: number
-  maxDeliveryTimeMs?: number
+export type GameStatistics = {
+  totalQuestionsAsked: number
+  totalResolved: number
+  totalCancelled: number
+  totalResponses: number
+  totalCorrect: number
+  totalIncorrect: number
+  accuracyRate?: number
+  highestPlayerCount?: number
+  avgResponsesPerQuestion?: number
+  delivery?: MetricSummary
+  open?: MetricSummary
+  respond?: MetricSummary
+  responseRateMetric?: MetricSummary
 }
 
 export type Prediction = {

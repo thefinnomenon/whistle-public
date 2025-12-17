@@ -1,8 +1,8 @@
 'use client'
 
 import { useAuth } from '@/components/AuthProvider'
-import { db } from '@/lib/firebase'
 import { apiRequest } from '@/lib/api'
+import { db } from '@/lib/firebase'
 import {
   Timestamp,
   collection,
@@ -16,8 +16,6 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import React, { useEffect, useState } from 'react'
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -25,11 +23,17 @@ import {
   ResponsiveContainer,
   Tooltip,
   XAxis,
-  YAxis,
+  YAxis
 } from 'recharts'
 
 // Import types from parent project
 import type { Game, Prediction, Question } from '@/types'
+
+const getPercentile = (sortedArray: number[], percentile: number): number => {
+  if (sortedArray.length === 0) return 0
+  const index = Math.ceil((percentile / 100) * sortedArray.length) - 1
+  return sortedArray[Math.max(0, index)]
+}
 
 export default function GamePage() {
   const params = useParams()
@@ -46,6 +50,25 @@ export default function GamePage() {
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set())
   const timerRef = React.useRef<HTMLDivElement>(null)
   const triggeredTimeRef = React.useRef<number>(0)
+  const [playerCountHistory, setPlayerCountHistory] = useState<
+    { t: number; count: number }[]
+  >([])
+
+  const getQuestionStats = React.useCallback((question: Question) => {
+    const stats: any = (question as any).statistics || {}
+    const totalResponses = stats.totalResponses ?? 0
+    const playerCount = stats.playerCount ?? 0
+    const responseRate =
+      stats.responseRate ??
+      (playerCount > 0 ? totalResponses / playerCount : 0)
+
+    return {
+      ...stats,
+      totalResponses,
+      playerCount,
+      responseRate,
+    }
+  }, [])
 
   // Calculate real-time game statistics from questions
   const gameStats = React.useMemo(() => {
@@ -53,11 +76,8 @@ export default function GamePage() {
 
     const resolvedQuestions = questions.filter((q) => q.state === 'resolved')
     const cancelledQuestions = questions.filter((q) => q.state === 'cancelled')
-    const resolvedWithStats = resolvedQuestions.filter(
-      (q) => q.totalResponses !== undefined
-    )
 
-    if (resolvedWithStats.length === 0) {
+    if (resolvedQuestions.length === 0) {
       return {
         totalQuestionsAsked: questions.length,
         totalResolved: resolvedQuestions.length,
@@ -69,104 +89,79 @@ export default function GamePage() {
     let totalResponses = 0
     let totalCorrect = 0
     let totalIncorrect = 0
-    let totalResponseTime = 0
-    let totalDeliveryTime = 0
-    let totalQuestionOpenTime = 0
-    let questionsWithResponseTime = 0
-    let questionsWithDeliveryTime = 0
-    let questionsWithOpenTime = 0
-    const allResponseRates: number[] = []
-    const allResolutionTimes: number[] = []
+    const deliveryAvgs: number[] = []
+    const openAvgs: number[] = []
+    const respondAvgs: number[] = []
+    const responseRates: number[] = []
 
-    resolvedWithStats.forEach((q) => {
-      totalResponses += q.totalResponses || 0
+    resolvedQuestions.forEach((q) => {
+      const stats: any = getQuestionStats(q)
+      totalResponses += stats.totalResponses || 0
 
-      if (q.correctCount !== undefined) {
-        totalCorrect += q.correctCount
-      }
-      if (q.incorrectCount !== undefined) {
-        totalIncorrect += q.incorrectCount
-      }
+      if (typeof stats.correctCount === 'number') totalCorrect += stats.correctCount
+      if (typeof stats.incorrectCount === 'number')
+        totalIncorrect += stats.incorrectCount
 
-      if (q.avgResponseTimeMs !== undefined && q.avgResponseTimeMs > 0) {
-        totalResponseTime += q.avgResponseTimeMs
-        questionsWithResponseTime++
-      }
+      if (typeof stats.delivery?.avg === 'number')
+        deliveryAvgs.push(stats.delivery.avg)
 
-      if (q.avgDeliveryTimeMs !== undefined && q.avgDeliveryTimeMs > 0) {
-        totalDeliveryTime += q.avgDeliveryTimeMs
-        questionsWithDeliveryTime++
-      }
+      if (typeof stats.open?.avg === 'number') openAvgs.push(stats.open.avg)
 
-      if (q.questionOpenTimeMs !== undefined && q.questionOpenTimeMs > 0) {
-        totalQuestionOpenTime += q.questionOpenTimeMs
-        questionsWithOpenTime++
-      }
+      if (typeof stats.respond?.avg === 'number') respondAvgs.push(stats.respond.avg)
 
-      if (q.questionResolutionTimeMs !== undefined && q.questionResolutionTimeMs > 0) {
-        allResolutionTimes.push(q.questionResolutionTimeMs)
-      }
-
-      if (q.responseRate !== undefined) {
-        allResponseRates.push(q.responseRate)
-      }
+      if (typeof stats.responseRate === 'number')
+        responseRates.push(stats.responseRate)
     })
 
-    // Helper function to calculate percentile
-    const getPercentile = (sortedArray: number[], percentile: number): number => {
-      if (sortedArray.length === 0) return 0
-      const index = Math.ceil((percentile / 100) * sortedArray.length) - 1
-      return sortedArray[Math.max(0, index)]
-    }
-
+    const totalQuestionsAsked = questions.length
     const avgResponsesPerQuestion =
-      resolvedWithStats.length > 0 ? totalResponses / resolvedWithStats.length : 0
-    const avgResponseRate =
-      allResponseRates.length > 0
-        ? allResponseRates.reduce((a, b) => a + b, 0) / allResponseRates.length
-        : 0
-    const avgResponseTimeMs =
-      questionsWithResponseTime > 0
-        ? totalResponseTime / questionsWithResponseTime
-        : 0
-    const avgDeliveryTimeMs =
-      questionsWithDeliveryTime > 0
-        ? totalDeliveryTime / questionsWithDeliveryTime
-        : 0
-    const avgQuestionOpenTimeMs =
-      questionsWithOpenTime > 0 ? totalQuestionOpenTime / questionsWithOpenTime : 0
-
-    // Calculate resolution time statistics
-    allResolutionTimes.sort((a, b) => a - b)
-    const avgResolutionTimeMs =
-      allResolutionTimes.length > 0
-        ? allResolutionTimes.reduce((a, b) => a + b, 0) / allResolutionTimes.length
-        : 0
-    const medianResolutionTimeMs = getPercentile(allResolutionTimes, 50)
-    const p95ResolutionTimeMs = getPercentile(allResolutionTimes, 95)
+      totalQuestionsAsked > 0 ? totalResponses / totalQuestionsAsked : 0
 
     const totalPredictions = totalCorrect + totalIncorrect
     const accuracyRate =
       totalPredictions > 0 ? (totalCorrect / totalPredictions) * 100 : 0
 
+    const currentPlayerCount =
+      playerCountHistory[playerCountHistory.length - 1]?.count ??
+      (game as any)?.playerCount ??
+      (game as any)?.userCount ??
+      0
+    const peakFromHistory =
+      playerCountHistory.length > 0
+        ? Math.max(...playerCountHistory.map((p) => p.count))
+        : 0
+    const peakPlayerCount =
+      Math.max(
+        peakFromHistory,
+        (game as any)?.statistics?.highestPlayerCount ?? 0
+      ) || undefined
+
+    const buildMetric = (arr: number[]) =>
+      arr.length
+        ? {
+            avg: arr.reduce((a, b) => a + b, 0) / arr.length,
+            p50: getPercentile([...arr].sort((a, b) => a - b), 50),
+            p95: getPercentile([...arr].sort((a, b) => a - b), 95),
+          }
+        : undefined
+
     return {
-      totalQuestionsAsked: questions.length,
+      totalQuestionsAsked,
       totalResolved: resolvedQuestions.length,
       totalCancelled: cancelledQuestions.length,
       totalResponses,
       avgResponsesPerQuestion: Math.round(avgResponsesPerQuestion * 100) / 100,
-      avgResponseRate: Math.round(avgResponseRate * 100) / 100,
       totalCorrect,
       totalIncorrect,
       accuracyRate: Math.round(accuracyRate * 100) / 100,
-      avgResponseTimeMs: Math.round(avgResponseTimeMs),
-      avgDeliveryTimeMs: Math.round(avgDeliveryTimeMs),
-      avgQuestionOpenTimeMs: Math.round(avgQuestionOpenTimeMs),
-      avgResolutionTimeMs: Math.round(avgResolutionTimeMs),
-      medianResolutionTimeMs: Math.round(medianResolutionTimeMs),
-      p95ResolutionTimeMs: Math.round(p95ResolutionTimeMs),
+      currentPlayerCount,
+      peakPlayerCount,
+      delivery: buildMetric(deliveryAvgs),
+      open: buildMetric(openAvgs),
+      respond: buildMetric(respondAvgs),
+      responseRateMetric: buildMetric(responseRates),
     }
-  }, [questions])
+  }, [getQuestionStats, questions, playerCountHistory, game])
 
   // Calculate statistics by engine tag
   const engineTagStats = React.useMemo(() => {
@@ -185,6 +180,7 @@ export default function GamePage() {
     questions
       .filter((q) => q.state === 'resolved' && q.engineTag)
       .forEach((q) => {
+        const stats = getQuestionStats(q)
         const tag = q.engineTag!
         if (!tagStats[tag]) {
           tagStats[tag] = {
@@ -198,10 +194,10 @@ export default function GamePage() {
         }
 
         tagStats[tag].count++
-        tagStats[tag].totalResponses += q.totalResponses || 0
-        tagStats[tag].totalPlayers += q.totalPlayers || 0
-        tagStats[tag].correctCount += q.correctCount || 0
-        tagStats[tag].incorrectCount += q.incorrectCount || 0
+        tagStats[tag].totalResponses += stats.totalResponses || 0
+        tagStats[tag].totalPlayers += stats.playerCount || 0
+        tagStats[tag].correctCount += stats.correctCount || 0
+        tagStats[tag].incorrectCount += stats.incorrectCount || 0
       })
 
     // Calculate average response rate for each tag
@@ -214,103 +210,113 @@ export default function GamePage() {
     })
 
     return tagStats
-  }, [questions])
+  }, [getQuestionStats, questions])
 
   // Prepare chart data from questions
   const chartData = React.useMemo(() => {
     const resolvedWithStats = questions
-      .filter((q) => q.state === 'resolved' && q.totalResponses !== undefined)
+      .filter((q) => q.state === 'resolved' && q.statistics)
       .sort((a, b) => {
         const aTime = a.createdAt?.toMillis?.() || 0
         const bTime = b.createdAt?.toMillis?.() || 0
         return aTime - bTime
       })
 
-    return resolvedWithStats.map((q, index) => ({
-      questionNum: index + 1,
-      questionName: `Q${index + 1}`,
-      responseRate: q.responseRate || 0,
-      questionOpenTime: q.questionOpenTimeMs ? q.questionOpenTimeMs / 1000 : 0,
-      questionResolutionTime: q.questionResolutionTimeMs
-        ? q.questionResolutionTimeMs / 1000
-        : 0,
-      avgResponseTime: q.avgResponseTimeMs ? q.avgResponseTimeMs / 1000 : 0,
-      avgDeliveryTime: q.avgDeliveryTimeMs ? q.avgDeliveryTimeMs / 1000 : 0,
-      medianResponseTime: q.medianResponseTimeMs
-        ? q.medianResponseTimeMs / 1000
-        : 0,
-      p95ResponseTime: q.p95ResponseTimeMs ? q.p95ResponseTimeMs / 1000 : 0,
-      accuracy:
-        q.totalResponses && q.totalResponses > 0
-          ? ((q.correctCount || 0) / q.totalResponses) * 100
-          : 0,
-      totalResponses: q.totalResponses || 0,
-    }))
-  }, [questions])
+    return resolvedWithStats.map((q, index) => {
+      const stats = getQuestionStats(q)
+      const totalResponses = stats.totalResponses || 0
+      const totalPlayers = stats.playerCount || 0
+      const responseRate =
+        stats.responseRate !== undefined
+          ? stats.responseRate * 100
+          : totalPlayers > 0
+            ? (totalResponses / totalPlayers) * 100
+            : 0
+
+      return {
+        questionNum: index + 1,
+        questionName: `Q${index + 1}`,
+        responseRate,
+        avgResponseTime:
+          stats.respond?.avg !== undefined ? stats.respond.avg / 1000 : 0,
+        avgDeliveryTime:
+          stats.delivery?.avg !== undefined ? stats.delivery.avg / 1000 : 0,
+        medianDeliveryTime:
+          stats.delivery?.p50 !== undefined ? stats.delivery.p50 / 1000 : 0,
+        p95DeliveryTime:
+          stats.delivery?.p95 !== undefined ? stats.delivery.p95 / 1000 : 0,
+        medianResponseTime:
+          stats.respond?.p50 !== undefined ? stats.respond.p50 / 1000 : 0,
+        p95ResponseTime:
+          stats.respond?.p95 !== undefined ? stats.respond.p95 / 1000 : 0,
+        accuracy:
+          totalResponses > 0
+            ? ((stats.correctCount || 0) / totalResponses) * 100
+            : 0,
+        totalResponses,
+      }
+    })
+  }, [getQuestionStats, questions])
 
   // Calculate last question stats
-  const lastQuestionStats = React.useMemo(() => {
-    if (questions.length === 0) return null
+const lastQuestionStats = React.useMemo(() => {
+  if (questions.length === 0) return null
 
-    const lastQuestion = questions[0] // Already sorted by createdAt desc
-    const triggeredTime = lastQuestion.triggeredAt?.toMillis?.() || lastQuestion.createdAt?.toMillis?.() || 0
+  const lastQuestion = questions[0] // Already sorted by createdAt desc
+  const triggeredTime =
+    lastQuestion.triggeredAt?.toMillis?.() || lastQuestion.createdAt?.toMillis?.() || 0
 
-    // Update ref for timer (doesn't cause re-render)
-    triggeredTimeRef.current = triggeredTime
+  // Update ref for timer (doesn't cause re-render)
+  triggeredTimeRef.current = triggeredTime
 
-    // Use live predictions for open/closed questions, otherwise use stored stats
-    let totalResponses = lastQuestion.totalResponses || 0
-    let responseRate = lastQuestion.responseRate || 0
-    let avgResponseTime = lastQuestion.avgResponseTimeMs ? (lastQuestion.avgResponseTimeMs / 1000).toFixed(1) : 'N/A'
-    const totalPlayers = game?.userCount || lastQuestion.totalPlayers || 0
-    const correctCount = lastQuestion.correctCount || 0
-    const incorrectCount = lastQuestion.incorrectCount || 0
-    let accuracy = 0
+  const stats: any = getQuestionStats(lastQuestion)
 
-    if (lastQuestion.state === 'open' || lastQuestion.state === 'closed') {
-      // Calculate live stats from predictions
-      totalResponses = livePredictions.length
-      responseRate = totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+  let totalResponses = stats.totalResponses || 0
+  const totalPlayers = stats.playerCount || 0
+  let responseRate =
+    stats.responseRate !== undefined
+      ? stats.responseRate * 100
+      : totalPlayers > 0
+        ? (totalResponses / totalPlayers) * 100
+        : 0
+  const correctCount = stats.correctCount || 0
+  const incorrectCount = stats.incorrectCount || 0
+  let accuracy = 0
 
-      // Calculate average response time (from when notification was received to when user answered)
-      // This is the most meaningful metric - how quickly users respond after seeing the notification
-      const validResponseTimes = livePredictions
-        .map((p: Prediction) => {
-          const predictionCreatedAt = p.createdAt?.toMillis?.() || 0
-          const receivedAt = p.receivedAt || 0
-          // Response time = time from notification received to answer
-          return receivedAt > 0 && predictionCreatedAt > receivedAt ? predictionCreatedAt - receivedAt : 0
-        })
-        .filter((time: number) => time > 0)
+  const avgResponseMs =
+    typeof stats.respond?.avg === 'number'
+      ? stats.respond.avg
+      : typeof (lastQuestion as any).avgResponseTimeMs === 'number'
+        ? (lastQuestion as any).avgResponseTimeMs
+        : undefined
+  const avgResponseTime =
+    typeof avgResponseMs === 'number' ? (avgResponseMs / 1000).toFixed(1) : '—'
 
-      if (validResponseTimes.length > 0) {
-        const avgMs = validResponseTimes.reduce((a: number, b: number) => a + b, 0) / validResponseTimes.length
-        avgResponseTime = (avgMs / 1000).toFixed(1)
-      } else if (totalResponses > 0) {
-        // If we have responses but no valid times, show 0 instead of N/A
-        avgResponseTime = '0.0'
-      }
-    } else if (lastQuestion.state === 'resolved') {
-      // For resolved questions, calculate accuracy
-      if (correctCount + incorrectCount > 0) {
-        accuracy = (correctCount / (correctCount + incorrectCount)) * 100
-      }
+  if (lastQuestion.state === 'open' || lastQuestion.state === 'closed') {
+    // Calculate live stats from predictions
+    totalResponses = livePredictions.length || totalResponses
+    responseRate = totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+  } else if (lastQuestion.state === 'resolved') {
+    if (correctCount + incorrectCount > 0) {
+      accuracy = (correctCount / (correctCount + incorrectCount)) * 100
     }
+  }
 
-    return {
-      question: lastQuestion.question,
-      engineTag: lastQuestion.engineTag || 'No tag',
-      state: lastQuestion.state,
-      responseRate,
-      avgResponseTime,
-      totalResponses,
-      totalPlayers,
-      triggeredTime, // Return triggeredTime instead of calculating timeSince here
-      correctCount,
-      incorrectCount,
-      accuracy,
-    }
-  }, [questions, livePredictions, game])
+  return {
+    question: lastQuestion.question,
+    engineTag: lastQuestion.engineTag || 'No tag',
+    state: lastQuestion.state,
+    responseRate,
+    avgResponseTime,
+    totalResponses,
+    totalPlayers,
+    triggeredTime, // Return triggeredTime instead of calculating timeSince here
+    correctCount,
+    incorrectCount,
+    accuracy,
+    statistics: stats,
+  }
+}, [getQuestionStats, livePredictions, questions])
 
   useEffect(() => {
     if (!user || !gameId) return
@@ -318,7 +324,8 @@ export default function GamePage() {
     // Listen to game document for live updates
     const gameUnsubscribe = onSnapshot(doc(db, 'games', gameId), (snapshot) => {
       if (snapshot.exists()) {
-        setGame({ id: snapshot.id, ...snapshot.data() } as Game)
+        const nextGame = { id: snapshot.id, ...snapshot.data() } as Game
+        setGame(nextGame)
       }
     })
 
@@ -342,6 +349,30 @@ export default function GamePage() {
       gameUnsubscribe()
       questionsUnsubscribe()
     }
+  }, [user, gameId])
+
+  // Player count history (from backend writer)
+  useEffect(() => {
+    if (!user || !gameId) return
+
+    const q = query(
+      collection(db, 'games', gameId, 'playerCounts'),
+      orderBy('createdAt', 'asc')
+    )
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      const history = snapshot.docs.map((doc) => {
+        const data = doc.data() as any
+        const ts =
+          data.createdAt?.toMillis?.() ??
+          Number(doc.id) ??
+          Date.now()
+        return { t: ts, count: data.count || 0 }
+      })
+      setPlayerCountHistory(history)
+    })
+
+    return () => unsub()
   }, [user, gameId])
 
   // Listen to predictions for the last question (for live stats)
@@ -425,7 +456,7 @@ export default function GamePage() {
     }
   }
 
-  const resolveQuestion = async (questionId: string, answer: boolean) => {
+  const resolveQuestion = async (questionId: string, answer: 'yes' | 'no') => {
     try {
       await apiRequest(`/api/games/${gameId}/questions/${questionId}/resolve`, {
         method: 'POST',
@@ -593,6 +624,24 @@ export default function GamePage() {
                   </div>
                 </div>
 
+                <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                    Current Players
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {gameStats.currentPlayerCount ?? '—'}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                    Peak Players
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {gameStats.peakPlayerCount ?? '—'}
+                  </div>
+                </div>
+
                 {/* Engagement metrics */}
                 {gameStats.avgResponsesPerQuestion !== undefined && (
                   <>
@@ -610,7 +659,9 @@ export default function GamePage() {
                         Avg Response Rate
                       </div>
                       <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                        {gameStats.avgResponseRate}%
+                        {gameStats.responseRateMetric?.avg !== undefined
+                          ? `${(gameStats.responseRateMetric.avg * 100).toFixed(1)}%`
+                          : '—'}
                       </div>
                     </div>
 
@@ -633,69 +684,56 @@ export default function GamePage() {
                     </div>
 
                     {/* Timing metrics */}
-                    {gameStats.avgResponseTimeMs > 0 && (
+                    {gameStats.delivery && (
                       <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
                         <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                          Avg Response Time
+                          Delivery (avg/p50/p95)
                         </div>
-                        <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                          {(gameStats.avgResponseTimeMs / 1000).toFixed(2)}s
+                        <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {(gameStats.delivery.avg / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.delivery.p50 / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.delivery.p95 / 1000).toFixed(2)}s
                         </div>
                       </div>
                     )}
 
-                    {gameStats.avgDeliveryTimeMs > 0 && (
+                    {gameStats.open && (
                       <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
                         <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                          Avg Delivery Time
+                          Open (avg/p50/p95)
                         </div>
-                        <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                          {(gameStats.avgDeliveryTimeMs / 1000).toFixed(2)}s
+                        <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {(gameStats.open.avg / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.open.p50 / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.open.p95 / 1000).toFixed(2)}s
                         </div>
                       </div>
                     )}
 
-                    {gameStats.avgQuestionOpenTimeMs > 0 && (
+                    {gameStats.respond && (
                       <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
                         <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                          Avg Question Open Time
+                          Respond (avg/p50/p95)
                         </div>
-                        <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                          {(gameStats.avgQuestionOpenTimeMs / 1000).toFixed(2)}s
+                        <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {(gameStats.respond.avg / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.respond.p50 / 1000).toFixed(2)}s /{' '}
+                          {(gameStats.respond.p95 / 1000).toFixed(2)}s
                         </div>
                       </div>
                     )}
 
-                    {/* Resolution Time metrics */}
-                    {gameStats.avgResolutionTimeMs > 0 && (
-                      <>
-                        <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
-                          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                            Avg Resolution Time
-                          </div>
-                          <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                            {(gameStats.avgResolutionTimeMs / 1000).toFixed(2)}s
-                          </div>
+                    {gameStats.responseRateMetric && (
+                      <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                        <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                          Response Rate (avg/p50/p95)
                         </div>
-
-                        <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
-                          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                            Median Resolution Time
-                          </div>
-                          <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                            {(gameStats.medianResolutionTimeMs / 1000).toFixed(2)}s
-                          </div>
+                        <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {(gameStats.responseRateMetric.avg * 100).toFixed(1)}% /{' '}
+                          {(gameStats.responseRateMetric.p50 * 100).toFixed(1)}% /{' '}
+                          {(gameStats.responseRateMetric.p95 * 100).toFixed(1)}%
                         </div>
-
-                        <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
-                          <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
-                            P95 Resolution Time
-                          </div>
-                          <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                            {(gameStats.p95ResolutionTimeMs / 1000).toFixed(2)}s
-                          </div>
-                        </div>
-                      </>
+                      </div>
                     )}
                   </>
                 )}
@@ -771,9 +809,9 @@ export default function GamePage() {
                   {isStatsExpanded && (
                     <div className="space-y-6">
                       {/* Response Rate & Engagement Chart */}
-                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
                     <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Response Rate & Engagement Over Time
+                      Response Rate & Engagement
                     </h4>
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={chartData}>
@@ -803,10 +841,47 @@ export default function GamePage() {
                     </ResponsiveContainer>
                   </div>
 
+                  {/* Player Count */}
+                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                      Player Count
+                    </h4>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={playerCountHistory}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="t"
+                          tickFormatter={(t) =>
+                            new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                          }
+                        />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip
+                          labelFormatter={(t) =>
+                            new Date(t as number).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })
+                          }
+                        />
+                        <Legend />
+                        <Line
+                          type="monotone"
+                          dataKey="count"
+                          stroke="#6366f1"
+                          name="Players"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
                   {/* Response Time Chart */}
                   <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
                     <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Response Times Over Time (seconds)
+                      Response Times (seconds)
                     </h4>
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={chartData}>
@@ -847,25 +922,42 @@ export default function GamePage() {
                       Notification Delivery Times (seconds)
                     </h4>
                     <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={chartData}>
+                      <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="questionName" />
                         <YAxis label={{ value: 'Time (seconds)', angle: -90, position: 'insideLeft' }} />
                         <Tooltip />
                         <Legend />
-                        <Bar
+                        <Line
+                          type="monotone"
                           dataKey="avgDeliveryTime"
-                          fill="#14b8a6"
+                          stroke="#14b8a6"
                           name="Avg Delivery Time"
+                          strokeWidth={2}
                         />
-                      </BarChart>
+                        <Line
+                          type="monotone"
+                          dataKey="medianDeliveryTime"
+                          stroke="#0ea5e9"
+                          name="Median Delivery Time"
+                          strokeWidth={2}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="p95DeliveryTime"
+                          stroke="#f97316"
+                          name="95th Percentile"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                        />
+                      </LineChart>
                     </ResponsiveContainer>
                   </div>
 
                   {/* Accuracy Chart */}
                   <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
                     <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Player Accuracy Over Time
+                      Player Accuracy
                     </h4>
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={chartData}>
@@ -885,88 +977,6 @@ export default function GamePage() {
                     </ResponsiveContainer>
                   </div>
 
-                  {/* Question Open Time vs Response Rate Correlation */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Question Open Time vs Response Rate (Correlation)
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis
-                          yAxisId="left"
-                          label={{
-                            value: 'Open Time (seconds)',
-                            angle: -90,
-                            position: 'insideLeft',
-                          }}
-                        />
-                        <YAxis
-                          yAxisId="right"
-                          orientation="right"
-                          label={{
-                            value: 'Response Rate (%)',
-                            angle: 90,
-                            position: 'insideRight',
-                          }}
-                        />
-                        <Tooltip />
-                        <Legend />
-                        <Line
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey="questionOpenTime"
-                          stroke="#f97316"
-                          name="Question Open Time (s)"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="responseRate"
-                          stroke="#3b82f6"
-                          name="Response Rate (%)"
-                          strokeWidth={2}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-400 italic">
-                      This chart shows how long questions were open versus player response rates.
-                      Generally, shorter open times may lead to lower response rates as players have less time to respond.
-                    </div>
-                  </div>
-
-                  {/* Resolution Time Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Question Resolution Times (Close to Resolve)
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis
-                          label={{
-                            value: 'Time (seconds)',
-                            angle: -90,
-                            position: 'insideLeft',
-                          }}
-                        />
-                        <Tooltip />
-                        <Legend />
-                        <Bar
-                          dataKey="questionResolutionTime"
-                          fill="#a855f7"
-                          name="Resolution Time (s)"
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-400 italic">
-                      Time taken to resolve each question after closing (determining the correct answer).
-                      Helps identify how quickly you&apos;re able to determine outcomes.
-                    </div>
-                  </div>
                     </div>
                   )}
                 </div>
@@ -1418,275 +1428,307 @@ export default function GamePage() {
             </Link>
           </div>
 
-          <div className="divide-y">
+              <div className="divide-y">
             {questions.length === 0 ? (
               <div className="px-6 py-8 text-center text-gray-500">
                 No questions yet. Create your first question!
               </div>
             ) : (
-              questions.map((question) => (
-                <div key={question.id} className="px-6 py-4">
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="font-semibold">
-                          {question.question}
-                        </span>
-                        <span
-                          className={`px-2 py-1 rounded text-xs ${
-                            question.state === 'open'
-                              ? 'bg-green-200 text-green-700'
-                              : question.state === 'closed'
-                                ? 'bg-yellow-200 text-yellow-700'
-                                : question.state === 'resolved'
-                                  ? 'bg-blue-200 text-blue-700'
-                                  : 'bg-red-200 text-red-700'
-                          }`}
-                        >
-                          {question.state}
-                        </span>
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        Choices:{' '}
-                        {question.choices
-                          .map((c) => (typeof c === 'string' ? c : c.value))
-                          .join(', ')}
-                      </div>
-                      {question.answer !== undefined && (
-                        <div className="text-sm text-green-600 mt-1">
-                          Answer: {question.answer === true ? 'Yes' : 'No'}
-                        </div>
-                      )}
-                      <div className="text-xs text-gray-500 mt-1">
-                        Created:{' '}
-                        {question.createdAt?.toDate?.()?.toLocaleString()}
-                      </div>
-                      {question.engineTag && (
-                        <div className="mt-1">
-                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
-                            🏷️ {question.engineTag.replace(/_/g, ' ')}
+              questions.map((question) => {
+                const stats = getQuestionStats(question)
+                const totalResponses = stats.totalResponses ?? 0
+                const playerCount = stats.playerCount
+                const totalPlayers = playerCount ?? 0
+                const responseRate =
+                  stats.responseRate !== undefined
+                    ? stats.responseRate * 100
+                    : totalPlayers > 0
+                      ? (totalResponses / totalPlayers) * 100
+                      : 0
+                const unanswered =
+                  stats.unanswered !== undefined
+                    ? stats.unanswered
+                    : playerCount !== undefined
+                      ? Math.max(totalPlayers - totalResponses, 0)
+                      : undefined
+                const accuracy =
+                  stats && totalResponses > 0
+                    ? ((stats.correctCount || 0) / totalResponses) * 100
+                    : undefined
+                const choiceBreakdown: { choiceId: string; count: number; label: string }[] =
+                  stats?.choiceCounts
+                    ? (Object.entries(stats.choiceCounts as Record<string, number>)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([choiceId, count]) => {
+                          const match = question.choices.find((c) =>
+                            typeof c === 'string'
+                              ? c === choiceId
+                              : c.id === choiceId || c.value === choiceId
+                          )
+                          const label =
+                            typeof match === 'string'
+                              ? match
+                              : match?.value || choiceId
+
+                          return {
+                            choiceId,
+                            count,
+                            label,
+                          }
+                        }) as { choiceId: string; count: number; label: string }[])
+                    : []
+
+                return (
+                  <div key={question.id} className="px-6 py-4">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="font-semibold">
+                            {question.question}
+                          </span>
+                          <span
+                            className={`px-2 py-1 rounded text-xs ${
+                              question.state === 'open'
+                                ? 'bg-green-200 text-green-700'
+                                : question.state === 'closed'
+                                  ? 'bg-yellow-200 text-yellow-700'
+                                  : question.state === 'resolved'
+                                    ? 'bg-blue-200 text-blue-700'
+                                    : 'bg-red-200 text-red-700'
+                            }`}
+                          >
+                            {question.state}
                           </span>
                         </div>
+                        <div className="text-sm text-gray-600">
+                          Choices:{' '}
+                          {question.choices
+                            .map((c) => (typeof c === 'string' ? c : c.value))
+                            .join(', ')}
+                        </div>
+                      {question.answer !== undefined && (
+                        <div className="text-sm text-green-600 mt-1">
+                          Answer: {question.answer === 'yes' ? 'Yes' : 'No'}
+                        </div>
                       )}
-
-                      {/* Show statistics for resolved or cancelled questions */}
-                      {(question.state === 'resolved' ||
-                        question.state === 'cancelled') &&
-                        question.totalResponses !== undefined && (
-                          <div className="mt-3">
-                            <button
-                              onClick={() => {
-                                const newExpanded = new Set(expandedQuestions)
-                                if (newExpanded.has(question.id)) {
-                                  newExpanded.delete(question.id)
-                                } else {
-                                  newExpanded.add(question.id)
-                                }
-                                setExpandedQuestions(newExpanded)
-                              }}
-                              className="w-full flex items-center justify-between p-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-xs cursor-pointer transition-colors"
-                            >
-                              <span className="font-semibold text-gray-700 dark:text-gray-300">
-                                📊 Statistics
-                              </span>
-                              <span className="text-lg text-gray-600 dark:text-gray-400">
-                                {expandedQuestions.has(question.id) ? '−' : '+'}
-                              </span>
-                            </button>
-
-                            {expandedQuestions.has(question.id) && (
-                              <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded text-xs space-y-2">
-
-                            {/* Response metrics */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <span className="text-gray-600 dark:text-gray-400">
-                                  Responses:
-                                </span>{' '}
-                                <span className="font-medium">
-                                  {question.totalResponses} / {question.totalPlayers} (
-                                  {question.responseRate}%)
-                                </span>
-                              </div>
-                              <div>
-                                <span className="text-gray-600 dark:text-gray-400">
-                                  Yes/No:
-                                </span>{' '}
-                                <span className="font-medium">
-                                  {question.yesCount} / {question.noCount}
-                                </span>
-                              </div>
-                              {question.latePredictionCount !== undefined && question.latePredictionCount > 0 && (
-                                <div className="col-span-2">
-                                  <span className="text-orange-600 dark:text-orange-400">
-                                    ⚠️ Late Responses:
-                                  </span>{' '}
-                                  <span className="font-medium text-orange-700 dark:text-orange-300">
-                                    {question.latePredictionCount} ({question.lateResponseRate?.toFixed(1)}%)
-                                  </span>
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                                    (submitted after question closed)
-                                  </span>
-                                </div>
-                              )}
-                              {question.correctCount !== undefined && (
-                                <>
-                                  <div>
-                                    <span className="text-green-600 dark:text-green-400">
-                                      Correct:
-                                    </span>{' '}
-                                    <span className="font-medium text-green-700 dark:text-green-300">
-                                      {question.correctCount}
-                                    </span>
-                                  </div>
-                                  <div>
-                                    <span className="text-red-600 dark:text-red-400">
-                                      Incorrect:
-                                    </span>{' '}
-                                    <span className="font-medium text-red-700 dark:text-red-300">
-                                      {question.incorrectCount}
-                                    </span>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-
-                            {/* Question open time */}
-                            {question.questionOpenTimeMs !== undefined &&
-                              question.questionOpenTimeMs > 0 && (
-                                <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                                  <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
-                                    Question Open Time:
-                                  </div>
-                                  <div className="text-lg font-semibold">
-                                    {(question.questionOpenTimeMs / 1000).toFixed(2)}s
-                                  </div>
-                                </div>
-                              )}
-
-                            {/* Question resolution time */}
-                            {question.questionResolutionTimeMs !== undefined &&
-                              question.questionResolutionTimeMs > 0 && (
-                                <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                                  <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
-                                    Resolution Time (Close → Resolve):
-                                  </div>
-                                  <div className="text-lg font-semibold text-purple-600 dark:text-purple-400">
-                                    {(question.questionResolutionTimeMs / 1000).toFixed(2)}s
-                                  </div>
-                                </div>
-                              )}
-
-                            {/* Response time metrics */}
-                            {question.avgResponseTimeMs !== undefined &&
-                              question.avgResponseTimeMs > 0 && (
-                                <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                                  <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
-                                    Response Times:
-                                  </div>
-                                  <div className="grid grid-cols-3 gap-2">
-                                    <div>
-                                      <span className="text-gray-500">Avg:</span>{' '}
-                                      {(question.avgResponseTimeMs / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Median:</span>{' '}
-                                      {((question.medianResponseTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">P95:</span>{' '}
-                                      {((question.p95ResponseTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Min:</span>{' '}
-                                      {((question.minResponseTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Max:</span>{' '}
-                                      {((question.maxResponseTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-
-                            {/* Delivery time metrics */}
-                            {question.avgDeliveryTimeMs !== undefined &&
-                              question.avgDeliveryTimeMs > 0 && (
-                                <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                                  <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
-                                    Delivery Times:
-                                  </div>
-                                  <div className="grid grid-cols-3 gap-2">
-                                    <div>
-                                      <span className="text-gray-500">Avg:</span>{' '}
-                                      {(question.avgDeliveryTimeMs / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Median:</span>{' '}
-                                      {((question.medianDeliveryTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">P95:</span>{' '}
-                                      {((question.p95DeliveryTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Min:</span>{' '}
-                                      {((question.minDeliveryTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Max:</span>{' '}
-                                      {((question.maxDeliveryTimeMs ?? 0) / 1000).toFixed(2)}s
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                              </div>
-                            )}
+                        <div className="text-xs text-gray-500 mt-1">
+                          Created:{' '}
+                          {question.createdAt?.toDate?.()?.toLocaleString()}
+                        </div>
+                        {question.engineTag && (
+                          <div className="mt-1">
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
+                              🏷️ {question.engineTag.replace(/_/g, ' ')}
+                            </span>
                           </div>
                         )}
-                    </div>
-                    <div className="flex gap-2">
-                      {question.state === 'open' && (
-                        <button
-                          onClick={() =>
-                            updateQuestionState(question.id, 'closed')
-                          }
-                          className="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700 cursor-pointer"
-                        >
-                          Close
-                        </button>
-                      )}
-                      {question.state === 'closed' && (
-                        <>
-                          <button
-                            onClick={() =>
-                              updateQuestionState(question.id, 'open')
-                            }
-                            className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
-                          >
-                            Reopen
-                          </button>
-                          <button
-                            onClick={() => resolveQuestion(question.id, true)}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
-                          >
-                            ✓ Yes
-                          </button>
-                          <button
-                            onClick={() => resolveQuestion(question.id, false)}
-                            className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
-                          >
-                            ✗ No
-                          </button>
-                        </>
-                      )}
-                      {question.state === 'resolved' && (
-                        <>
-                          {changingAnswerId === question.id ? (
-                            <>
+
+                        {/* Show statistics for resolved or cancelled questions */}
+                        {(question.state === 'resolved' ||
+                          question.state === 'cancelled') &&
+                          stats && (
+                            <div className="mt-3">
                               <button
                                 onClick={() => {
-                                  resolveQuestion(question.id, true)
+                                  const newExpanded = new Set(expandedQuestions)
+                                  if (newExpanded.has(question.id)) {
+                                    newExpanded.delete(question.id)
+                                  } else {
+                                    newExpanded.add(question.id)
+                                  }
+                                  setExpandedQuestions(newExpanded)
+                                }}
+                                className="w-full flex items-center justify-between p-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-xs cursor-pointer transition-colors"
+                              >
+                                <span className="font-semibold text-gray-700 dark:text-gray-300">
+                                  📊 Statistics
+                                </span>
+                                <span className="text-lg text-gray-600 dark:text-gray-400">
+                                  {expandedQuestions.has(question.id) ? '−' : '+'}
+                                </span>
+                              </button>
+
+                              {expandedQuestions.has(question.id) && (
+                                <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 rounded text-xs space-y-2">
+                                  {/* Response metrics */}
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <span className="text-gray-600 dark:text-gray-400">
+                                        Responses:
+                                      </span>{' '}
+                                      <span className="font-medium">
+                                        {totalResponses} / {playerCount ?? '—'} (
+                                        {responseRate.toFixed(1)}%)
+                                      </span>
+                                    </div>
+                                    {unanswered !== undefined && (
+                                      <div>
+                                        <span className="text-gray-600 dark:text-gray-400">
+                                          Unanswered:
+                                        </span>{' '}
+                                        <span className="font-medium">
+                                          {unanswered}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {accuracy !== undefined && (
+                                      <div className="col-span-2">
+                                        <span className="text-gray-600 dark:text-gray-400">
+                                          Accuracy:
+                                        </span>{' '}
+                                        <span className="font-medium text-green-700 dark:text-green-300">
+                                          {accuracy.toFixed(1)}% ({stats?.correctCount || 0} /{' '}
+                                          {stats?.incorrectCount || 0})
+                                        </span>
+                                      </div>
+                                    )}
+                                    {stats?.nseMissingCount !== undefined &&
+                                      stats.nseMissingCount > 0 && (
+                                        <div className="col-span-2">
+                                          <span className="text-gray-600 dark:text-gray-400">
+                                            NSE missing notificationReceivedAt:
+                                          </span>{' '}
+                                          <span className="font-medium text-red-700 dark:text-red-300">
+                                            {stats.nseMissingCount}
+                                          </span>
+                                        </div>
+                                      )}
+                                  </div>
+
+                                  {choiceBreakdown.length > 0 && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Choice Breakdown:
+                                      </div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {choiceBreakdown.map((choice) => (
+                                          <span
+                                            key={choice.choiceId}
+                                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700"
+                                          >
+                                            <span className="text-gray-700 dark:text-gray-200">
+                                              {choice.label}:
+                                            </span>
+                                            <span className="font-semibold text-gray-900 dark:text-white">
+                                              {choice.count}
+                                            </span>
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {stats.delivery && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Delivery (avg/p50/p95):
+                                      </div>
+                                      <div className="text-lg font-semibold">
+                                        {(stats.delivery.avg / 1000).toFixed(2)}s /{' '}
+                                        {(stats.delivery.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.delivery.p95 / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {stats.open && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Open (avg/p50/p95):
+                                      </div>
+                                      <div className="text-lg font-semibold">
+                                        {(stats.open.avg / 1000).toFixed(2)}s /{' '}
+                                        {(stats.open.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.open.p95 / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {stats.respond && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Respond (avg/p50/p95):
+                                      </div>
+                                      <div className="text-lg font-semibold">
+                                        {(stats.respond.avg / 1000).toFixed(2)}s /{' '}
+                                        {(stats.respond.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.respond.p95 / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {stats.timeRemainingAtReceive && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Time Remaining at Receive (avg/p50/p95):
+                                      </div>
+                                      <div className="text-lg font-semibold">
+                                        {(stats.timeRemainingAtReceive.avg / 1000).toFixed(2)}s /{' '}
+                                        {(stats.timeRemainingAtReceive.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.timeRemainingAtReceive.p95 / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {stats.timeRemainingAtOpen && (
+                                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="text-gray-600 dark:text-gray-400 font-medium mb-1">
+                                        Time Remaining at Open (avg/p50/p95):
+                                      </div>
+                                      <div className="text-lg font-semibold">
+                                        {(stats.timeRemainingAtOpen.avg / 1000).toFixed(2)}s /{' '}
+                                        {(stats.timeRemainingAtOpen.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.timeRemainingAtOpen.p95 / 1000).toFixed(2)}s
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                      </div>
+                      <div className="flex gap-2">
+                        {question.state === 'open' && (
+                          <button
+                            onClick={() =>
+                              updateQuestionState(question.id, 'closed')
+                            }
+                            className="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700 cursor-pointer"
+                          >
+                            Close
+                          </button>
+                        )}
+                        {question.state === 'closed' && (
+                          <>
+                            <button
+                              onClick={() =>
+                                updateQuestionState(question.id, 'open')
+                              }
+                              className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                            >
+                              Reopen
+                            </button>
+                            <button
+                          onClick={() => resolveQuestion(question.id, 'yes')}
+                          className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
+                        >
+                          ✓ Yes
+                        </button>
+                        <button
+                          onClick={() => resolveQuestion(question.id, 'no')}
+                          className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
+                        >
+                          ✗ No
+                        </button>
+                          </>
+                        )}
+                        {question.state === 'resolved' && (
+                          <>
+                            {changingAnswerId === question.id ? (
+                              <>
+                                <button
+                                  onClick={() => {
+                                  resolveQuestion(question.id, 'yes')
                                   setChangingAnswerId(null)
                                 }}
                                 className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
@@ -1695,138 +1737,59 @@ export default function GamePage() {
                               </button>
                               <button
                                 onClick={() => {
-                                  resolveQuestion(question.id, false)
+                                  resolveQuestion(question.id, 'no')
                                   setChangingAnswerId(null)
                                 }}
                                 className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
                               >
                                 ✗ No
-                              </button>
+                                </button>
+                                <button
+                                  onClick={() => setChangingAnswerId(null)}
+                                  className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
                               <button
-                                onClick={() => setChangingAnswerId(null)}
-                                className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                                onClick={() => setChangingAnswerId(question.id)}
+                                className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
                               >
-                                Cancel
+                                Change Answer
                               </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => setChangingAnswerId(question.id)}
-                              className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
-                            >
-                              Change Answer
-                            </button>
-                          )}
-                        </>
-                      )}
-                      {question.state !== 'cancelled' && (
-                        <button
-                          onClick={() =>
-                            updateQuestionState(question.id, 'cancelled')
-                          }
-                          className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      )}
+                            )}
+                          </>
+                        )}
+                        {question.state !== 'cancelled' && (
+                          <button
+                            onClick={() =>
+                              updateQuestionState(question.id, 'cancelled')
+                            }
+                            className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>
       </div>
 
-      {/* Floating Stats Display */}
+      {/* Last Question Bar */}
       {lastQuestionStats && (
-        <div className="fixed top-24 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 p-4 w-80 z-50">
-          <div className="space-y-3">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 pb-2">
-              <h3 className="text-sm font-bold text-gray-900 dark:text-gray-100">
-                ⏱️ Last Question
-              </h3>
-              <div ref={timerRef} className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
-                0:00 ago
-              </div>
-            </div>
-
-            {/* Question Text */}
-            <div className="bg-gray-50 dark:bg-gray-900 rounded p-2">
-              <p className="text-sm font-medium text-gray-800 dark:text-gray-200 line-clamp-2">
-                {lastQuestionStats.question}
-              </p>
-            </div>
-
-            {/* Engine Tag */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 dark:text-gray-400">Tag:</span>
-              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
-                {lastQuestionStats.engineTag.replace(/_/g, ' ')}
-              </span>
-            </div>
-
-            {/* State */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 dark:text-gray-400">State:</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                lastQuestionStats.state === 'open'
-                  ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200'
-                  : lastQuestionStats.state === 'closed'
-                  ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-200'
-                  : 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-200'
-              }`}>
-                {lastQuestionStats.state.toUpperCase()}
-              </span>
-            </div>
-
-            {/* Stats Grid */}
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Response Rate</div>
-                <div className="text-lg font-bold text-blue-600 dark:text-blue-400">
-                  {lastQuestionStats.responseRate.toFixed(1)}%
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Avg Response Time</div>
-                <div className="text-lg font-bold text-green-600 dark:text-green-400">
-                  {lastQuestionStats.avgResponseTime}s
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Responses</div>
-                <div className="text-lg font-bold text-purple-600 dark:text-purple-400">
-                  {lastQuestionStats.totalResponses}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Players</div>
-                <div className="text-lg font-bold text-orange-600 dark:text-orange-400">
-                  {lastQuestionStats.totalPlayers}
-                </div>
-              </div>
-
-              {/* Show accuracy stats for resolved questions */}
-              {lastQuestionStats.state === 'resolved' && (lastQuestionStats.correctCount + lastQuestionStats.incorrectCount) > 0 && (
-                <>
-                  <div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">Accuracy</div>
-                    <div className="text-lg font-bold text-green-600 dark:text-green-400">
-                      {lastQuestionStats.accuracy.toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">Correct / Incorrect</div>
-                    <div className="text-lg font-bold text-gray-700 dark:text-gray-300">
-                      {lastQuestionStats.correctCount} / {lastQuestionStats.incorrectCount}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
+        <div className="fixed top-4 right-4 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3 py-2 flex items-center gap-2 shadow-lg rounded-md">
+          <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-200 uppercase tracking-wide">
+            Last Question
+          </span>
+          <span ref={timerRef} className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+            0:00 ago
+          </span>
         </div>
       )}
     </div>

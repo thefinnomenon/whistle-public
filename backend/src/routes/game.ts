@@ -381,6 +381,7 @@ router.post('/:gameId/questions/:questionId/close', async (req, res) => {
       {
         gameId,
         questionId,
+        method: 'manual',
       },
       req.user?.uid
     )
@@ -393,6 +394,7 @@ router.post('/:gameId/questions/:questionId/close', async (req, res) => {
       {
         gameId,
         questionId,
+        method: 'manual',
         error: String(err),
       },
       req.user?.uid
@@ -662,6 +664,13 @@ const getPercentile = (sortedArray: number[], percentile: number): number => {
   return sortedArray[Math.max(0, index)]
 }
 
+const normalizePredictionValue = (value: any): string => {
+  const str = String(value).toLowerCase()
+  if (str === 'true' || str === 'yes' || str === '1') return 'true'
+  if (str === 'false' || str === 'no' || str === '0') return 'false'
+  return str
+}
+
 const calculateGameStatistics = async (gameId: string) => {
   console.log('[games/end] calculating statistics', gameId)
   const questionsSnapshot = await admin
@@ -689,94 +698,85 @@ const calculateGameStatistics = async (gameId: string) => {
     return
   }
 
-  let totalQuestionsAsked = questions.length
+  const totalQuestionsAsked = questions.length
   let totalResponses = 0
   let totalCorrect = 0
   let totalIncorrect = 0
-  let totalResponseTimeMs = 0
-  let totalDeliveryTimeMs = 0
-  let totalQuestionOpenTimeMs = 0
-  let questionsWithResponseTime = 0
-  let questionsWithDeliveryTime = 0
-  let questionsWithOpenTime = 0
-  const allResponseRates: number[] = []
-  const allResolutionTimes: number[] = []
+
+  const deliveryAvgs: number[] = []
+  const openAvgs: number[] = []
+  const respondAvgs: number[] = []
+  const responseRates: number[] = []
+  let highestPlayerCount: number | undefined
 
   resolvedQuestions.forEach((q: any) => {
-    totalResponses += q.totalResponses || 0
+    const stats = q.statistics || {}
+    totalResponses += stats.totalResponses || 0
+    if (stats.correctCount !== undefined) totalCorrect += stats.correctCount
+    if (stats.incorrectCount !== undefined)
+      totalIncorrect += stats.incorrectCount
 
-    if (q.correctCount !== undefined) totalCorrect += q.correctCount
-    if (q.incorrectCount !== undefined) totalIncorrect += q.incorrectCount
-
-    if (q.avgResponseTimeMs !== undefined && q.avgResponseTimeMs > 0) {
-      totalResponseTimeMs += q.avgResponseTimeMs
-      questionsWithResponseTime++
-    }
-
-    if (q.avgDeliveryTimeMs !== undefined && q.avgDeliveryTimeMs > 0) {
-      totalDeliveryTimeMs += q.avgDeliveryTimeMs
-      questionsWithDeliveryTime++
-    }
-
-    if (q.questionOpenTimeMs !== undefined && q.questionOpenTimeMs > 0) {
-      totalQuestionOpenTimeMs += q.questionOpenTimeMs
-      questionsWithOpenTime++
-    }
-
-    if (
-      q.questionResolutionTimeMs !== undefined &&
-      q.questionResolutionTimeMs > 0
-    ) {
-      allResolutionTimes.push(q.questionResolutionTimeMs)
-    }
-
-    if (q.responseRate !== undefined) {
-      allResponseRates.push(q.responseRate)
-    }
+    if (typeof stats.delivery?.avg === 'number')
+      deliveryAvgs.push(stats.delivery.avg)
+    if (typeof stats.open?.avg === 'number') openAvgs.push(stats.open.avg)
+    if (typeof stats.respond?.avg === 'number')
+      respondAvgs.push(stats.respond.avg)
+    if (typeof stats.responseRate === 'number')
+      responseRates.push(stats.responseRate)
   })
+
+  const peakSnap = await admin
+    .firestore()
+    .collection(`games/${gameId}/playerCounts`)
+    .orderBy('count', 'desc')
+    .limit(1)
+    .get()
+  if (!peakSnap.empty) highestPlayerCount = peakSnap.docs[0].data().count
 
   const avgResponsesPerQuestion = totalQuestionsAsked
     ? totalResponses / totalQuestionsAsked
     : 0
-  const avgResponseRate = allResponseRates.length
-    ? allResponseRates.reduce((a, b) => a + b, 0) / allResponseRates.length
-    : 0
-  const avgResponseTimeMs = questionsWithResponseTime
-    ? totalResponseTimeMs / questionsWithResponseTime
-    : 0
-  const avgDeliveryTimeMs = questionsWithDeliveryTime
-    ? totalDeliveryTimeMs / questionsWithDeliveryTime
-    : 0
-  const avgQuestionOpenTimeMs = questionsWithOpenTime
-    ? totalQuestionOpenTimeMs / questionsWithOpenTime
-    : 0
-  const avgResolutionTimeMs = allResolutionTimes.length
-    ? allResolutionTimes.reduce((a, b) => a + b, 0) / allResolutionTimes.length
-    : 0
-  const medianResolutionTimeMs = getPercentile(allResolutionTimes, 50)
-  const p95ResolutionTimeMs = getPercentile(allResolutionTimes, 95)
 
   const totalPredictions = totalCorrect + totalIncorrect
   const accuracyRate =
     totalPredictions > 0 ? (totalCorrect / totalPredictions) * 100 : 0
 
-  const gameStats = {
+  const buildMetric = (arr: number[]) =>
+    arr.length
+      ? {
+          avg: arr.reduce((a, b) => a + b, 0) / arr.length,
+          p50: getPercentile(
+            [...arr].sort((a, b) => a - b),
+            50
+          ),
+          p95: getPercentile(
+            [...arr].sort((a, b) => a - b),
+            95
+          ),
+        }
+      : undefined
+
+  const gameStats: any = {
     totalQuestionsAsked,
     totalResolved: resolvedQuestions.length,
     totalCancelled: cancelledQuestions.length,
     totalResponses,
     avgResponsesPerQuestion: Math.round(avgResponsesPerQuestion * 100) / 100,
-    avgResponseRate: Math.round(avgResponseRate * 100) / 100,
     totalCorrect,
     totalIncorrect,
     accuracyRate: Math.round(accuracyRate * 100) / 100,
-    avgResponseTimeMs: Math.round(avgResponseTimeMs),
-    avgDeliveryTimeMs: Math.round(avgDeliveryTimeMs),
-    avgQuestionOpenTimeMs: Math.round(avgQuestionOpenTimeMs),
-    avgResolutionTimeMs: Math.round(avgResolutionTimeMs),
-    medianResolutionTimeMs: Math.round(medianResolutionTimeMs),
-    p95ResolutionTimeMs: Math.round(p95ResolutionTimeMs),
+    highestPlayerCount,
   }
+
+  const deliveryMetric = buildMetric(deliveryAvgs)
+  const openMetric = buildMetric(openAvgs)
+  const respondMetric = buildMetric(respondAvgs)
+  const responseRateMetric = buildMetric(responseRates)
+
+  if (deliveryMetric) gameStats.delivery = deliveryMetric
+  if (openMetric) gameStats.open = openMetric
+  if (respondMetric) gameStats.respond = respondMetric
+  if (responseRateMetric) gameStats.responseRateMetric = responseRateMetric
 
   console.log('Game statistics:', gameStats)
 
@@ -930,11 +930,12 @@ const calculateScores = async (
   if (opts.revertIfResolved && question.state !== 'cancelled') return
 
   const correctUsers = await getCorrectUsers(gameId, questionId, question)
-  if (correctUsers.length === 0) return
-
   const delta = opts.revertIfResolved && question.state === 'cancelled' ? -1 : 1
 
-  await updateScores(gameId, correctUsers, delta)
+  if (correctUsers.length > 0) {
+    await updateScores(gameId, correctUsers, delta)
+  }
+
   await calculateQuestionStatistics(gameId, questionId, question)
 }
 
@@ -948,10 +949,17 @@ const getCorrectUsers = async (
   const predictionsSnap = await admin
     .firestore()
     .collection(`games/${gameId}/questions/${questionId}/predictions`)
-    .where('prediction', '==', String(question.answer))
     .get()
 
-  return predictionsSnap.docs.map((d) => d.id)
+  const normalizedAnswer = normalizePredictionValue(question.answer)
+
+  return predictionsSnap.docs
+    .filter(
+      (d) =>
+        normalizePredictionValue((d.data() as any).prediction) ===
+        normalizedAnswer
+    )
+    .map((d) => d.id)
 }
 
 const updateScores = async (
@@ -986,6 +994,7 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
 
   for (const doc of gamesSnap.docs) {
     const gameId = doc.id
+    const state = doc.data().state
     const usersCountSnap = await admin
       .firestore()
       .collection(`games/${gameId}/users`)
@@ -993,10 +1002,19 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
       .get()
     const playerCount = usersCountSnap.data().count
 
-    // Skip write if no change
-    if (doc.data().playerCount === playerCount) {
-      continue
+    const isSameCount = doc.data().playerCount === playerCount
+
+    // Always record history for open games
+    if (state === 'open') {
+      const now = Date.now().toString()
+      await admin.firestore().doc(`games/${gameId}/playerCounts/${now}`).set({
+        count: playerCount,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
     }
+
+    // Skip updating main doc if count hasn't changed
+    if (isSameCount) continue
 
     await admin.firestore().doc(`games/${gameId}`).set(
       {
@@ -1138,6 +1156,11 @@ export const closeExpiredQuestions = async (): Promise<number> => {
         { merge: true }
       )
       await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+      trackEvent('question_closed', {
+        gameId,
+        questionId,
+        method: 'timeout',
+      })
       closed++
     } catch (err) {
       console.error(
@@ -1165,16 +1188,83 @@ const calculateQuestionStatistics = async (
     .get()
 
   const totalResponses = predsSnap.size
-  const correctCount = predsSnap.docs.filter(
-    (d) => d.data().prediction === String(question.answer)
-  ).length
+  const normalizedAnswer = normalizePredictionValue(question.answer)
+  const correctCount = predsSnap.docs.filter((d) => {
+    const pred = (d.data() as any).prediction
+    return normalizePredictionValue(pred) === normalizedAnswer
+  }).length
   const incorrectCount = totalResponses - correctCount
+  const deliveries = predsSnap.docs
+    .map((d) => (d.data() as any).deliveryMs as number | undefined)
+    .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+  const opens = predsSnap.docs
+    .map((d) => (d.data() as any).openMs as number | undefined)
+    .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+  const responds = predsSnap.docs
+    .map((d) => (d.data() as any).respondMs as number | undefined)
+    .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+  const remainingReceive = predsSnap.docs
+    .map((d) => (d.data() as any).timeRemainingAtReceive as number | undefined)
+    .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+  const remainingOpen = predsSnap.docs
+    .map((d) => (d.data() as any).timeRemainingAtOpen as number | undefined)
+    .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+  const nseMissingCount = predsSnap.docs.filter(
+    (d) => (d.data() as any).notificationReceivedAt === undefined
+  ).length
 
-  const statistics = {
+  const avg = (arr: number[]) =>
+    arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : undefined
+  const metric = (arr: number[]) =>
+    arr.length
+      ? {
+          avg: avg(arr)!,
+          p50: getPercentile(
+            [...arr].sort((a, b) => a - b),
+            50
+          ),
+          p95: getPercentile(
+            [...arr].sort((a, b) => a - b),
+            95
+          ),
+        }
+      : undefined
+
+  const statistics: any = {
     totalResponses,
     correctCount,
     incorrectCount,
+    nseMissingCount,
   }
+
+  const gameSnap = await admin.firestore().doc(`games/${gameId}`).get()
+  const playerCount = (gameSnap.data() as any)?.playerCount as
+    | number
+    | undefined
+  if (playerCount !== undefined) {
+    statistics.playerCount = playerCount
+    statistics.responseRate =
+      playerCount > 0 ? totalResponses / playerCount : undefined
+    statistics.unanswered = playerCount - totalResponses
+  }
+
+  if (deliveries.length) statistics.delivery = metric(deliveries)
+  if (opens.length) statistics.open = metric(opens)
+  if (responds.length) statistics.respond = metric(responds)
+  if (remainingReceive.length)
+    statistics.timeRemainingAtReceive = metric(remainingReceive)
+  if (remainingOpen.length)
+    statistics.timeRemainingAtOpen = metric(remainingOpen)
+
+  // Choice distribution
+  const choiceCounts: Record<string, number> = {}
+  predsSnap.docs.forEach((d) => {
+    const pred = (d.data() as any).prediction
+    if (typeof pred === 'string') {
+      choiceCounts[pred] = (choiceCounts[pred] || 0) + 1
+    }
+  })
+  statistics.choiceCounts = choiceCounts
 
   await admin.firestore().doc(`games/${gameId}/questions/${questionId}`).set(
     {
