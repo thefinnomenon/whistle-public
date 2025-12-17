@@ -449,7 +449,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       "questionId": qId,
       "gameId": gId,
       "prediction": choiceId,
-      "source": "ios-notification-content-extension",
+      "source": "ios_notification",
     ]
 
     // Include timestamp of when notification was viewed for response time tracking

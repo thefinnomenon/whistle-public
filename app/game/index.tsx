@@ -14,14 +14,14 @@ import {
   Image,
   Modal,
   Pressable,
+  Platform,
   Text,
   TouchableOpacity,
   View,
   useColorScheme,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-
-import * as Updates from 'expo-updates'
+import Svg, { Circle } from 'react-native-svg'
 
 import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
 import {
@@ -31,9 +31,9 @@ import {
 
 import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
+import { env } from '@/lib/env'
 import { useGame } from '@/lib/contexts/GameContext'
 import {
-  addPrediction,
   deleteGamePlayer,
   getGamePlayerStream,
   getGameStream,
@@ -46,7 +46,7 @@ import { NFL } from '../../logos'
 export default function GameScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
-  const { user } = useAuth()
+  const { user, firebaseUser } = useAuth()
   const { game, setGame } = useGame()
   const { gameId, questionId } = useLocalSearchParams<{
     gameId: string
@@ -55,12 +55,10 @@ export default function GameScreen() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [userGame, setUserGame] = useState<UserGame>()
   const [gamePlayer, setGamePlayer] = useState<GamePlayer>()
-  const [predictions, setPredictions] = useState<Map<string, boolean>>(
-    new Map()
-  )
+  const [predictions, setPredictions] = useState<Map<string, string>>(new Map())
   const [autoOpenQuestionId, setAutoOpenQuestionId] = useState<
     string | undefined
-  >(questionId)
+  >(Array.isArray(questionId) ? questionId[0] : questionId)
   const isLeavingRef = useRef(false)
   const isMountedRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
@@ -96,6 +94,42 @@ export default function GameScreen() {
     setGamePlayer,
     setPredictions,
   ])
+
+  const normalizedQuestionId = Array.isArray(questionId)
+    ? questionId[0]
+    : questionId
+
+  // Auto-open routed question when available and answerable
+  useEffect(() => {
+    if (!normalizedQuestionId) return
+    const q = questions.find((item) => item.id === normalizedQuestionId)
+    if (!q) return
+
+    const expiresAt = (q.timeoutAt as any)?.toMillis?.() ?? Number(q.timeoutAt)
+    const timedOut = Number.isFinite(expiresAt) && expiresAt <= Date.now()
+    const alreadyAnswered = predictions.get(q.id) !== undefined
+
+    if (q.state === 'open' && !timedOut && !alreadyAnswered) {
+      setAutoOpenQuestionId(q.id)
+    } else {
+      setAutoOpenQuestionId(undefined)
+    }
+  }, [normalizedQuestionId, questions, predictions])
+
+  // Clear auto-open if question is not answerable or already answered
+  useEffect(() => {
+    if (!autoOpenQuestionId) return
+    const q = questions.find((item) => item.id === autoOpenQuestionId)
+    if (!q) return
+
+    const expiresAt = Number(q.timeoutAt)
+    const timedOut = Number.isFinite(expiresAt) && expiresAt <= Date.now()
+    const alreadyAnswered = predictions.get(q.id) !== undefined
+
+    if (q.state !== 'open' || timedOut || alreadyAnswered) {
+      setAutoOpenQuestionId(undefined)
+    }
+  }, [autoOpenQuestionId, questions, predictions])
 
   const handleLeaveGame = useCallback(() => {
     Alert.alert(
@@ -390,6 +424,7 @@ export default function GameScreen() {
             userId={user?.id}
             autoOpen={item.id === autoOpenQuestionId}
             onModalClose={() => setAutoOpenQuestionId(undefined)}
+            getIdToken={firebaseUser?.getIdToken}
           />
         )}
         extraData={[predictions, autoOpenQuestionId]}
@@ -400,11 +435,12 @@ export default function GameScreen() {
 
 type Props = {
   question: Question
-  prediction?: boolean
+  prediction?: string
   gameId: string
   userId?: string
   autoOpen?: boolean
   onModalClose?: () => void
+  getIdToken?: () => Promise<string>
 }
 
 const QuestionListItem = ({
@@ -414,29 +450,62 @@ const QuestionListItem = ({
   userId,
   autoOpen,
   onModalClose,
+  getIdToken,
 }: Props) => {
   const colorScheme = useColorScheme()
   const isDark = colorScheme === 'dark'
   const [showModal, setShowModal] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [timeRemainingMs, setTimeRemainingMs] = useState(0)
+  const [totalDurationMs, setTotalDurationMs] = useState(0)
+  const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
 
   // Auto-open modal if autoOpen is true and question is still open
   useEffect(() => {
+    const expiresAt =
+      (question.timeoutAt as any)?.toMillis?.() ?? Number(question.timeoutAt)
+    const isTimedOut =
+      Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt <= Date.now()
+
     if (
       autoOpen &&
       question.state === 'open' &&
       prediction === undefined &&
-      userId
+      userId &&
+      (!Number.isFinite(expiresAt) || expiresAt > Date.now())
     ) {
       setShowModal(true)
     }
-  }, [autoOpen, question.state, prediction, userId])
+  }, [autoOpen, question.state, prediction, userId, question.timeoutAt])
+
+  // Timer for remaining time
+  useEffect(() => {
+    const timeoutMs =
+      (question.timeoutAt as any)?.toMillis?.() ?? Number(question.timeoutAt)
+    if (!Number.isFinite(timeoutMs)) return
+
+    const startMs =
+      (question.triggeredAt as any)?.toMillis?.() ??
+      (question.createdAt as any)?.toMillis?.() ??
+      Date.now()
+    const total = Math.max(0, timeoutMs - startMs)
+    setTotalDurationMs(total)
+
+    const update = () => {
+      const remaining = Math.max(0, timeoutMs - Date.now())
+      setTimeRemainingMs(remaining)
+    }
+    update()
+    const interval = setInterval(update, 100)
+    return () => clearInterval(interval)
+  }, [question.createdAt, question.timeoutAt, question.triggeredAt])
 
   let questionState: UserQuestionState = question.state
   if (question.state === 'resolved' && prediction === undefined)
     questionState = 'incorrect'
   else if (question.state === 'resolved' && prediction !== undefined)
-    questionState = prediction === question.answer ? 'correct' : 'incorrect'
+    questionState =
+      prediction === (question.answer ?? '') ? 'correct' : 'incorrect'
 
   let questionStyling = { bg: '', text: '', icon: '', iconColor: '' }
   switch (questionState) {
@@ -484,15 +553,41 @@ const QuestionListItem = ({
   const canAnswer =
     question.state === 'open' && prediction === undefined && userId
 
-  const handleAnswer = async (answer: boolean) => {
+  const resolveChoiceLabel = (choiceId: string) => {
+    const match = question.choices.find((c) =>
+      typeof c === 'string'
+        ? c === choiceId
+        : c.id === choiceId || c.value === choiceId
+    )
+    if (!match) return choiceId
+    return typeof match === 'string' ? match : match.value
+  }
+
+  const handleAnswer = async (answer: string) => {
     if (!userId) return
 
+    setSelectedChoiceId(answer)
     setSubmitting(true)
     try {
-      // Write to question predictions collection (for scoring)
-      await addPrediction(gameId, question.id, userId, {
-        prediction: answer.toString(),
+      const idToken = getIdToken ? await getIdToken() : undefined
+      const apiUrl = `${env.DOMAIN}/api/games/${gameId}/questions/${question.id}/prediction`
+
+      const resp = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+        },
+        body: JSON.stringify({
+          prediction: answer,
+          source: `${Platform.OS}-app`,
+          questionTimeoutAt: Number(question.timeoutAt),
+        }),
       })
+
+      if (!resp.ok) {
+        throw new Error(`API response ${resp.status}`)
+      }
 
       // Write to user predictions subcollection (for UI display)
       const { doc, setDoc, serverTimestamp, getFirestore } = await import(
@@ -506,6 +601,7 @@ const QuestionListItem = ({
 
       await setDoc(userPredictionRef, {
         prediction: answer,
+        source: 'app',
         createdAt: serverTimestamp(),
       })
 
@@ -514,7 +610,7 @@ const QuestionListItem = ({
         game_id: gameId,
         question_id: question.id,
         prediction: answer,
-        method: 'in-app',
+        method: 'app',
       })
 
       setShowModal(false)
@@ -540,7 +636,7 @@ const QuestionListItem = ({
         </Text>
         {prediction !== undefined && (
           <Text className={`${questionStyling.text} text-md font-bold ml-2`}>
-            {prediction ? 'Yes' : 'No'}
+            {resolveChoiceLabel(prediction)}
           </Text>
         )}
       </View>
@@ -557,71 +653,85 @@ const QuestionListItem = ({
         {content}
       </TouchableOpacity>
 
-      <Modal
-        visible={showModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (!submitting) {
-            setShowModal(false)
-            onModalClose?.()
-          }
-        }}
-      >
-        <Pressable
-          className="flex-1 bg-black/50 items-center justify-center"
-          onPress={() => {
-            if (!submitting) {
-              setShowModal(false)
-              onModalClose?.()
-            }
-          }}
-        >
-          <Pressable
-            className="bg-white dark:bg-gray-800 rounded-2xl p-6 mx-6 w-5/6 max-w-md"
-            onPress={(e) => e.stopPropagation()}
-          >
+      <Modal visible={showModal} transparent animationType="fade">
+        <Pressable className="flex-1 bg-black/50 items-center justify-center">
+          <Pressable className="bg-white dark:bg-gray-800 rounded-2xl p-6 mx-6 w-5/6 max-w-md">
             <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 text-center">
               {question.question}
             </Text>
 
-            {submitting ? (
-              <View className="py-8">
-                <ActivityIndicator size="large" color="#3b82f6" />
+            <View className="gap-3">
+              <View className="items-center mb-2">
+                <View className="w-20 h-20 items-center justify-center">
+                  <Svg width={80} height={80} viewBox="0 0 80 80">
+                    <Circle
+                      cx={40}
+                      cy={40}
+                      r={36}
+                      stroke="#e5e7eb"
+                      strokeWidth={4}
+                      fill="none"
+                    />
+                    {totalDurationMs > 0 && (
+                      <Circle
+                        cx={40}
+                        cy={40}
+                        r={36}
+                        stroke={
+                          timeRemainingMs <= 5000
+                            ? '#ef4444'
+                            : timeRemainingMs <= 15000
+                              ? '#f59e0b'
+                              : '#3b82f6'
+                        }
+                        strokeWidth={4}
+                        fill="none"
+                        strokeDasharray={2 * Math.PI * 36}
+                        strokeDashoffset={
+                          2 *
+                          Math.PI *
+                          36 *
+                          (1 -
+                            Math.max(
+                              0,
+                              Math.min(1, timeRemainingMs / totalDurationMs)
+                            ))
+                        }
+                        strokeLinecap="round"
+                      />
+                    )}
+                  </Svg>
+                  <View className="absolute inset-0 items-center justify-center">
+                    <Text className="text-lg font-bold text-gray-900 dark:text-white">
+                      {Math.max(0, Math.floor(timeRemainingMs / 1000))}
+                    </Text>
+                  </View>
+                </View>
               </View>
-            ) : (
-              <View className="gap-3">
-                <TouchableOpacity
-                  className="bg-green-500 py-4 px-6 rounded-lg"
-                  onPress={() => handleAnswer(true)}
-                >
-                  <Text className="text-white font-bold text-lg text-center">
-                    ✅ Yes
-                  </Text>
-                </TouchableOpacity>
 
-                <TouchableOpacity
-                  className="bg-red-500 py-4 px-6 rounded-lg"
-                  onPress={() => handleAnswer(false)}
-                >
-                  <Text className="text-white font-bold text-lg text-center">
-                    ❌ No
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  className="bg-gray-200 dark:bg-gray-700 py-3 px-6 rounded-lg mt-2"
-                  onPress={() => {
-                    setShowModal(false)
-                    onModalClose?.()
-                  }}
-                >
-                  <Text className="text-gray-700 dark:text-gray-300 font-medium text-center">
-                    Cancel
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              {question.choices.map((choice) => {
+                const choiceId = typeof choice === 'string' ? choice : choice.id
+                const label = typeof choice === 'string' ? choice : choice.value
+                const isSelected = submitting && selectedChoiceId === choiceId
+                return (
+                  <TouchableOpacity
+                    key={choiceId}
+                    className={`py-4 px-6 rounded-lg ${
+                      submitting ? 'bg-blue-300' : 'bg-blue-500'
+                    }`}
+                    onPress={() => !submitting && handleAnswer(choiceId)}
+                    disabled={submitting}
+                  >
+                    <View className="flex-row items-center justify-center gap-2">
+                      {isSelected && <ActivityIndicator color="#fff" />}
+                      <Text className="text-white font-bold text-lg text-center">
+                        {label}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
           </Pressable>
         </Pressable>
       </Modal>

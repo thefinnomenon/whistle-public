@@ -2,11 +2,9 @@ import Mixpanel from 'mixpanel'
 
 let mixpanel: Mixpanel.Mixpanel | null = null
 
-if (process.env.MIXPANEL_TOKEN) {
+if (process.env.MIXPANEL_TOKEN && process.env.NODE_ENV === 'production') {
   mixpanel = Mixpanel.init(process.env.MIXPANEL_TOKEN)
   console.log('[mixpanel] Initialized')
-} else {
-  console.log('[mixpanel] Not initialized - MIXPANEL_TOKEN not set')
 }
 
 export const trackEvent = (

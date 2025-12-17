@@ -51,7 +51,13 @@ export default function GamePage() {
   const timerRef = React.useRef<HTMLDivElement>(null)
   const triggeredTimeRef = React.useRef<number>(0)
   const [playerCountHistory, setPlayerCountHistory] = useState<
-    { t: number; count: number }[]
+    {
+      t: number
+      count: number
+      ios: number
+      android: number
+      byPlatform?: { ios: number; android: number; unknown?: number }
+    }[]
   >([])
 
   const getQuestionStats = React.useCallback((question: Question) => {
@@ -93,6 +99,7 @@ export default function GamePage() {
     const openAvgs: number[] = []
     const respondAvgs: number[] = []
     const responseRates: number[] = []
+    const platformTotals: Record<string, { responses: number }> = {}
 
     resolvedQuestions.forEach((q) => {
       const stats: any = getQuestionStats(q)
@@ -111,6 +118,15 @@ export default function GamePage() {
 
       if (typeof stats.responseRate === 'number')
         responseRates.push(stats.responseRate)
+
+      if (stats.responseByPlatform) {
+        Object.entries(stats.responseByPlatform as Record<string, any>).forEach(
+          ([platform, platStats]: any) => {
+            const existing = (platformTotals[platform] ||= { responses: 0 })
+            existing.responses += platStats.totalResponses || 0
+          }
+        )
+      }
     })
 
     const totalQuestionsAsked = questions.length
@@ -126,6 +142,10 @@ export default function GamePage() {
       (game as any)?.playerCount ??
       (game as any)?.userCount ??
       0
+    const currentPlayerCountByPlatform =
+      playerCountHistory[playerCountHistory.length - 1]?.byPlatform ||
+      (game as any)?.playerCountByPlatform ||
+      {}
     const peakFromHistory =
       playerCountHistory.length > 0
         ? Math.max(...playerCountHistory.map((p) => p.count))
@@ -154,7 +174,10 @@ export default function GamePage() {
       totalCorrect,
       totalIncorrect,
       accuracyRate: Math.round(accuracyRate * 100) / 100,
+      platformResponses:
+        Object.keys(platformTotals).length > 0 ? platformTotals : undefined,
       currentPlayerCount,
+      playerCountByPlatform: currentPlayerCountByPlatform,
       peakPlayerCount,
       delivery: buildMetric(deliveryAvgs),
       open: buildMetric(openAvgs),
@@ -226,17 +249,28 @@ export default function GamePage() {
       const stats = getQuestionStats(q)
       const totalResponses = stats.totalResponses || 0
       const totalPlayers = stats.playerCount || 0
+      const responseSourceCounts = stats.responseSourceCounts || {}
       const responseRate =
         stats.responseRate !== undefined
           ? stats.responseRate * 100
           : totalPlayers > 0
             ? (totalResponses / totalPlayers) * 100
             : 0
+      const flattenedSources: Record<string, number> = {}
+      Object.entries(responseSourceCounts).forEach(([key, value]) => {
+        flattenedSources[`source__${key}`] = typeof value === 'number' ? value : 0
+      })
+      const iosResponses = stats.responseByPlatform?.ios?.totalResponses || 0
+      const androidResponses =
+        stats.responseByPlatform?.android?.totalResponses || 0
 
       return {
         questionNum: index + 1,
         questionName: `Q${index + 1}`,
         responseRate,
+        ...flattenedSources,
+        iosResponses,
+        androidResponses,
         avgResponseTime:
           stats.respond?.avg !== undefined ? stats.respond.avg / 1000 : 0,
         avgDeliveryTime:
@@ -250,13 +284,36 @@ export default function GamePage() {
         p95ResponseTime:
           stats.respond?.p95 !== undefined ? stats.respond.p95 / 1000 : 0,
         accuracy:
-          totalResponses > 0
+        totalResponses > 0
             ? ((stats.correctCount || 0) / totalResponses) * 100
             : 0,
         totalResponses,
+        responseSourceCounts: stats.responseSourceCounts || {},
       }
     })
   }, [getQuestionStats, questions])
+
+  const responseSourceKeys = React.useMemo(() => {
+    const set = new Set<string>()
+    chartData.forEach((d) => {
+      Object.keys(d).forEach((k) => {
+        if (k.startsWith('source__')) set.add(k.replace('source__', ''))
+      })
+    })
+    return Array.from(set)
+  }, [chartData])
+
+  const chartDataWithSources = React.useMemo(() => {
+    if (responseSourceKeys.length === 0) return chartData
+    return chartData.map((d) => {
+      const filled: Record<string, number> = {}
+      responseSourceKeys.forEach((key) => {
+        const prop = `source__${key}`
+        filled[prop] = typeof (d as any)[prop] === 'number' ? (d as any)[prop] : 0
+      })
+      return { ...filled, ...d }
+    })
+  }, [chartData, responseSourceKeys])
 
   // Calculate last question stats
 const lastQuestionStats = React.useMemo(() => {
@@ -367,7 +424,19 @@ const lastQuestionStats = React.useMemo(() => {
           data.createdAt?.toMillis?.() ??
           Number(doc.id) ??
           Date.now()
-        return { t: ts, count: data.count || 0 }
+        const ios = data.ios ?? 0
+        const android = data.android ?? 0
+        return {
+          t: ts,
+          count: data.count || 0,
+          ios,
+          android,
+          byPlatform: {
+            ios,
+            android,
+            unknown: data.unknown ?? 0,
+          },
+        }
       })
       setPlayerCountHistory(history)
     })
@@ -456,7 +525,7 @@ const lastQuestionStats = React.useMemo(() => {
     }
   }
 
-  const resolveQuestion = async (questionId: string, answer: 'yes' | 'no') => {
+  const resolveQuestion = async (questionId: string, answer: string) => {
     try {
       await apiRequest(`/api/games/${gameId}/questions/${questionId}/resolve`, {
         method: 'POST',
@@ -492,6 +561,29 @@ const lastQuestionStats = React.useMemo(() => {
     } catch (error) {
       console.error('Error creating question:', error)
       alert('Failed to create question')
+    }
+  }
+
+  const createResultQuestion = async () => {
+    if (!game) return
+    try {
+      await apiRequest(`/api/games/${gameId}/questions`, {
+        method: 'POST',
+        body: {
+          question: 'Result of game?',
+          choices: [
+            { id: 'home', value: `${game.homeTeam} wins` },
+            { id: 'away', value: `${game.awayTeam} wins` },
+            { id: 'tie', value: 'Tie' },
+          ],
+          timeoutAt: (Date.now() + 30 * 1000).toString(),
+          engineTag: selectedEngineTag || '',
+          type: 'MULTIPLE_CHOICE',
+        },
+      })
+    } catch (error) {
+      console.error('Error creating result question:', error)
+      alert('Failed to create result question')
     }
   }
 
@@ -623,6 +715,54 @@ const lastQuestionStats = React.useMemo(() => {
                     {gameStats.totalResponses}
                   </div>
                 </div>
+
+                <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                    Current Players
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {gameStats.currentPlayerCount ?? '—'}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                    iOS Players
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {gameStats.playerCountByPlatform?.ios ?? '—'}
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                    Android Players
+                  </div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {gameStats.playerCountByPlatform?.android ?? '—'}
+                  </div>
+                </div>
+
+                {gameStats.platformResponses && (
+                  <>
+                    <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                        iOS Responses
+                      </div>
+                      <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {gameStats.platformResponses.ios?.responses ?? '—'}
+                      </div>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
+                        Android Responses
+                      </div>
+                      <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {gameStats.platformResponses.android?.responses ?? '—'}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <div className="bg-white dark:bg-gray-800 p-3 rounded shadow-sm">
                   <div className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">
@@ -814,7 +954,7 @@ const lastQuestionStats = React.useMemo(() => {
                       Response Rate & Engagement
                     </h4>
                     <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
+                      <LineChart data={chartDataWithSources}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="questionName" />
                         <YAxis yAxisId="left" label={{ value: 'Response Rate (%)', angle: -90, position: 'insideLeft' }} />
@@ -837,6 +977,37 @@ const lastQuestionStats = React.useMemo(() => {
                           name="Total Responses"
                           strokeWidth={2}
                         />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="iosResponses"
+                          stroke="#6366f1"
+                          name="iOS Responses"
+                          strokeWidth={2}
+                        />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="androidResponses"
+                          stroke="#f97316"
+                          name="Android Responses"
+                          strokeWidth={2}
+                        />
+                        {responseSourceKeys.map((sourceKey, idx) => {
+                          const colors = ['#6366f1', '#f97316', '#06b6d4', '#a855f7', '#ef4444']
+                          return (
+                            <Line
+                              key={sourceKey}
+                              yAxisId="right"
+                              type="monotone"
+                              dataKey={`source__${sourceKey}`}
+                              stroke={colors[idx % colors.length]}
+                              name={`${sourceKey} Responses`}
+                              strokeWidth={2}
+                              strokeDasharray={idx % 2 === 0 ? '4 4' : '2 6'}
+                            />
+                          )
+                        })}
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -870,7 +1041,23 @@ const lastQuestionStats = React.useMemo(() => {
                           type="monotone"
                           dataKey="count"
                           stroke="#6366f1"
-                          name="Players"
+                          name="Total"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="ios"
+                          stroke="#2563eb"
+                          name="iOS"
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="android"
+                          stroke="#f59e0b"
+                          name="Android"
                           strokeWidth={2}
                           dot={false}
                         />
@@ -1092,6 +1279,12 @@ const lastQuestionStats = React.useMemo(() => {
                 className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🪙 Coin toss heads?
+              </button>
+              <button
+                onClick={createResultQuestion}
+                className="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
+              >
+                🏁 Result of game (Home/Away/Tie)
               </button>
             </div>
           </div>
@@ -1506,11 +1699,20 @@ const lastQuestionStats = React.useMemo(() => {
                             .map((c) => (typeof c === 'string' ? c : c.value))
                             .join(', ')}
                         </div>
-                      {question.answer !== undefined && (
-                        <div className="text-sm text-green-600 mt-1">
-                          Answer: {question.answer === 'yes' ? 'Yes' : 'No'}
-                        </div>
-                      )}
+                        {question.answer !== undefined && (
+                          <div className="text-sm text-green-600 mt-1">
+                            Answer:{' '}
+                            {(() => {
+                              const match = question.choices.find((c) =>
+                                typeof c === 'string'
+                                  ? c === question.answer
+                                  : c.id === question.answer || c.value === question.answer
+                              )
+                              if (!match) return question.answer
+                              return typeof match === 'string' ? match : match.value
+                            })()}
+                          </div>
+                        )}
                         <div className="text-xs text-gray-500 mt-1">
                           Created:{' '}
                           {question.createdAt?.toDate?.()?.toLocaleString()}
@@ -1698,69 +1900,72 @@ const lastQuestionStats = React.useMemo(() => {
                             Close
                           </button>
                         )}
-                        {question.state === 'closed' && (
-                          <>
-                            <button
-                              onClick={() =>
-                                updateQuestionState(question.id, 'open')
-                              }
-                              className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
-                            >
-                              Reopen
-                            </button>
-                            <button
-                          onClick={() => resolveQuestion(question.id, 'yes')}
-                          className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
-                        >
-                          ✓ Yes
-                        </button>
-                        <button
-                          onClick={() => resolveQuestion(question.id, 'no')}
-                          className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
-                        >
-                          ✗ No
-                        </button>
-                          </>
-                        )}
+                      {question.state === 'closed' && (
+                        <>
+                          <button
+                            onClick={() =>
+                              updateQuestionState(question.id, 'open')
+                            }
+                            className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                          >
+                            Reopen
+                          </button>
+                          {question.choices.map((choice) => {
+                            const label =
+                              typeof choice === 'string' ? choice : choice.value
+                            const choiceId =
+                              typeof choice === 'string' ? choice : choice.id
+                            return (
+                              <button
+                                key={choiceId}
+                                onClick={() => resolveQuestion(question.id, choiceId)}
+                                className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
                         {question.state === 'resolved' && (
                           <>
-                            {changingAnswerId === question.id ? (
-                              <>
-                                <button
-                                  onClick={() => {
-                                  resolveQuestion(question.id, 'yes')
-                                  setChangingAnswerId(null)
-                                }}
-                                className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 cursor-pointer"
-                              >
-                                ✓ Yes
-                              </button>
+                          {changingAnswerId === question.id ? (
+                            <>
+                              {question.choices.map((choice) => {
+                                const label =
+                                  typeof choice === 'string' ? choice : choice.value
+                                const choiceId =
+                                  typeof choice === 'string' ? choice : choice.id
+                                return (
+                                  <button
+                                    key={choiceId}
+                                    onClick={() => {
+                                      resolveQuestion(question.id, choiceId)
+                                      setChangingAnswerId(null)
+                                    }}
+                                    className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
+                                  >
+                                    {label}
+                                  </button>
+                                )
+                              })}
                               <button
-                                onClick={() => {
-                                  resolveQuestion(question.id, 'no')
-                                  setChangingAnswerId(null)
-                                }}
-                                className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 cursor-pointer"
+                                onClick={() => setChangingAnswerId(null)}
+                                className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
                               >
-                                ✗ No
-                                </button>
-                                <button
-                                  onClick={() => setChangingAnswerId(null)}
-                                  className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => setChangingAnswerId(question.id)}
-                                className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
-                              >
-                                Change Answer
+                                Cancel
                               </button>
-                            )}
-                          </>
-                        )}
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setChangingAnswerId(question.id)}
+                              className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
+                            >
+                              Change Answer
+                            </button>
+                          )}
+                        </>
+                      )}
                         {question.state !== 'cancelled' && (
                           <button
                             onClick={() =>

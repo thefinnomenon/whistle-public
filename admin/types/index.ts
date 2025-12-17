@@ -15,6 +15,7 @@ export type UserGame = {
 export type GamePlayer = {
   score: number
   username: string
+  platform?: string
   updatedAt: FirestoreTimestamp
 }
 
@@ -68,12 +69,25 @@ export type MetricSummary = {
   p95: number
 }
 
+export type PlatformResponseStats = {
+  totalResponses: number
+  correctCount: number
+  incorrectCount: number
+  delivery?: MetricSummary
+  open?: MetricSummary
+  respond?: MetricSummary
+  timeRemainingAtReceive?: MetricSummary
+  timeRemainingAtOpen?: MetricSummary
+}
+
 export type QuestionStatistics = {
   totalResponses: number
   correctCount: number
   incorrectCount: number
   playerCount?: number
   responseRate?: number
+  responseSourceCounts?: Record<string, number>
+  responseByPlatform?: Record<string, PlatformResponseStats>
   unanswered?: number
   nseMissingCount?: number
   delivery?: MetricSummary
@@ -90,7 +104,7 @@ export type Question = {
   type: QuestionType
   question: string
   choices: Choice[]
-  answer?: 'yes' | 'no'
+  answer?: string
   timeoutAt: string
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
@@ -111,6 +125,8 @@ export type GameStatistics = {
   totalCorrect: number
   totalIncorrect: number
   accuracyRate?: number
+  platformResponses?: Record<string, number>
+  playerCountByPlatform?: Record<string, number>
   highestPlayerCount?: number
   avgResponsesPerQuestion?: number
   delivery?: MetricSummary

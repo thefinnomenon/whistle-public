@@ -4,6 +4,7 @@ import { trackEvent } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
+import { createHash } from 'crypto'
 
 // api/games/
 const router = Router()
@@ -536,6 +537,7 @@ router.post(
       const userId = req.user.uid
       const now = admin.firestore.FieldValue.serverTimestamp()
       const nowMs = Date.now()
+      const normalizedSource = typeof source === 'string' ? source : 'unknown'
 
       // Calculate time remaining server-side for accuracy
       let timeRemaining: number | undefined
@@ -585,7 +587,7 @@ router.post(
 
       const payload: any = {
         prediction,
-        source,
+        source: normalizedSource,
         questionTimeoutAt,
         timeRemaining,
         createdAt: now,
@@ -937,6 +939,7 @@ const calculateScores = async (
   }
 
   await calculateQuestionStatistics(gameId, questionId, question)
+  await updateLeaderboard(gameId)
 }
 
 const getCorrectUsers = async (
@@ -995,12 +998,39 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
   for (const doc of gamesSnap.docs) {
     const gameId = doc.id
     const state = doc.data().state
+    const totalCountSnap = await admin
+      .firestore()
+      .collection(`games/${gameId}/users`)
+      .count()
+      .get()
     const usersCountSnap = await admin
       .firestore()
       .collection(`games/${gameId}/users`)
       .count()
       .get()
-    const playerCount = usersCountSnap.data().count
+    const playerCount = totalCountSnap.data().count
+    const [iosCountSnap, androidCountSnap] = await Promise.all([
+      admin
+        .firestore()
+        .collection(`games/${gameId}/users`)
+        .where('platform', '==', 'ios')
+        .count()
+        .get(),
+      admin
+        .firestore()
+        .collection(`games/${gameId}/users`)
+        .where('platform', '==', 'android')
+        .count()
+        .get(),
+    ])
+    const playerCountByPlatform = {
+      ios: iosCountSnap.data().count,
+      android: androidCountSnap.data().count,
+      unknown: Math.max(
+        0,
+        playerCount - iosCountSnap.data().count - androidCountSnap.data().count
+      ),
+    }
 
     const isSameCount = doc.data().playerCount === playerCount
 
@@ -1009,6 +1039,8 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
       const now = Date.now().toString()
       await admin.firestore().doc(`games/${gameId}/playerCounts/${now}`).set({
         count: playerCount,
+        ios: playerCountByPlatform.ios,
+        android: playerCountByPlatform.android,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       })
     }
@@ -1019,6 +1051,7 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
     await admin.firestore().doc(`games/${gameId}`).set(
       {
         playerCount,
+        playerCountByPlatform,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -1212,6 +1245,62 @@ const calculateQuestionStatistics = async (
   const nseMissingCount = predsSnap.docs.filter(
     (d) => (d.data() as any).notificationReceivedAt === undefined
   ).length
+  const responseSourceCounts: Record<string, number> = {}
+  const platformBuckets: Record<
+    string,
+    {
+      totalResponses: number
+      correctCount: number
+      incorrectCount: number
+      deliveries: number[]
+      opens: number[]
+      responds: number[]
+      remainingReceive: number[]
+      remainingOpen: number[]
+    }
+  > = {}
+  const platformFromSource = (src?: string) => {
+    if (!src || typeof src !== 'string') return 'unknown'
+    const lower = src.toLowerCase()
+    if (lower.includes('ios')) return 'ios'
+    if (lower.includes('android')) return 'android'
+    return 'unknown'
+  }
+  predsSnap.docs.forEach((d) => {
+    const data = d.data() as any
+    const src = typeof data.source === 'string' ? data.source : 'unknown'
+    responseSourceCounts[src] = (responseSourceCounts[src] || 0) + 1
+
+    const platform = platformFromSource(src)
+    if (!platformBuckets[platform]) {
+      platformBuckets[platform] = {
+        totalResponses: 0,
+        correctCount: 0,
+        incorrectCount: 0,
+        deliveries: [],
+        opens: [],
+        responds: [],
+        remainingReceive: [],
+        remainingOpen: [],
+      }
+    }
+    const bucket = platformBuckets[platform]
+    bucket.totalResponses += 1
+    const predVal = (data as any).prediction
+    const isCorrect = normalizePredictionValue(predVal) === normalizedAnswer
+    if (isCorrect) bucket.correctCount += 1
+    else bucket.incorrectCount += 1
+    if (typeof (data as any).deliveryMs === 'number')
+      bucket.deliveries.push((data as any).deliveryMs)
+    if (typeof (data as any).openMs === 'number')
+      bucket.opens.push((data as any).openMs)
+    if (typeof (data as any).respondMs === 'number')
+      bucket.responds.push((data as any).respondMs)
+    if (typeof (data as any).timeRemainingAtReceive === 'number')
+      bucket.remainingReceive.push((data as any).timeRemainingAtReceive)
+    if (typeof (data as any).timeRemainingAtOpen === 'number')
+      bucket.remainingOpen.push((data as any).timeRemainingAtOpen)
+  })
 
   const avg = (arr: number[]) =>
     arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : undefined
@@ -1235,6 +1324,24 @@ const calculateQuestionStatistics = async (
     correctCount,
     incorrectCount,
     nseMissingCount,
+    responseSourceCounts,
+    responseByPlatform: Object.fromEntries(
+      Object.entries(platformBuckets).map(([platform, bucket]) => {
+        const obj: any = {
+          totalResponses: bucket.totalResponses,
+          correctCount: bucket.correctCount,
+          incorrectCount: bucket.incorrectCount,
+        }
+        if (bucket.deliveries.length) obj.delivery = metric(bucket.deliveries)
+        if (bucket.opens.length) obj.open = metric(bucket.opens)
+        if (bucket.responds.length) obj.respond = metric(bucket.responds)
+        if (bucket.remainingReceive.length)
+          obj.timeRemainingAtReceive = metric(bucket.remainingReceive)
+        if (bucket.remainingOpen.length)
+          obj.timeRemainingAtOpen = metric(bucket.remainingOpen)
+        return [platform, obj]
+      })
+    ),
   }
 
   const gameSnap = await admin.firestore().doc(`games/${gameId}`).get()
@@ -1273,6 +1380,70 @@ const calculateQuestionStatistics = async (
     },
     { merge: true }
   )
+}
+
+const updateLeaderboard = async (gameId: string) => {
+  const calculatePlaces = (
+    leaderboardDocs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]
+  ) => {
+    let currentScore = -1
+    let currentPlace = 0
+    const numOfPeopleInPlace = [0]
+
+    const places = leaderboardDocs.map((userData) => {
+      if (userData.data().score !== currentScore) {
+        currentScore = userData.data().score
+        numOfPeopleInPlace[currentPlace] = numOfPeopleInPlace[currentPlace] + 1
+        currentPlace++
+        numOfPeopleInPlace.push(0)
+      } else {
+        numOfPeopleInPlace[currentPlace] = numOfPeopleInPlace[currentPlace] + 1
+      }
+
+      return currentPlace
+    })
+
+    return places
+  }
+
+  // Retrieve top 100 users (sorted by score desc, then username asc)
+  const leaderboardQueryRes = await admin
+    .firestore()
+    .collection(`games/${gameId}/users`)
+    .orderBy('score', 'desc')
+    .orderBy('username', 'asc')
+    .limit(100)
+    .get()
+
+  // Calculate places
+  const places = calculatePlaces(leaderboardQueryRes.docs)
+
+  // Build new leaderboard
+  const newLeaderboard = leaderboardQueryRes.docs.map((doc, index) => ({
+    place: places[index],
+    userId: doc.id,
+    ...doc.data(),
+  }))
+
+  // Calculate hash of new leaderboard
+  const newLeaderboardHash = createHash('sha256')
+    .update(JSON.stringify(newLeaderboard))
+    .digest('hex')
+
+  // Get current game to compare leaderboard hash
+  const gameDoc = await admin.firestore().doc(`games/${gameId}`).get()
+  const currentLeaderboardHash = gameDoc.data()?.leaderboardHash
+
+  // Only update if leaderboard changed
+  if (currentLeaderboardHash !== newLeaderboardHash) {
+    console.log('Leaderboard changed, updating...')
+    await admin.firestore().doc(`games/${gameId}`).update({
+      leaderboard: newLeaderboard,
+      leaderboardHash: newLeaderboardHash,
+    })
+  } else {
+    console.log('Leaderboard unchanged, skipping update')
+  }
 }
 
 const sendNotificationsToGameUsers = async (

@@ -26,6 +26,7 @@ type GamePlayer = {
   score: number
   username: string
   place?: number
+  platform?: string
   updatedAt: FirestoreTimestamp
 }
 

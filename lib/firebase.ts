@@ -478,7 +478,7 @@ export const addPrediction = async (
 export const getUserPredictionsStream = async (
   gameId: string,
   userId: string,
-  setPredictions: (predictions: Map<string, boolean>) => void
+  setPredictions: (predictions: Map<string, string>) => void
 ): Promise<any> => {
   const q = query(
     collection(db, `users/${userId}/games/${gameId}/predictions`),
@@ -486,7 +486,7 @@ export const getUserPredictionsStream = async (
   )
 
   return onSnapshot(q, (predictionsSnap) => {
-    const predictionsMap = new Map<string, boolean>()
+    const predictionsMap = new Map<string, string>()
 
     if (!predictionsSnap || predictionsSnap.empty) {
       setPredictions(predictionsMap)
@@ -496,7 +496,11 @@ export const getUserPredictionsStream = async (
     predictionsSnap.docs.forEach((predictionDoc: any) => {
       const questionId = predictionDoc.id
       const data = predictionDoc.data()
-      predictionsMap.set(questionId, data.prediction as boolean)
+      const value = data.prediction
+      predictionsMap.set(
+        questionId,
+        typeof value === 'string' ? value : String(value)
+      )
     })
 
     setPredictions(predictionsMap)

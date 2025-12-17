@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   AppState,
   Image,
+  Platform,
   Text,
   TouchableOpacity,
   View,
@@ -96,6 +97,7 @@ export default function GameLobbyScreen() {
       await updateGamePlayer(game.id, user.id, {
         score: 0,
         username: user.username,
+        platform: Platform.OS,
       })
 
       // Subscribe to game topic for notifications
