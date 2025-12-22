@@ -18,6 +18,7 @@ import { isRunningInExpoGo } from 'expo'
 import {
   router,
   Stack,
+  useLocalSearchParams,
   useNavigationContainerRef,
   useSegments,
 } from 'expo-router'
@@ -30,7 +31,12 @@ import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
 import { MixpanelProvider } from '@/lib/providers/MixpanelProvider'
-import messaging from '@react-native-firebase/messaging'
+import { getApp } from '@react-native-firebase/app'
+import {
+  getMessaging,
+  onMessage,
+  onNotificationOpenedApp,
+} from '@react-native-firebase/messaging'
 import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
 import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
@@ -64,10 +70,29 @@ function AuthGate() {
   const { user, loading, hasCompletedOnboarding, hasUsername } = useAuth()
   const segments = useSegments()
   const pathname = segments.join('/')
+  const { gameId: gameIdParam, questionId: questionIdParam } =
+    useLocalSearchParams<{
+      gameId?: string | string[]
+      questionId?: string | string[]
+    }>()
   const [checkingActiveGame, setCheckingActiveGame] = React.useState(false)
+  const incomingGameId = Array.isArray(gameIdParam)
+    ? gameIdParam[0]
+    : gameIdParam
+  const incomingQuestionId = Array.isArray(questionIdParam)
+    ? questionIdParam[0]
+    : questionIdParam
 
   useEffect(() => {
     if (loading || checkingActiveGame) return
+
+    console.log('[AuthGate] evaluate routing', {
+      pathname,
+      incomingGameId,
+      incomingQuestionId,
+      loading,
+      checkingActiveGame,
+    })
 
     const inAuthGroup = pathname.startsWith('sign-in')
     const inOnboarding = pathname.startsWith('onboarding')
@@ -78,6 +103,7 @@ function AuthGate() {
 
     if (!user && !inAuthGroup && !inSignout) {
       // Redirect to sign-in if not authenticated and not already on sign-in page or signout
+      console.log('[AuthGate] Redirect -> sign-in (unauthenticated)')
       router.replace('/sign-in')
       SplashScreen.hideAsync()
     } else if (
@@ -87,10 +113,12 @@ function AuthGate() {
       !inUsername
     ) {
       // Redirect to onboarding if authenticated but hasn't completed onboarding
+      console.log('[AuthGate] Redirect -> onboarding (onboarding incomplete)')
       router.replace('/onboarding')
       SplashScreen.hideAsync()
     } else if (user && user.onboardingComplete && !hasUsername && !inUsername) {
       // Redirect to username if authenticated, completed onboarding, but no username
+      console.log('[AuthGate] Redirect -> username (missing username)')
       router.replace('/username')
       SplashScreen.hideAsync()
     } else if (
@@ -106,6 +134,33 @@ function AuthGate() {
       const checkActiveGame = async () => {
         try {
           const db = getFirestore()
+
+          // If we already have a specific game (e.g., from a deep link), try to route there first
+          if (incomingGameId) {
+            const playerDoc = await getDoc(
+              doc(db, `games/${incomingGameId}/users`, user.id)
+            )
+
+            if (playerDoc.exists()) {
+              console.log(
+                '[AuthGate] Redirect -> game (deep link membership)',
+                incomingGameId,
+                incomingQuestionId
+              )
+              router.replace({
+                pathname: '/game',
+                params: {
+                  gameId: incomingGameId,
+                  ...(incomingQuestionId
+                    ? { questionId: incomingQuestionId }
+                    : {}),
+                },
+              })
+              SplashScreen.hideAsync()
+              setCheckingActiveGame(false)
+              return
+            }
+          }
 
           // Get the latest game
           const gamesQuery = query(
@@ -129,7 +184,8 @@ function AuthGate() {
 
               if (playerDoc.exists()) {
                 console.log(
-                  '[AuthGate] User has active game, redirecting to game screen'
+                  '[AuthGate] Redirect -> game (active membership)',
+                  gameId
                 )
                 router.replace({ pathname: '/game', params: { gameId } })
                 SplashScreen.hideAsync()
@@ -140,7 +196,7 @@ function AuthGate() {
           }
 
           // No active game found, go to lobby
-          console.log('[AuthGate] No active game found, redirecting to lobby')
+          console.log('[AuthGate] Redirect -> lobby (no active game)')
           router.replace('/game/lobby')
           SplashScreen.hideAsync()
           setCheckingActiveGame(false)
@@ -188,6 +244,7 @@ function ThemedApp() {
   const { theme, colorScheme } = useTheme()
   const { setColorScheme: setNativeWindColorScheme } =
     useNativeWindColorScheme()
+  const currentSegments = useSegments()
 
   useEffect(() => {
     // Force NativeWind to update by setting to undefined first if switching to system
@@ -200,7 +257,9 @@ function ThemedApp() {
 
   // Foreground FCM -> force a visible notification (iOS + Android)
   useEffect(() => {
-    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+    const app = getApp()
+    const messagingInstance = getMessaging(app)
+    const unsubscribe = onMessage(messagingInstance, async (remoteMessage) => {
       console.log('[FCM] Foreground message', remoteMessage)
       const collapseId = remoteMessage.data?.collapseId as string
 
@@ -252,6 +311,7 @@ function ThemedApp() {
   useEffect(() => {
     const checkInitialNotification = async () => {
       const initialNotification = await notifee.getInitialNotification()
+      console.log('[Notification] initialNotification', initialNotification)
       if (
         initialNotification?.notification?.data?.gameId &&
         initialNotification?.notification?.data?.questionId
@@ -264,13 +324,39 @@ function ThemedApp() {
           pathname: '/game',
           params: {
             gameId: initialNotification.notification.data.gameId as string,
-            questionId: initialNotification.notification.data
-              .questionId as string,
           },
         })
       }
     }
     checkInitialNotification()
+  }, [])
+
+  // Handle notification taps while app is in background
+  useEffect(() => {
+    const app = getApp()
+    const messagingInstance = getMessaging(app)
+    const unsubscribe = onNotificationOpenedApp(
+      messagingInstance,
+      (remoteMessage) => {
+        const gameId = remoteMessage?.data?.gameId as string | undefined
+        console.log('[Notification] App opened from background notification', {
+          gameId,
+        })
+        if (gameId) {
+          // Avoid redirecting if already on game screen
+          // Avoid redirecting if already on game screen
+          // Avoid redirecting if already on game screen
+          const isOnGame =
+            Array.isArray(currentSegments) &&
+            currentSegments.length > 0 &&
+            currentSegments[0] === 'game'
+          if (!isOnGame) {
+            router.push({ pathname: '/game', params: { gameId } })
+          }
+        }
+      }
+    )
+    return unsubscribe
   }, [])
 
   return (

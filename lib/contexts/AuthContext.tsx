@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { FirebaseAuthTypes } from '@react-native-firebase/auth'
 import {
   getAuth,
+  getIdToken as getIdTokenModular,
   onAuthStateChanged,
   signOut,
 } from '@react-native-firebase/auth'
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
     try {
-      const idToken = await fbUser.getIdToken()
+      const idToken = await getIdTokenModular(fbUser)
       let sessionToken = idToken
       let shouldFetchNewToken = true
 
