@@ -49,3 +49,7 @@ app-example
 .env.local
 *.apk
 *.aab
+
+# These are checked in initially but we should ignore the local env modifications
+targets/notification-content/Info.plist
+targets/notification-service/Info.plist
