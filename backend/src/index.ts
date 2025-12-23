@@ -9,6 +9,8 @@ import gameRouter, {
 } from './routes/game'
 import logsRouter from './routes/logs'
 
+const LOG_BLACKLIST = ['/health', '/api/log']
+
 Sentry.init({
   enabled: process.env.NODE_ENV === 'production',
   dsn: process.env.SENTRY_DSN,
@@ -24,8 +26,12 @@ app.use(express.json())
 
 // Simple request logger
 app.use((req, _res, next) => {
-  // Skip health check logs
-  if (req.path !== '/health') console.log(`[request] ${req.method} ${req.path}`)
+  const isBlacklisted = LOG_BLACKLIST.some(
+    (p) => req.path === p || req.path.startsWith(`${p}/`)
+  )
+
+  if (!isBlacklisted) console.log(`[request] ${req.method} ${req.path}`)
+
   next()
 })
 
@@ -39,7 +45,8 @@ app.use(Sentry.Handlers.errorHandler())
 const PORT = process.env.PORT || 4000
 app.listen(PORT, () => {
   console.log(`[backend] Domain: ${process.env.DOMAIN}`)
-  if (process.env.SENTRY_DSN) console.log('[backend] Sentry initialized')
+  if (process.env.SENTRY_DSN && process.env.NODE_ENV === 'production')
+    console.log('[sentry] Initialized')
 })
 
 // Background worker: update player counts for active games every minute
