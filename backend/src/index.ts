@@ -24,7 +24,8 @@ app.use(express.json())
 
 // Simple request logger
 app.use((req, _res, next) => {
-  console.log(`[request] ${req.method} ${req.path}`)
+  // Skip health check logs
+  if (req.path !== '/health') console.log(`[request] ${req.method} ${req.path}`)
   next()
 })
 
