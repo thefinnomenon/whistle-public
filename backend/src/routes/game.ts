@@ -9,11 +9,107 @@ import { isAdminMiddleware } from '../middleware/isAdmin'
 // api/games/
 const router = Router()
 
-// All routes require auth + admin
-router.use(authMiddleware, isAdminMiddleware)
+// All routes require auth
+router.use(authMiddleware)
+
+// Send onboarding practice question to a single user
+router.post('/onboarding/practice-question', async (req, res) => {
+  try {
+    if (!req.user?.uid)
+      return res.status(400).json({ error: 'userId required' })
+
+    const userDoc = await db.collection('users').doc(req.user.uid).get()
+    if (!userDoc.exists)
+      return res.status(404).json({ error: 'User not found' })
+
+    const tokensMap = (userDoc.data() as any)?.tokens || {}
+    const tokens: string[] = Object.values(tokensMap)
+      .map((t: any) => t?.token)
+      .filter((t: any) => typeof t === 'string' && t.length > 0)
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'No device tokens for user' })
+    }
+
+    const now = Date.now()
+    const questionId = `onboarding`
+    const gameId = 'onboarding'
+    const collapseId = `onboarding`
+    const payloadQuestion = 'Will NE score in this red zone opportunity?'
+    const payloadChoices = [
+      { id: 'yes', value: 'Yes' },
+      { id: 'no', value: 'No' },
+    ]
+    const timeoutAt = now + 20 * 1000
+
+    const message: admin.messaging.MulticastMessage = {
+      tokens,
+      notification: {
+        title: 'Long press to answer!',
+        body: payloadQuestion,
+      },
+      data: {
+        type: 'question',
+        gameId,
+        questionId,
+        question: payloadQuestion,
+        sentAt: String(now),
+        engineTag: 'onboarding',
+        collapseId,
+        choices: JSON.stringify(payloadChoices),
+        timeoutAt: String(timeoutAt),
+      },
+      android: {
+        priority: 'high',
+        ttl: 10,
+        collapseKey: collapseId,
+        notification: {
+          channelId: 'default',
+          tag: collapseId,
+          priority: 'high',
+          sound: 'whistle',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            category: 'question',
+            sound: 'whistle.wav',
+            'mutable-content': 1,
+          },
+        },
+        headers: {
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'apns-collapse-id': collapseId,
+          'apns-expiration': Math.floor(timeoutAt / 1000).toString(),
+        },
+      },
+    }
+
+    await admin.messaging().sendEachForMulticast(message)
+
+    trackEvent(
+      'onboarding_practice_question_sent',
+      { userId: req.user?.uid, questionId, timeoutAt },
+      req.user?.uid
+    )
+
+    return res.json({ ok: true, questionId })
+  } catch (error) {
+    console.error('[onboarding/practice-question] error', error)
+    trackEvent(
+      'onboarding_practice_question_error',
+      { error: String(error) },
+      req.user?.uid
+    )
+    return res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+// All remaining routes require admin
 
 // GAME ROUTES
-router.post('/', async (req, res) => {
+router.post('/', isAdminMiddleware, async (req, res) => {
   console.log('[games/create] game', req.body)
   try {
     if (!req.user?.uid) {
@@ -64,7 +160,7 @@ router.post('/', async (req, res) => {
   }
 })
 
-router.post('/:id/start', async (req, res) => {
+router.post('/:id/start', isAdminMiddleware, async (req, res) => {
   const { id } = req.params
   console.log('[games/start] game', id)
   try {
@@ -96,7 +192,7 @@ router.post('/:id/start', async (req, res) => {
   }
 })
 
-router.post('/:id/end', async (req, res) => {
+router.post('/:id/end', isAdminMiddleware, async (req, res) => {
   const { id } = req.params
   console.log('[games/end] game', id)
   try {
@@ -150,7 +246,7 @@ router.post('/:id/end', async (req, res) => {
   }
 })
 
-router.post('/test-question', async (_req, res) => {
+router.post('/test-question', isAdminMiddleware, async (_req, res) => {
   try {
     const targetEmail = 'configure@example.com'
     const userRecord = await admin.auth().getUserByEmail(targetEmail)
@@ -241,7 +337,7 @@ router.post('/test-question', async (_req, res) => {
 })
 
 // QUESTION ROUTES
-router.post('/:gameId/questions', async (req, res) => {
+router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
   const { gameId } = req.params
   console.log('[questions/create] body', req.body)
   try {
@@ -358,147 +454,159 @@ router.post('/:gameId/questions', async (req, res) => {
   }
 })
 
-router.post('/:gameId/questions/:questionId/close', async (req, res) => {
-  const { gameId, questionId } = req.params
-  console.log('[questions/close]', gameId, questionId)
-  try {
-    await db
-      .collection('games')
-      .doc(gameId)
-      .collection('questions')
-      .doc(questionId)
-      .set(
+router.post(
+  '/:gameId/questions/:questionId/close',
+  isAdminMiddleware,
+  async (req, res) => {
+    const { gameId, questionId } = req.params
+    console.log('[questions/close]', gameId, questionId)
+    try {
+      await db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .doc(questionId)
+        .set(
+          {
+            state: 'closed',
+            closedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+      trackEvent(
+        'question_closed',
         {
-          state: 'closed',
-          closedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          gameId,
+          questionId,
+          method: 'manual',
         },
-        { merge: true }
+        req.user?.uid
       )
-    await sendDismissNotification(gameId, questionId, `game_${gameId}`)
 
-    trackEvent(
-      'question_closed',
-      {
-        gameId,
-        questionId,
-        method: 'manual',
-      },
-      req.user?.uid
-    )
-
-    return res.json({ ok: true })
-  } catch (err) {
-    console.error('[questions/close] error', err)
-    trackEvent(
-      'question_close_error',
-      {
-        gameId,
-        questionId,
-        method: 'manual',
-        error: String(err),
-      },
-      req.user?.uid
-    )
-    return res.status(500).json({ error: 'Internal Server Error' })
-  }
-})
-
-router.post('/:gameId/questions/:questionId/cancel', async (req, res) => {
-  const { gameId, questionId } = req.params
-  console.log('[questions/cancel]', gameId, questionId)
-  try {
-    await db
-      .collection('games')
-      .doc(gameId)
-      .collection('questions')
-      .doc(questionId)
-      .set(
+      return res.json({ ok: true })
+    } catch (err) {
+      console.error('[questions/close] error', err)
+      trackEvent(
+        'question_close_error',
         {
-          state: 'cancelled',
-          closedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          gameId,
+          questionId,
+          method: 'manual',
+          error: String(err),
         },
-        { merge: true }
+        req.user?.uid
       )
-    await calculateScores(gameId, questionId, { revertIfResolved: true })
-    await sendDismissNotification(gameId, questionId, `game_${gameId}`)
-
-    trackEvent(
-      'question_cancelled',
-      {
-        gameId,
-        questionId,
-      },
-      req.user?.uid
-    )
-
-    return res.json({ ok: true })
-  } catch (err) {
-    console.error('[questions/cancel] error', err)
-    trackEvent(
-      'question_cancel_error',
-      {
-        gameId,
-        questionId,
-        error: String(err),
-      },
-      req.user?.uid
-    )
-    return res.status(500).json({ error: 'Internal Server Error' })
+      return res.status(500).json({ error: 'Internal Server Error' })
+    }
   }
-})
+)
 
-router.post('/:gameId/questions/:questionId/resolve', async (req, res) => {
-  const { gameId, questionId } = req.params
-  const { answer } = req.body || {}
-  console.log('[questions/resolve]', gameId, questionId, 'answer', answer)
-  if (answer === undefined) {
-    return res.status(400).json({ error: 'answer is required' })
-  }
-  try {
-    await db
-      .collection('games')
-      .doc(gameId)
-      .collection('questions')
-      .doc(questionId)
-      .set(
+router.post(
+  '/:gameId/questions/:questionId/cancel',
+  isAdminMiddleware,
+  async (req, res) => {
+    const { gameId, questionId } = req.params
+    console.log('[questions/cancel]', gameId, questionId)
+    try {
+      await db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .doc(questionId)
+        .set(
+          {
+            state: 'cancelled',
+            closedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      await calculateScores(gameId, questionId, { revertIfResolved: true })
+      await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+      trackEvent(
+        'question_cancelled',
         {
-          state: 'resolved',
+          gameId,
+          questionId,
+        },
+        req.user?.uid
+      )
+
+      return res.json({ ok: true })
+    } catch (err) {
+      console.error('[questions/cancel] error', err)
+      trackEvent(
+        'question_cancel_error',
+        {
+          gameId,
+          questionId,
+          error: String(err),
+        },
+        req.user?.uid
+      )
+      return res.status(500).json({ error: 'Internal Server Error' })
+    }
+  }
+)
+
+router.post(
+  '/:gameId/questions/:questionId/resolve',
+  isAdminMiddleware,
+  async (req, res) => {
+    const { gameId, questionId } = req.params
+    const { answer } = req.body || {}
+    console.log('[questions/resolve]', gameId, questionId, 'answer', answer)
+    if (answer === undefined) {
+      return res.status(400).json({ error: 'answer is required' })
+    }
+    try {
+      await db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .doc(questionId)
+        .set(
+          {
+            state: 'resolved',
+            answer,
+            resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      await calculateScores(gameId, questionId)
+      await sendDismissNotification(gameId, questionId, `game_${gameId}`)
+
+      trackEvent(
+        'question_resolved',
+        {
+          gameId,
+          questionId,
           answer,
-          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
-        { merge: true }
+        req.user?.uid
       )
-    await calculateScores(gameId, questionId)
-    await sendDismissNotification(gameId, questionId, `game_${gameId}`)
 
-    trackEvent(
-      'question_resolved',
-      {
-        gameId,
-        questionId,
-        answer,
-      },
-      req.user?.uid
-    )
-
-    return res.json({ ok: true })
-  } catch (err) {
-    console.error('[questions/resolve] error', err)
-    trackEvent(
-      'question_resolve_error',
-      {
-        gameId,
-        questionId,
-        error: String(err),
-      },
-      req.user?.uid
-    )
-    return res.status(500).json({ error: 'Internal Server Error' })
+      return res.json({ ok: true })
+    } catch (err) {
+      console.error('[questions/resolve] error', err)
+      trackEvent(
+        'question_resolve_error',
+        {
+          gameId,
+          questionId,
+          error: String(err),
+        },
+        req.user?.uid
+      )
+      return res.status(500).json({ error: 'Internal Server Error' })
+    }
   }
-})
+)
 
 // PREDICTION ROUTES
 router.post(
@@ -543,6 +651,39 @@ router.post(
       let timeRemaining: number | undefined
       if (questionTimeoutAt) {
         timeRemaining = questionTimeoutAt - nowMs
+      }
+
+      // Practice/onboarding submissions: store on user record only, skip game stats
+      if (gameId === 'onboarding') {
+        await db
+          .collection('users')
+          .doc(userId)
+          .set(
+            {
+              onboardingPrediction: {
+                questionId,
+                prediction,
+                source: normalizedSource,
+                questionTimeoutAt,
+                createdAt: now,
+                createdAtMs: Date.now(),
+              },
+            },
+            { merge: true }
+          )
+
+        trackEvent(
+          'onboarding_practice_prediction',
+          {
+            userId,
+            questionId,
+            prediction,
+            source: normalizedSource,
+          },
+          userId
+        )
+
+        return res.json({ ok: true, practice: true })
       }
 
       const predictionRef = db

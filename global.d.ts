@@ -38,6 +38,7 @@ type User = {
   isAdmin?: boolean
   winnings?: number
   onboardingComplete?: boolean
+  onboardingPrediction?: Prediction
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   tokens: { [tokenId: string]: Token | FieldValue }

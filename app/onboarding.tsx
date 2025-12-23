@@ -1,19 +1,17 @@
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Text } from '@/components/ui/text'
+import { useAuth } from '@/lib/contexts/AuthContext'
+import { env } from '@/lib/env'
 import {
-  cancelNotification,
   checkNotificationPermission,
-  createNotificationChannel,
-  displayNotification,
   getFCMToken,
   openAppNotificationSettings,
   requestNotificationPermission,
 } from '@/lib/notifications'
-import notifee, { AndroidImportance, EventType } from '@notifee/react-native'
 import { router } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Platform, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
@@ -21,66 +19,37 @@ import { toast } from 'sonner-native'
 const videoSource = null
 
 export default function OnboardingScreen() {
+  const { user, firebaseUser } = useAuth()
   const [step, setStep] = useState<'intro' | 'practice'>('intro')
   const [loading, setLoading] = useState(false)
   const [videoStarted, setVideoStarted] = useState(false)
-  const [notificationId, setNotificationId] = useState<string | null>(null)
   const [userAnswer, setUserAnswer] = useState<string | null>(null)
-  const [showResult, setShowResult] = useState(false)
   const [permissionDenied, setPermissionDenied] = useState(false)
-  const [windowClosed, setWindowClosed] = useState(false)
-  const [windowClosedTimer, setWindowClosedTimer] = useState<number | null>(
-    null
-  )
-  const [showResultTimer, setShowResultTimer] = useState<number | null>(null)
-  const [showMissedResponse, setShowMissedResponse] = useState(false)
   const [showFinalAnswer, setShowFinalAnswer] = useState(false)
+  const [timeoutHandle, setTimeoutHandle] = useState<any | null>(null)
+  const answerRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    answerRef.current = userAnswer
+  }, [userAnswer])
   const player = useVideoPlayer(videoSource, (player) => {
     player.loop = false
     player.muted = false
     player.pause()
   })
 
+  // Watch for onboardingPrediction from backend practice push
   useEffect(() => {
-    if (windowClosed && !userAnswer) {
-      setShowMissedResponse(true)
-      console.log('No answer so pausing video and canceling notification')
-      player.pause()
-      if (notificationId) cancelNotification(notificationId).then(() => {})
-      if (showResultTimer) clearTimeout(showResultTimer)
-      return
-    }
-
-    if (showResult && userAnswer) {
-      setShowFinalAnswer(true)
-    }
-  }, [
-    windowClosed,
-    userAnswer,
-    showResult,
-    player,
-    notificationId,
-    showResultTimer,
-  ])
-
-  useEffect(() => {
-    // Listen for notification actions
-    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
-      if (type === EventType.ACTION_PRESS && detail.pressAction?.id) {
-        console.log('User pressed action:', detail.pressAction.id)
-        if (!windowClosed) {
-          console.log('Setting user answer', detail.pressAction.id)
-          setUserAnswer(detail.pressAction.id)
-          if (windowClosedTimer) clearTimeout(windowClosedTimer)
-          player.play()
-        }
+    if (!user) return
+    const prediction = user.onboardingPrediction
+    if (prediction) {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle)
+        setTimeoutHandle(null)
       }
-    })
-
-    return () => {
-      unsubscribe()
+      setUserAnswer(prediction.prediction)
     }
-  }, [player, windowClosed, windowClosedTimer])
+  }, [timeoutHandle, user])
 
   const handleNext = () => {
     setStep('practice')
@@ -88,48 +57,41 @@ export default function OnboardingScreen() {
 
   const sendPracticeNotification = async () => {
     try {
-      const channelId = await createNotificationChannel(
-        'practice',
-        'Practice Notifications',
-        AndroidImportance.HIGH
+      const targetUserId = user?.id || firebaseUser?.uid
+      if (!firebaseUser || !targetUserId)
+        throw new Error('User not authenticated')
+      const idToken = await firebaseUser.getIdToken()
+      const resp = await fetch(
+        `${env.DOMAIN}/api/games/onboarding/practice-question`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            userId: targetUserId,
+          }),
+        }
       )
+      const data = await resp.json()
+      if (!resp.ok) {
+        throw new Error(data?.error || `status ${resp.status}`)
+      }
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      const handle = setTimeout(() => {
+        setShowFinalAnswer(true)
+      }, 20000)
+      setTimeoutHandle(handle as any)
+    } catch (error: any) {
+      console.error('Error sending practice push:', error)
+      toast.error(`Failed to send practice push: ${error?.message || error}`)
+      // reset state so onboarding can retry cleanly
+      setUserAnswer(null)
 
-      setNotificationId(
-        await displayNotification(
-          '[PAT vs ATL] Will the next play result in a touchdown?',
-          Platform.OS === 'ios'
-            ? 'Long press to see options'
-            : 'Tap Yes or No to make your prediction!',
-          {
-            channelId,
-            categoryId: 'practice',
-            actions: [
-              { title: '✅ Yes', id: 'yes' },
-              { title: '❌ No', id: 'no' },
-            ],
-            data: {
-              practice: 'true',
-            },
-          }
-        )
-      )
-
-      // Close prediction window
-      setWindowClosedTimer(
-        setTimeout(async () => {
-          setWindowClosed(true)
-        }, 12000)
-      )
-
-      // Timer to show result
-      setShowResultTimer(
-        setTimeout(() => {
-          setShowResult(true)
-        }, 17000)
-      )
-    } catch (error) {
-      console.error('Error displaying notification:', error)
-      toast.error(`Failed to show notification: ${error}`)
+      setShowFinalAnswer(false)
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      setTimeoutHandle(null)
     }
   }
 
@@ -163,14 +125,12 @@ export default function OnboardingScreen() {
         console.log('FCM Token:', token)
       }
 
+      // Send practice notification via backend/content extension
+      sendPracticeNotification()
+
       // Start video playback
       setVideoStarted(true)
       player.play()
-
-      // Send practice notification
-      setTimeout(() => {
-        sendPracticeNotification()
-      }, 3000)
     } catch (error) {
       console.error('Error requesting notifications permission:', error)
       toast.error('Failed to enable push notifications')
@@ -184,15 +144,12 @@ export default function OnboardingScreen() {
   }
 
   const handlePlayAgain = async () => {
+    // Send practice notification
+    sendPracticeNotification()
+
     // Reset state
-    setUserAnswer(null)
-    setShowResult(false)
-    setWindowClosed(false)
     setVideoStarted(true)
-    setShowMissedResponse(false)
     setShowFinalAnswer(false)
-    if (showResultTimer) clearTimeout(showResultTimer)
-    if (windowClosedTimer) clearTimeout(windowClosedTimer)
 
     // Reset video to beginning
     player.pause()
@@ -201,10 +158,12 @@ export default function OnboardingScreen() {
     // Start video
     player.play()
 
-    // Send practice notification
-    setTimeout(() => {
-      sendPracticeNotification()
-    }, 3000)
+    // Set final answer timer
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    const handle = setTimeout(() => {
+      setShowFinalAnswer(true)
+    }, 20000)
+    setTimeoutHandle(handle as any)
   }
 
   const handleSkip = async () => {
@@ -264,7 +223,7 @@ export default function OnboardingScreen() {
                   <Image
                     source={
                       Platform.OS === 'ios'
-                        ? require('@/assets/images/onboarding/ios_push_example.png')
+                        ? require('@/assets/images/onboarding/ios_push_example.jpg')
                         : require('@/assets/images/onboarding/android_push_example.png')
                     }
                     style={{
@@ -350,7 +309,7 @@ export default function OnboardingScreen() {
             </>
           )}
 
-          {videoStarted && !showResult && (
+          {videoStarted && !showFinalAnswer && (
             <>
               {userAnswer ? (
                 <Card>
@@ -364,31 +323,10 @@ export default function OnboardingScreen() {
                   </CardContent>
                 </Card>
               ) : (
-                !windowClosed && (
-                  <Text className="text-muted-foreground text-center">
-                    Check your notification and make your prediction!
-                  </Text>
-                )
+                <Text className="text-muted-foreground text-center">
+                  Long press the notification and make your prediction!
+                </Text>
               )}
-            </>
-          )}
-
-          {showMissedResponse && (
-            <>
-              <Card className="mb-4">
-                <CardContent>
-                  <Text className="text-lg font-semibold text-center text-foreground mb-2">
-                    You missed the response window!
-                  </Text>
-                  <Text className="text-center text-muted-foreground">
-                    In a real game, you need to respond quickly before the next
-                    play starts. Try again!
-                  </Text>
-                </CardContent>
-              </Card>
-              <Button onPress={handlePlayAgain}>
-                <Text>Try Again</Text>
-              </Button>
             </>
           )}
 
@@ -396,19 +334,29 @@ export default function OnboardingScreen() {
             <>
               <Card>
                 <CardContent>
-                  <Text className="text-lg font-semibold text-center text-foreground mb-2">
-                    You answered: {userAnswer === 'yes' ? 'Yes' : 'No'}
-                  </Text>
-                  <Text className="text-center text-muted-foreground">
-                    {userAnswer === 'yes'
-                      ? '✅ Correct! Great prediction!'
-                      : "❌ Not quite! You'll get it next time!"}
-                  </Text>
+                  {userAnswer ? (
+                    <>
+                      <Text className="text-lg font-semibold text-center text-foreground mb-2">
+                        You answered: {userAnswer === 'yes' ? 'Yes' : 'No'}
+                      </Text>
+                      <Text className="text-center text-muted-foreground">
+                        {userAnswer === 'yes'
+                          ? '✅ Correct! Great prediction!'
+                          : "❌ Not quite! You'll get it next time!"}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text className="text-lg font-semibold text-center text-foreground">
+                      You forgot to answer! Try again!
+                    </Text>
+                  )}
                 </CardContent>
               </Card>
-              <Button variant="outline" onPress={handlePlayAgain}>
-                <Text>Play Again</Text>
-              </Button>
+              {!userAnswer && (
+                <Button variant="outline" onPress={handlePlayAgain}>
+                  <Text>Play Again</Text>
+                </Button>
+              )}
               <Button onPress={handleFinish}>
                 <Text>Next</Text>
               </Button>
