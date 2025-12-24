@@ -254,15 +254,6 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       json.put("prediction", choiceId)
       json.put("source", "android_notification")
       if (timeoutAt != null) json.put("questionTimeoutAt", timeoutAt)
-      logEvent(domain, token, "notification_prediction_tap", mapOf(
-        "questionId" to questionId,
-        "gameId" to gameId,
-        "receivedAt" to receivedAt,
-        "sentAt" to sentAt,
-        "choiceId" to choiceId,
-        "buttonIndex" to buttonIndex
-      ))
-
       val body = json.toString().toRequestBody("application/json".toMediaType())
       val reqBuilder = Request.Builder()
         .url("$domain/api/games/$gameId/questions/$questionId/prediction")

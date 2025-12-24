@@ -43,10 +43,6 @@ export default function OnboardingScreen() {
     if (!user) return
     const prediction = user.onboardingPrediction
     if (prediction) {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle)
-        setTimeoutHandle(null)
-      }
       setUserAnswer(prediction.prediction)
     }
   }, [timeoutHandle, user])
