@@ -39,7 +39,7 @@ router.post('/error', optionalAuthMiddleware, async (req, res) => {
 // Logs events from notification content extension and other clients
 router.post('/event', optionalAuthMiddleware, async (req, res) => {
   const { eventName, properties } = req.body || {}
-  console.log('[client event]', req.body, eventName, properties)
+  console.log('[client event]', eventName, properties)
 
   if (!eventName) {
     return res.status(400).json({ error: 'eventName is required' })
