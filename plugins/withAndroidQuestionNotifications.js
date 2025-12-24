@@ -169,11 +169,23 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import kotlin.concurrent.thread
 
 class ${RECEIVER_CLASS} : BroadcastReceiver() {
   private val client = OkHttpClient()
 
   override fun onReceive(context: Context, intent: Intent) {
+    val result = goAsync()
+    thread {
+      try {
+        handleReceive(context, intent)
+      } finally {
+        result.finish()
+      }
+    }
+  }
+
+  private fun handleReceive(context: Context, intent: Intent) {
     val gameId = intent.getStringExtra("gameId") ?: return
     val questionId = intent.getStringExtra("questionId") ?: return
     val choiceId = intent.getStringExtra("choiceId") ?: return
@@ -265,7 +277,7 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
 
       val resp = client.newCall(reqBuilder.build()).execute()
       if (!resp.isSuccessful) {
-        Log.e("QuestionAction", "Submit failed: ${'${'}resp.code}")
+        Log.e("QuestionAction", "Submit failed: ${'$'}{resp.code}")
         logError(domain, token, "notification_prediction_submit_failed", mapOf(
           "status" to resp.code,
           "questionId" to questionId,
