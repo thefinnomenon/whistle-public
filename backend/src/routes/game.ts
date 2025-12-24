@@ -38,6 +38,8 @@ router.post('/onboarding/practice-question', async (req, res) => {
     const payloadChoices = [
       { id: 'yes', value: 'Yes' },
       { id: 'no', value: 'No' },
+      { id: 'maybe', value: 'Maybe' },
+      { id: 'definitely', value: 'Definitely is going to happen' },
     ]
     const timeoutAt = now + 20 * 1000
 
@@ -1140,11 +1142,6 @@ export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
     const gameId = doc.id
     const state = doc.data().state
     const totalCountSnap = await admin
-      .firestore()
-      .collection(`games/${gameId}/users`)
-      .count()
-      .get()
-    const usersCountSnap = await admin
       .firestore()
       .collection(`games/${gameId}/users`)
       .count()

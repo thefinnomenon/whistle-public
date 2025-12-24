@@ -41,6 +41,7 @@ import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
 import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
 import React, { useEffect } from 'react'
+import { NativeModules, Platform } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
 
@@ -67,7 +68,8 @@ Sentry.init({
 configureGoogleSignIn()
 
 function AuthGate() {
-  const { user, loading, hasCompletedOnboarding, hasUsername } = useAuth()
+  const { user, firebaseUser, loading, hasCompletedOnboarding, hasUsername } =
+    useAuth()
   const segments = useSegments()
   const pathname = segments.join('/')
   const { gameId: gameIdParam, questionId: questionIdParam } =
@@ -82,6 +84,7 @@ function AuthGate() {
   const incomingQuestionId = Array.isArray(questionIdParam)
     ? questionIdParam[0]
     : questionIdParam
+  const { AuthConfig } = NativeModules as any
 
   useEffect(() => {
     if (loading || checkingActiveGame) return
@@ -220,7 +223,30 @@ function AuthGate() {
     hasUsername,
     pathname,
     checkingActiveGame,
+    incomingGameId,
+    incomingQuestionId,
   ])
+
+  // Provide auth context to native Android notification renderer
+  useEffect(() => {
+    if (
+      Platform.OS === 'android' &&
+      user &&
+      firebaseUser &&
+      AuthConfig?.setAuthContext
+    ) {
+      firebaseUser
+        .getIdToken()
+        .then((token) => {
+          try {
+            AuthConfig.setAuthContext(env.DOMAIN, token)
+          } catch (err) {
+            console.warn('Failed to set native auth context', err)
+          }
+        })
+        .catch((err) => console.warn('Failed to fetch idToken', err))
+    }
+  }, [user, firebaseUser, AuthConfig])
 
   // Don't render anything while loading or checking for active game - splash screen will stay visible
   if (loading || checkingActiveGame) {
@@ -261,6 +287,15 @@ function ThemedApp() {
     const messagingInstance = getMessaging(app)
     const unsubscribe = onMessage(messagingInstance, async (remoteMessage) => {
       console.log('[FCM] Foreground message', remoteMessage)
+      if (
+        Platform.OS === 'android' &&
+        remoteMessage.data?.type === 'question'
+      ) {
+        console.log(
+          '[FCM] Android question handled natively, skipping Notifee render'
+        )
+        return
+      }
       const collapseId = remoteMessage.data?.collapseId as string
 
       // Handle dismiss/expired messages
@@ -344,8 +379,6 @@ function ThemedApp() {
         })
         if (gameId) {
           // Avoid redirecting if already on game screen
-          // Avoid redirecting if already on game screen
-          // Avoid redirecting if already on game screen
           const isOnGame =
             Array.isArray(currentSegments) &&
             currentSegments.length > 0 &&
@@ -357,7 +390,7 @@ function ThemedApp() {
       }
     )
     return unsubscribe
-  }, [])
+  }, [currentSegments])
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

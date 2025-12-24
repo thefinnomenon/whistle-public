@@ -1,20 +1,27 @@
 import {
-  getAuth,
-  signInWithCredential,
   AppleAuthProvider,
+  getAuth,
   GoogleAuthProvider,
+  signInWithCredential,
 } from '@react-native-firebase/auth'
 import { GoogleSignin } from '@react-native-google-signin/google-signin'
 import * as AppleAuthentication from 'expo-apple-authentication'
 import * as Crypto from 'expo-crypto'
+import { Platform } from 'react-native'
 import { toast } from 'sonner-native'
+import { env } from './env'
 
 const auth = getAuth()
 
 // Configure Google Sign-In
 export const configureGoogleSignIn = () => {
+  const webClientId = Platform.select({
+    android: env.GOOGLE_WEB_CLIENT_ID_ANDROID,
+    ios: env.GOOGLE_WEB_CLIENT_ID_IOS,
+  })
+
   GoogleSignin.configure({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
+    webClientId,
     offlineAccess: true,
   })
 }

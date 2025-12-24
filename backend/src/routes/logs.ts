@@ -10,6 +10,7 @@ const router = Router()
 // Adds user to scope if bearer token is valid; otherwise still logs without user.
 router.post('/error', optionalAuthMiddleware, async (req, res) => {
   const { message, context } = req.body || {}
+  console.log('[client error]', message, context)
   const err = new Error(message || 'Logged error from client')
   Sentry.captureException(err, (scope) => {
     scope.setContext('client_error', context || {})
@@ -38,6 +39,7 @@ router.post('/error', optionalAuthMiddleware, async (req, res) => {
 // Logs events from notification content extension and other clients
 router.post('/event', optionalAuthMiddleware, async (req, res) => {
   const { eventName, properties } = req.body || {}
+  console.log('[client event]', req.body, eventName, properties)
 
   if (!eventName) {
     return res.status(400).json({ error: 'eventName is required' })

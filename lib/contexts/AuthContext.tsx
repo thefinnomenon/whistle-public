@@ -17,6 +17,7 @@ import {
 } from '@react-native-firebase/firestore'
 import { requireNativeModule } from 'expo-modules-core'
 import React, { createContext, useContext, useEffect, useState } from 'react'
+import { NativeModules, Platform } from 'react-native'
 import { toast } from 'sonner-native'
 import { analytics } from '../analytics'
 
@@ -29,12 +30,35 @@ const TOKEN_REFRESH_THRESHOLD_DAYS = 7
 
 const auth = getAuth()
 const db = getFirestore()
-const WhistleSessionModule = requireNativeModule('WhistleSessionModule') as
-  | {
-      setSession: (authToken: string) => void
-      setDomain?: (url: string) => void
-    }
-  | undefined
+
+// Set native session module (this sets the domain and user auth token for native prediction submission)
+let WhistleSessionModule: {
+  setSession: (authToken: string) => void
+  setDomain?: (url: string) => void
+} | null
+
+if (Platform.OS === 'ios')
+  WhistleSessionModule = requireNativeModule('WhistleSessionModule')
+
+if (Platform.OS === 'android') {
+  const { AuthConfig } = NativeModules as any
+  if (!AuthConfig?.setSession) {
+    throw new Error('AuthConfig native module unavailable on Android')
+  }
+  WhistleSessionModule = {
+    setSession: (authToken: string) => {
+      if (env.DOMAIN) {
+        AuthConfig.setDomain?.(env.DOMAIN)
+      }
+      AuthConfig.setSession(authToken)
+    },
+    setDomain: (url: string) => {
+      if (AuthConfig.setDomain) {
+        AuthConfig.setDomain(url)
+      }
+    },
+  }
+}
 
 interface AuthContextType {
   firebaseUser: FirebaseUser | null
@@ -57,8 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const setNativeSession = async (fbUser: FirebaseUser) => {
     if (!WhistleSessionModule?.setSession) {
-      console.warn('[WhistleSession] No setSession defined in native module')
-      return
+      throw new Error(
+        '[WhistleSession] setSession not available in native module'
+      )
     }
     try {
       const idToken = await getIdTokenModular(fbUser)

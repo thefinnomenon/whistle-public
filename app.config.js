@@ -146,6 +146,7 @@ export default {
           sounds: ['./assets/audio/whistle.wav'],
         },
       ],
+      './plugins/withAndroidQuestionNotifications',
     ],
     experiments: {
       typedRoutes: true,

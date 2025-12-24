@@ -220,6 +220,12 @@ export default function OnboardingScreen() {
                       Long press the notification to see the options
                     </Text>
                   )}
+                  {Platform.OS === 'android' && (
+                    <Text className="text-foreground text-sm bold">
+                      Click the arrow to expand the notification and see the
+                      options
+                    </Text>
+                  )}
                   <Image
                     source={
                       Platform.OS === 'ios'
@@ -294,7 +300,7 @@ export default function OnboardingScreen() {
             <>
               <Card>
                 <CardContent>
-                  <Text className="text-center text-muted-foreground mb-4">
+                  <Text className="text-center text-muted-foreground">
                     Push notifications are required to use this app. Please
                     enable them in your device settings.
                   </Text>
@@ -324,7 +330,17 @@ export default function OnboardingScreen() {
                 </Card>
               ) : (
                 <Text className="text-muted-foreground text-center">
-                  Long press the notification and make your prediction!
+                  {Platform.OS === 'ios' && (
+                    <Text className="text-foreground text-sm bold">
+                      Long press the notification and make your prediction!
+                    </Text>
+                  )}
+                  {Platform.OS === 'android' && (
+                    <Text className="text-foreground text-sm bold">
+                      Press the arrow to expand the notification and make your
+                      prediction!
+                    </Text>
+                  )}
                 </Text>
               )}
             </>

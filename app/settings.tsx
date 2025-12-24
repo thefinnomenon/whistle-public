@@ -1,6 +1,4 @@
 import { Ionicons } from '@expo/vector-icons'
-import { getApp } from '@react-native-firebase/app'
-import { getFunctions, httpsCallable } from '@react-native-firebase/functions'
 import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
 import * as Updates from 'expo-updates'
@@ -90,19 +88,6 @@ Thank you!`
         },
       ]
     )
-  }
-
-  const handleTestNotification = async () => {
-    try {
-      const app = getApp()
-      const functions = getFunctions(app, 'us-east1')
-      const testPush = httpsCallable(functions, 'testPushNotification')
-      await testPush()
-      Alert.alert('Success', 'Test notification sent! Check your device.')
-    } catch (error) {
-      console.error('Failed to send test notification:', error)
-      Alert.alert('Error', 'Failed to send test notification')
-    }
   }
 
   return (
