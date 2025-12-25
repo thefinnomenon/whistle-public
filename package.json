@@ -22,7 +22,7 @@
     "build:prod:ios": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile production --platform ios",
     "build:prod:android": "EXPO_PUBLIC_APP_ENV=production node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=production eas build --profile production --platform android",
     "submit:ios": "eas submit --platform ios --latest --profile production",
-    "submit:android": "eas submit --platform android",
+    "submit:android": "eas submit --platform android --latest --profile production",
     "fb:deploy:functions:dev": "firebase use dev && cd functions && npm run deploy:functions",
     "fb:deploy:functions:prod": "firebase use prod && cd functions && npm run deploy:functions",
     "fb:deploy:rules:dev": "firebase use dev && cd functions && npm run deploy:rules",

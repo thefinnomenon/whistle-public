@@ -15,6 +15,6 @@
       <string>com.apple.usernotifications.service</string>
     </dict>
     <key>WhistleAppGroup</key>
-    <string>group.com.finnternet.whistle.dev</string>
+  <string>group.com.finnternet.whistle</string>
   </dict>
 </plist>
