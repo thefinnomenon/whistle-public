@@ -58,8 +58,9 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return true
   }
 
-  // Already denied - can't request again
-  if (currentStatus.status === 'denied') {
+  // On iOS we can't re-prompt after a denial, so surface the failure immediately
+  // Android 13+ may report DENIED before the first prompt, so still ask there
+  if (currentStatus.status === 'denied' && Platform.OS !== 'android') {
     return false
   }
 

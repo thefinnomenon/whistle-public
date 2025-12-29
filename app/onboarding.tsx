@@ -4,7 +4,6 @@ import { Text } from '@/components/ui/text'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { env } from '@/lib/env'
 import {
-  checkNotificationPermission,
   getFCMToken,
   openAppNotificationSettings,
   requestNotificationPermission,
@@ -96,17 +95,7 @@ export default function OnboardingScreen() {
     setPermissionDenied(false)
 
     try {
-      // Check current permission status
-      const currentStatus = await checkNotificationPermission()
-
-      // If denied, show settings button
-      if (currentStatus.status === 'denied') {
-        setPermissionDenied(true)
-        setLoading(false)
-        return
-      }
-
-      // Request permission
+      // Always request permission (Android 13 can report DENIED before first prompt)
       const granted = await requestNotificationPermission()
 
       if (!granted) {
