@@ -12,14 +12,19 @@ export const trackEvent = (
   properties?: Record<string, any>,
   userId?: string
 ) => {
-  if (!mixpanel) return
-
   const props = {
     ...properties,
     distinct_id: userId || properties?.userId || 'anonymous',
-    source: 'backend',
+    source: properties?.source || 'unknown',
     timestamp: new Date().toISOString(),
   }
+
+  // Always log to stdout for visibility, even when Mixpanel is disabled in dev
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[trackEvent]', eventName, props)
+  }
+
+  if (!mixpanel) return
 
   mixpanel.track(eventName, props)
 }

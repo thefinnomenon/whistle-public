@@ -5,6 +5,7 @@
   "scripts": {
     "start:dev": "expo start --dev-client --tunnel",
     "start:prod": "expo start --dev-client",
+    "android:studio": "open -a \"Android Studio\"",
     "prebuild:dev": "EXPO_PUBLIC_APP_ENV=development expo prebuild",
     "build:dev": "EXPO_PUBLIC_APP_ENV=development node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=development eas build --profile development",
     "build:dev:ios": "EXPO_PUBLIC_APP_ENV=development node scripts/set-extension-group.js && EXPO_PUBLIC_APP_ENV=development eas build --profile development --platform ios",

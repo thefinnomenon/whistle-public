@@ -1,4 +1,4 @@
-import { createHash } from 'crypto'
+import { createHash, createHmac } from 'crypto'
 import { Router } from 'express'
 import { admin, db } from '../firebase'
 import { trackEvent } from '../lib/mixpanel'
@@ -8,6 +8,57 @@ import { isAdminMiddleware } from '../middleware/isAdmin'
 
 // api/games/
 const router = Router()
+
+const QUESTION_SIGNATURE_SECRET = process.env.WHISTLE_JWT_SECRET
+const QUESTION_PAYLOAD_VERSION = 1
+
+/**
+ * Signed question payload sent with notifications.
+ * Keep these keys stable to avoid native changes:
+ * - gameId/questionId: used for submit URL and storage keys
+ * - question: rendered text
+ * - choices: array of { id, value }; keep id/value, extra fields allowed
+ * - timeoutAt: ms timestamp (number) used for countdown/expiry
+ * - questionPayload/questionSignature: raw strings passed through unchanged
+ */
+type SignedQuestionPayload = {
+  version: number
+  gameId: string
+  questionId: string
+  question: string
+  choices: { id: string; value: string; [key: string]: any }[]
+  timeoutAt: number | null
+  engineTag?: string
+  [key: string]: any
+}
+
+const buildSignedQuestionPayload = (payload: SignedQuestionPayload) => {
+  if (!QUESTION_SIGNATURE_SECRET) {
+    throw new Error('Missing WHISTLE_JWT_SECRET')
+  }
+  const payloadString = JSON.stringify(payload)
+  const signature = createHmac('sha256', QUESTION_SIGNATURE_SECRET)
+    .update(payloadString)
+    .digest('hex')
+  return { payloadString, signature, payload }
+}
+
+const verifyQuestionPayload = (
+  payloadString?: string,
+  signature?: string
+): Record<string, any> | undefined => {
+  if (!payloadString || !signature || !QUESTION_SIGNATURE_SECRET) return
+  const expected = createHmac('sha256', QUESTION_SIGNATURE_SECRET)
+    .update(payloadString)
+    .digest('hex')
+  if (expected !== signature) return
+  try {
+    return JSON.parse(payloadString)
+  } catch (e) {
+    console.error('[verifyQuestionPayload] error', e)
+    return
+  }
+}
 
 // All routes require auth
 router.use(authMiddleware)
@@ -41,6 +92,18 @@ router.post('/onboarding/practice-question', async (req, res) => {
     ]
     const timeoutAt = now + 20 * 1000
 
+    const baseQuestionPayload = {
+      version: QUESTION_PAYLOAD_VERSION,
+      gameId,
+      questionId,
+      question: payloadQuestion,
+      choices: payloadChoices,
+      timeoutAt,
+      engineTag: 'onboarding',
+    }
+    const { payloadString, signature } =
+      buildSignedQuestionPayload(baseQuestionPayload)
+
     const message: admin.messaging.MulticastMessage = {
       tokens,
       notification: {
@@ -57,6 +120,8 @@ router.post('/onboarding/practice-question', async (req, res) => {
         collapseId,
         choices: JSON.stringify(payloadChoices),
         timeoutAt: String(timeoutAt),
+        questionPayload: payloadString,
+        questionSignature: signature,
       },
       android: {
         priority: 'high',
@@ -272,6 +337,18 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
       { id: 'no', value: 'No' },
     ]
 
+    const baseQuestionPayload = {
+      version: QUESTION_PAYLOAD_VERSION,
+      gameId,
+      questionId,
+      question: questionText,
+      choices,
+      timeoutAt: now + 30_000,
+      engineTag: 'manual_test',
+    }
+    const { payloadString, signature } =
+      buildSignedQuestionPayload(baseQuestionPayload)
+
     const baseData = {
       type: 'question',
       gameId,
@@ -282,6 +359,8 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
       collapseId,
       choices: JSON.stringify(choices),
       timeoutAt: (now + 30_000).toString(),
+      questionPayload: payloadString,
+      questionSignature: signature,
     }
 
     const message: admin.messaging.MulticastMessage = {
@@ -376,6 +455,18 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
     const collapseId = topic
     const now = Date.now()
 
+    const baseQuestionPayload = {
+      version: QUESTION_PAYLOAD_VERSION,
+      gameId,
+      questionId: qRef.id,
+      question,
+      choices: choices || [],
+      timeoutAt: timeoutAt || null,
+      engineTag: engineTag || '',
+    }
+    const { payloadString, signature } =
+      buildSignedQuestionPayload(baseQuestionPayload)
+
     const baseData = {
       type: 'question',
       gameId,
@@ -386,6 +477,8 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       collapseId,
       choices: JSON.stringify(choices || []),
       timeoutAt: timeoutAt ? String(timeoutAt) : '',
+      questionPayload: payloadString,
+      questionSignature: signature,
     }
 
     const questionNotification = {
@@ -618,9 +711,13 @@ router.post(
       prediction,
       notificationViewedAt,
       notificationSentAt,
-      notificationReceivedAt,
+      notificationDisplayedAt,
       source,
       questionTimeoutAt,
+      questionPayload,
+      questionSignature,
+      choiceTappedAt,
+      predictionSentAt,
     } = req.body || {}
 
     console.log(
@@ -647,10 +744,42 @@ router.post(
       const nowMs = Date.now()
       const normalizedSource = typeof source === 'string' ? source : 'unknown'
 
+      const verifiedQuestionPayload = verifyQuestionPayload(
+        typeof questionPayload === 'string' ? questionPayload : undefined,
+        typeof questionSignature === 'string' ? questionSignature : undefined
+      )
+
+      const parsedNotificationSentAt =
+        typeof notificationSentAt === 'string'
+          ? Number(notificationSentAt)
+          : notificationSentAt
+      const parsedNotificationDisplayedAt =
+        typeof notificationDisplayedAt === 'string'
+          ? Number(notificationDisplayedAt)
+          : notificationDisplayedAt
+      const parsedNotificationViewedAt =
+        typeof notificationViewedAt === 'string'
+          ? Number(notificationViewedAt)
+          : notificationViewedAt
+      const parsedChoiceTappedAt =
+        typeof choiceTappedAt === 'string'
+          ? Number(choiceTappedAt)
+          : choiceTappedAt
+      const parsedPredictionSentAt =
+        typeof predictionSentAt === 'string'
+          ? Number(predictionSentAt)
+          : predictionSentAt
+
+      const effectiveQuestionTimeoutAt =
+        (typeof questionTimeoutAt === 'string'
+          ? Number(questionTimeoutAt)
+          : questionTimeoutAt) ??
+        (verifiedQuestionPayload?.timeoutAt as number | undefined)
+
       // Calculate time remaining server-side for accuracy
       let timeRemaining: number | undefined
-      if (questionTimeoutAt) {
-        timeRemaining = questionTimeoutAt - nowMs
+      if (effectiveQuestionTimeoutAt) {
+        timeRemaining = effectiveQuestionTimeoutAt - nowMs
       }
 
       // Practice/onboarding submissions: store on user record only, skip game stats
@@ -705,42 +834,54 @@ router.post(
       // Derive timing metrics (ms) when data is available
       const createdAtMs = Date.now()
       const deliveryMs =
-        notificationSentAt !== undefined && notificationReceivedAt !== undefined
-          ? notificationReceivedAt - notificationSentAt
+        parsedNotificationSentAt !== undefined &&
+        parsedNotificationDisplayedAt !== undefined
+          ? parsedNotificationDisplayedAt - parsedNotificationSentAt
           : undefined
       const openMs =
-        notificationReceivedAt !== undefined &&
-        notificationViewedAt !== undefined
-          ? notificationViewedAt - notificationReceivedAt
+        parsedNotificationDisplayedAt !== undefined &&
+        parsedNotificationViewedAt !== undefined
+          ? parsedNotificationViewedAt - parsedNotificationDisplayedAt
           : undefined
       const respondMs =
-        notificationReceivedAt !== undefined
-          ? createdAtMs - notificationReceivedAt
+        parsedNotificationDisplayedAt !== undefined
+          ? createdAtMs - parsedNotificationDisplayedAt
           : undefined
       const timeRemainingAtReceive =
-        notificationReceivedAt !== undefined && questionTimeoutAt !== undefined
-          ? questionTimeoutAt - notificationReceivedAt
+        parsedNotificationDisplayedAt !== undefined &&
+        effectiveQuestionTimeoutAt !== undefined
+          ? effectiveQuestionTimeoutAt - parsedNotificationDisplayedAt
           : undefined
       const timeRemainingAtOpen =
-        notificationViewedAt !== undefined && questionTimeoutAt !== undefined
-          ? questionTimeoutAt - notificationViewedAt
+        parsedNotificationViewedAt !== undefined &&
+        effectiveQuestionTimeoutAt !== undefined
+          ? effectiveQuestionTimeoutAt - parsedNotificationViewedAt
+          : undefined
+      const tapToSendMs =
+        parsedChoiceTappedAt !== undefined &&
+        parsedPredictionSentAt !== undefined
+          ? parsedPredictionSentAt - parsedChoiceTappedAt
+          : undefined
+      const tapToAckMs =
+        parsedChoiceTappedAt !== undefined
+          ? createdAtMs - parsedChoiceTappedAt
           : undefined
 
       const payload: any = {
         prediction,
         source: normalizedSource,
-        questionTimeoutAt,
+        questionTimeoutAt: effectiveQuestionTimeoutAt,
         timeRemaining,
         createdAt: now,
         createdAtMs,
       }
 
-      if (notificationViewedAt !== undefined)
-        payload.notificationViewedAt = notificationViewedAt
-      if (notificationSentAt !== undefined)
-        payload.notificationSentAt = notificationSentAt
-      if (notificationReceivedAt !== undefined)
-        payload.notificationReceivedAt = notificationReceivedAt
+      if (parsedNotificationViewedAt !== undefined)
+        payload.notificationViewedAt = parsedNotificationViewedAt
+      if (parsedNotificationSentAt !== undefined)
+        payload.notificationSentAt = parsedNotificationSentAt
+      if (parsedNotificationDisplayedAt !== undefined)
+        payload.notificationDisplayedAt = parsedNotificationDisplayedAt
       if (deliveryMs !== undefined) payload.deliveryMs = deliveryMs
       if (openMs !== undefined) payload.openMs = openMs
       if (respondMs !== undefined) payload.respondMs = respondMs
@@ -748,6 +889,16 @@ router.post(
         payload.timeRemainingAtReceive = timeRemainingAtReceive
       if (timeRemainingAtOpen !== undefined)
         payload.timeRemainingAtOpen = timeRemainingAtOpen
+      if (parsedChoiceTappedAt !== undefined)
+        payload.choiceTappedAt = parsedChoiceTappedAt
+      if (parsedPredictionSentAt !== undefined)
+        payload.predictionSentAt = parsedPredictionSentAt
+      if (tapToSendMs !== undefined) payload.tapToSendMs = tapToSendMs
+      if (tapToAckMs !== undefined) payload.tapToAckMs = tapToAckMs
+      if (verifiedQuestionPayload) {
+        payload.questionPayload = verifiedQuestionPayload
+        payload.questionSignature = questionSignature
+      }
 
       await Promise.all([
         predictionRef.set(payload, { merge: true }),
@@ -762,12 +913,12 @@ router.post(
         source,
       }
 
-      if (notificationViewedAt !== undefined)
-        eventProps.notificationViewedAt = notificationViewedAt
-      if (notificationSentAt !== undefined)
-        eventProps.notificationSentAt = notificationSentAt
-      if (notificationReceivedAt !== undefined)
-        eventProps.notificationReceivedAt = notificationReceivedAt
+      if (parsedNotificationViewedAt !== undefined)
+        eventProps.notificationViewedAt = parsedNotificationViewedAt
+      if (parsedNotificationSentAt !== undefined)
+        eventProps.notificationSentAt = parsedNotificationSentAt
+      if (parsedNotificationDisplayedAt !== undefined)
+        eventProps.notificationDisplayedAt = parsedNotificationDisplayedAt
       if (deliveryMs !== undefined) eventProps.deliveryMs = deliveryMs
       if (openMs !== undefined) eventProps.openMs = openMs
       if (respondMs !== undefined) eventProps.respondMs = respondMs
@@ -778,6 +929,15 @@ router.post(
       if (timeRemaining !== undefined) eventProps.timeRemaining = timeRemaining
       if (timeRemaining !== undefined)
         eventProps.timeRemainingSeconds = Math.floor(timeRemaining / 1000)
+      if (parsedChoiceTappedAt !== undefined)
+        eventProps.choiceTappedAt = parsedChoiceTappedAt
+      if (parsedPredictionSentAt !== undefined)
+        eventProps.predictionSentAt = parsedPredictionSentAt
+      if (tapToSendMs !== undefined) eventProps.tapToSendMs = tapToSendMs
+      if (tapToAckMs !== undefined) eventProps.tapToAckMs = tapToAckMs
+      if (verifiedQuestionPayload)
+        eventProps.questionPayloadVersion =
+          verifiedQuestionPayload.version ?? QUESTION_PAYLOAD_VERSION
 
       trackEvent('prediction_submitted', eventProps, userId)
 

@@ -20,16 +20,16 @@ class NotificationService: UNNotificationServiceExtension {
     bestAttemptContent = (request.content.mutableCopy() as? UNMutableNotificationContent)
 
     if let bestAttemptContent = bestAttemptContent {
-      let notificationReceivedAt = Date().timeIntervalSince1970 * 1000
+      let notificationDisplayedAt = Date().timeIntervalSince1970 * 1000
 
-      // Add notificationReceivedAt to the notification payload
-      bestAttemptContent.userInfo["notificationReceivedAt"] = notificationReceivedAt
+      // Add notificationDisplayedAt to the notification payload
+      bestAttemptContent.userInfo["notificationDisplayedAt"] = notificationDisplayedAt
 
-      // Log notification received event
+      // Log notification displayed event
       logEvent(
-        "notification_received",
+        "notification_displayed",
         properties: [
-          "notificationReceivedAt": notificationReceivedAt,
+          "notificationDisplayedAt": notificationDisplayedAt,
           "questionId": request.content.userInfo["questionId"] ?? "",
           "gameId": request.content.userInfo["gameId"] ?? "",
           "notificationId": request.identifier,
@@ -57,7 +57,18 @@ class NotificationService: UNNotificationServiceExtension {
 
   private func getNetworkStatus() -> [String: Any] {
     let monitor = NWPathMonitor()
-    let path = monitor.currentPath
+    let queue = DispatchQueue(label: "whistle.nwpath.service")
+    let group = DispatchGroup()
+    var path = monitor.currentPath
+
+    group.enter()
+    monitor.pathUpdateHandler = { update in
+      path = update
+      group.leave()
+    }
+    monitor.start(queue: queue)
+    _ = group.wait(timeout: .now() + 0.2)
+    monitor.cancel()
 
     var status: [String: Any] = [
       "reachable": path.status == .satisfied,
@@ -100,7 +111,7 @@ class NotificationService: UNNotificationServiceExtension {
     // Battery info
     device.isBatteryMonitoringEnabled = true
     deviceContext["batteryLevel"] = device.batteryLevel
-    deviceContext["batteryState"] = String(describing: device.batteryState)
+    deviceContext["batteryState"] = batteryStateString(device.batteryState)
 
     // Screen info
     let screen = UIScreen.main
@@ -156,5 +167,20 @@ class NotificationService: UNNotificationServiceExtension {
 
     let session = URLSession(configuration: config)
     session.dataTask(with: request).resume()
+  }
+
+  private func batteryStateString(_ state: UIDevice.BatteryState) -> String {
+    switch state {
+    case .unknown:
+      return "unknown"
+    case .unplugged:
+      return "unplugged"
+    case .charging:
+      return "charging"
+    case .full:
+      return "full"
+    @unknown default:
+      return "unknown"
+    }
   }
 }

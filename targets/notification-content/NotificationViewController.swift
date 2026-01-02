@@ -22,7 +22,11 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
   private var hasExpiredHandled = false
   private var notificationViewedAt: TimeInterval?
   private var notificationSentAt: TimeInterval?
-  private var notificationReceivedAt: TimeInterval?
+  private var questionPayload: String?
+  private var questionSignature: String?
+  private var choiceTappedAt: TimeInterval?
+  private var predictionSentAt: TimeInterval?
+  private var notificationDisplayedAt: TimeInterval?
   private let userDefaults: UserDefaults? = {
     guard
       let info = Bundle.main.infoDictionary,
@@ -43,7 +47,18 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   private func getNetworkStatus() -> [String: Any] {
     let monitor = NWPathMonitor()
-    let path = monitor.currentPath
+    let queue = DispatchQueue(label: "whistle.nwpath.content")
+    let group = DispatchGroup()
+    var path = monitor.currentPath
+
+    group.enter()
+    monitor.pathUpdateHandler = { update in
+      path = update
+      group.leave()
+    }
+    monitor.start(queue: queue)
+    _ = group.wait(timeout: .now() + 0.2)
+    monitor.cancel()
 
     var status: [String: Any] = [
       "reachable": path.status == .satisfied,
@@ -109,7 +124,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     // Battery info
     device.isBatteryMonitoringEnabled = true
     deviceContext["batteryLevel"] = device.batteryLevel
-    deviceContext["batteryState"] = String(describing: device.batteryState)
+    deviceContext["batteryState"] = batteryStateString(device.batteryState)
 
     // Screen info
     let screen = UIScreen.main
@@ -141,7 +156,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
     mergedContext["device"] = deviceContext
 
-    var payload: [String: Any] = [
+    let payload: [String: Any] = [
       "message": message,
       "context": mergedContext,
     ]
@@ -163,6 +178,11 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
         self?.dismissAllImmediate()
       }
     }.resume()
+
+    // Also dismiss immediately on error to avoid leaving stale notifications visible
+    DispatchQueue.main.async { [weak self] in
+      self?.dismissAllImmediate()
+    }
   }
 
   private func logEvent(_ eventName: String, properties: [String: Any] = [:]) {
@@ -189,7 +209,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     // Battery info
     device.isBatteryMonitoringEnabled = true
     deviceContext["batteryLevel"] = device.batteryLevel
-    deviceContext["batteryState"] = String(describing: device.batteryState)
+    deviceContext["batteryState"] = batteryStateString(device.batteryState)
 
     // Screen info
     let screen = UIScreen.main
@@ -282,6 +302,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
 
   func didReceive(_ notification: UNNotification) {
     print("[WhistleExtension] didReceive payload:", notification.request.content.userInfo)
+    notificationDisplayedAt = parseTimeout(notification.request.content.userInfo["notificationDisplayedAt"]) ?? Date().timeIntervalSince1970 * 1000
     notificationViewedAt = Date().timeIntervalSince1970 * 1000
     lastNotificationContent = notification.request.content
     titleLabel.text = notification.request.content.title
@@ -291,7 +312,8 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     gameId = notification.request.content.userInfo["gameId"] as? String
     timeoutAt = parseTimeout(notification.request.content.userInfo["timeoutAt"])
     notificationSentAt = parseTimeout(notification.request.content.userInfo["sentAt"])
-    notificationReceivedAt = parseTimeout(notification.request.content.userInfo["notificationReceivedAt"])
+    questionPayload = notification.request.content.userInfo["questionPayload"] as? String
+    questionSignature = notification.request.content.userInfo["questionSignature"] as? String
 
     // Track notification viewed event
     var eventProps: [String: Any] = [
@@ -302,6 +324,9 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       let remaining = timeout - Date().timeIntervalSince1970 * 1000
       eventProps["remainingTimeMs"] = remaining
       eventProps["alreadyExpired"] = remaining <= 0
+    }
+    if let displayedAt = notificationDisplayedAt {
+      eventProps["notificationDisplayedAt"] = displayedAt
     }
     logEvent("notification_viewed", properties: eventProps)
 
@@ -340,6 +365,7 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       button.heightAnchor.constraint(equalToConstant: 52).isActive = true
       button.addAction(UIAction(handler: { [weak self, weak button] _ in
         guard let self = self, let button = button else { return }
+        self.choiceTappedAt = Date().timeIntervalSince1970 * 1000
         self.startSubmitting(chosenButton: button, choiceId: id)
       }), for: .touchUpInside)
       rowButtons.append(button)
@@ -462,14 +488,27 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       payload["notificationSentAt"] = sentAt
     }
 
-    // Include timestamp of when notification was received on device
-    if let receivedAt = notificationReceivedAt {
-      payload["notificationReceivedAt"] = receivedAt
-    }
-
     // Include question timeout for server-side time remaining calculation
     if let timeout = timeoutAt {
       payload["questionTimeoutAt"] = timeout
+    }
+
+    if let displayedAt = notificationDisplayedAt {
+      payload["notificationDisplayedAt"] = displayedAt
+    }
+
+    if let tappedAt = choiceTappedAt {
+      payload["choiceTappedAt"] = tappedAt
+    }
+
+    predictionSentAt = Date().timeIntervalSince1970 * 1000
+    payload["predictionSentAt"] = predictionSentAt
+
+    if let qPayload = questionPayload {
+      payload["questionPayload"] = qPayload
+    }
+    if let qSignature = questionSignature {
+      payload["questionSignature"] = qSignature
     }
 
     let authToken = userDefaults?.string(forKey: "WhistleAuthToken")
@@ -513,6 +552,21 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     }
     print("[WhistleExtension] Resuming POST task")
     task.resume()
+  }
+
+  private func batteryStateString(_ state: UIDevice.BatteryState) -> String {
+    switch state {
+    case .unknown:
+      return "unknown"
+    case .unplugged:
+      return "unplugged"
+    case .charging:
+      return "charging"
+    case .full:
+      return "full"
+    @unknown default:
+      return "unknown"
+    }
   }
 
   private func parseTimeout(_ value: Any?) -> TimeInterval? {
