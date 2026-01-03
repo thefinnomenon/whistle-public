@@ -106,10 +106,7 @@ router.post('/onboarding/practice-question', async (req, res) => {
 
     const message: admin.messaging.MulticastMessage = {
       tokens,
-      notification: {
-        title: 'Long press to answer!',
-        body: payloadQuestion,
-      },
+      // data-only for Android so our service handles display; iOS alert set in apns payload
       data: {
         type: 'question',
         gameId,
@@ -127,16 +124,14 @@ router.post('/onboarding/practice-question', async (req, res) => {
         priority: 'high',
         ttl: 10,
         collapseKey: collapseId,
-        notification: {
-          channelId: 'default',
-          tag: collapseId,
-          priority: 'high',
-          sound: 'whistle',
-        },
       },
       apns: {
         payload: {
           aps: {
+            alert: {
+              title: 'Long press to answer!',
+              body: payloadQuestion,
+            },
             category: 'question',
             sound: 'whistle.wav',
             'mutable-content': 1,
@@ -365,25 +360,19 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
 
     const message: admin.messaging.MulticastMessage = {
       tokens,
-      notification: {
-        title: '🏈 Test Question',
-        body: questionText,
-      },
       data: baseData,
       android: {
         priority: 'high',
         ttl: 10,
         collapseKey: collapseId,
-        notification: {
-          channelId: 'default',
-          tag: collapseId,
-          priority: 'high',
-          sound: 'whistle',
-        },
       },
       apns: {
         payload: {
           aps: {
+            alert: {
+              title: '🏈 Test Question',
+              body: questionText,
+            },
             category: 'question',
             sound: 'whistle.wav',
             'mutable-content': 1,
@@ -483,25 +472,19 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
 
     const questionNotification = {
       topic,
-      notification: {
-        title: '🏈 New Question!',
-        body: question,
-      },
       data: baseData,
       android: {
         priority: 'high' as const,
         ttl: 10,
         collapseKey: collapseId,
-        notification: {
-          channelId: 'default',
-          tag: collapseId,
-          priority: 'high' as const,
-          sound: 'whistle',
-        },
       },
       apns: {
         payload: {
           aps: {
+            alert: {
+              title: '🏈 New Question!',
+              body: question,
+            },
             category: 'question',
             sound: 'whistle.wav',
             'mutable-content': 1,

@@ -159,6 +159,10 @@ const templateQuestionActionReceiver = (pkg) => `package ${pkg}
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
@@ -197,13 +201,18 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
     val choicesJson = intent.getStringExtra("choicesJson") ?: "[]"
     val notificationId = intent.getIntExtra("notificationId", questionId.hashCode())
     val collapsedTitle = intent.getStringExtra("collapsedTitle") ?: "Question"
+    val notificationDisplayedAt = intent.getStringExtra("notificationDisplayedAt")?.toLongOrNull()
+    val questionPayload = intent.getStringExtra("questionPayload")
+    val questionSignature = intent.getStringExtra("questionSignature")
     val prefs = context.getSharedPreferences(${AUTH_CONFIG_MODULE}.PREFS_NAME, Context.MODE_PRIVATE)
     val token = prefs.getString(${AUTH_CONFIG_MODULE}.KEY_TOKEN, null)
     val domain = prefs.getString(${AUTH_CONFIG_MODULE}.KEY_DOMAIN, null)
+    val choiceTappedAt = System.currentTimeMillis()
+    val notificationViewedAt = System.currentTimeMillis()
 
     if (timeoutAt != null && System.currentTimeMillis() > timeoutAt) {
       Log.w("QuestionAction", "Question already expired, skipping submit")
-      logEvent(domain, token, "notification_prediction_skipped", mapOf(
+      logEvent(context, domain, token, "notification_prediction_skipped", mapOf(
         "reason" to "expired",
         "questionId" to questionId,
         "gameId" to gameId,
@@ -266,6 +275,13 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       json.put("prediction", choiceId)
       json.put("source", "android_notification")
       if (timeoutAt != null) json.put("questionTimeoutAt", timeoutAt)
+      json.put("choiceTappedAt", choiceTappedAt)
+      if (notificationDisplayedAt != null) json.put("notificationDisplayedAt", notificationDisplayedAt)
+      json.put("notificationViewedAt", notificationDisplayedAt) // Expansion time not detectable; reuse displayed
+      val predictionSentAt = System.currentTimeMillis()
+      json.put("predictionSentAt", predictionSentAt)
+      if (!questionPayload.isNullOrEmpty()) json.put("questionPayload", questionPayload)
+      if (!questionSignature.isNullOrEmpty()) json.put("questionSignature", questionSignature)
       val body = json.toString().toRequestBody("application/json".toMediaType())
       val reqBuilder = Request.Builder()
         .url("$domain/api/games/$gameId/questions/$questionId/prediction")
@@ -275,41 +291,61 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
         reqBuilder.addHeader("Authorization", "Bearer $token")
       }
 
+      logEvent(context, domain, token, "notification_viewed", mapOf(
+        "questionId" to questionId,
+        "gameId" to gameId,
+        "notificationViewedAt" to notificationDisplayedAt, // Same as displayed; expansion time not detectable
+        "notificationDisplayedAt" to notificationDisplayedAt,
+        "receivedAt" to receivedAt,
+        "sentAt" to sentAt
+      ))
+
       val resp = client.newCall(reqBuilder.build()).execute()
       if (!resp.isSuccessful) {
         Log.e("QuestionAction", "Submit failed: ${'$'}{resp.code}")
-        logError(domain, token, "notification_prediction_submit_failed", mapOf(
+        logError(context, domain, token, "notification_prediction_submit_failed", mapOf(
           "status" to resp.code,
           "questionId" to questionId,
           "gameId" to gameId,
           "receivedAt" to receivedAt,
-          "sentAt" to sentAt
+          "sentAt" to sentAt,
+          "notificationDisplayedAt" to notificationDisplayedAt,
+          "notificationViewedAt" to notificationViewedAt,
+          "choiceTappedAt" to choiceTappedAt,
+          "predictionSentAt" to predictionSentAt
         ))
       } else {
         Log.d("QuestionAction", "Submit success")
         NotificationManagerCompat.from(context).cancel(questionId.hashCode())
-        logEvent(domain, token, "notification_prediction_submitted", mapOf(
-          "questionId" to questionId,
-          "gameId" to gameId,
-          "timeoutAt" to timeoutAt,
-          "receivedAt" to receivedAt,
-          "sentAt" to sentAt
-        ))
+      logEvent(context, domain, token, "notification_prediction_submitted", mapOf(
+        "questionId" to questionId,
+        "gameId" to gameId,
+        "timeoutAt" to timeoutAt,
+        "receivedAt" to receivedAt,
+        "sentAt" to sentAt,
+        "notificationDisplayedAt" to notificationDisplayedAt,
+        "notificationViewedAt" to notificationViewedAt,
+        "choiceTappedAt" to choiceTappedAt,
+        "predictionSentAt" to predictionSentAt
+      ))
       }
       resp.close()
     } catch (e: Exception) {
       Log.e("QuestionAction", "Error submitting prediction", e)
-      logError(domain, token, "notification_prediction_exception", mapOf(
+      logError(context, domain, token, "notification_prediction_exception", mapOf(
         "message" to (e.message ?: "unknown"),
         "questionId" to questionId,
         "gameId" to gameId,
         "receivedAt" to receivedAt,
-        "sentAt" to sentAt
-      ))
+        "sentAt" to sentAt,
+          "notificationDisplayedAt" to notificationDisplayedAt,
+          "notificationViewedAt" to notificationViewedAt,
+          "choiceTappedAt" to choiceTappedAt
+        ))
     }
   }
 
-  private fun logEvent(domain: String?, token: String?, eventName: String, properties: Map<String, Any?>) {
+  private fun logEvent(context: Context, domain: String?, token: String?, eventName: String, properties: Map<String, Any?>) {
     if (domain.isNullOrEmpty()) return
     try {
       val url = "$domain/api/log/event"
@@ -319,6 +355,7 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       properties.forEach { (k, v) ->
         if (v != null) propsJson.put(k, v)
       }
+      propsJson.put("device", getDeviceInfo(context))
       propsJson.put("source", "android_notification_service")
       payload.put("properties", propsJson)
 
@@ -335,7 +372,7 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
     }
   }
 
-  private fun logError(domain: String?, token: String?, message: String, context: Map<String, Any?> = emptyMap()) {
+  private fun logError(contextObj: Context, domain: String?, token: String?, message: String, context: Map<String, Any?> = emptyMap()) {
     if (domain.isNullOrEmpty()) return
     try {
       val url = "$domain/api/log/error"
@@ -345,6 +382,7 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       context.forEach { (k, v) ->
         if (v != null) ctx.put(k, v)
       }
+      ctx.put("device", getDeviceInfo(contextObj))
       ctx.put("source", "android_notification_service")
       payload.put("context", ctx)
 
@@ -359,6 +397,57 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       client.newCall(reqBuilder.build()).execute().close()
     } catch (_: Exception) {
     }
+  }
+
+  private fun getDeviceInfo(context: Context): JSONObject {
+    val device = JSONObject()
+    try {
+      val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+      val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+      val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+      val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+      val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()) else null
+      device.put("batteryLevel", pct)
+      device.put("batteryState", when (status) {
+        BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+        BatteryManager.BATTERY_STATUS_FULL -> "full"
+        BatteryManager.BATTERY_STATUS_DISCHARGING -> "unplugged"
+        BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "unplugged"
+        else -> "unknown"
+      })
+    } catch (_: Exception) {
+    }
+
+    try {
+      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      val active = cm.activeNetwork
+      val caps = cm.getNetworkCapabilities(active)
+      val reachable = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+      val connectionType = when {
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"
+        reachable -> "other"
+        else -> "none"
+      }
+      val network = JSONObject()
+      network.put("reachable", reachable)
+      network.put("connectionType", connectionType)
+      device.put("networkStatus", network)
+    } catch (_: Exception) {
+    }
+
+    try {
+      device.put("manufacturer", android.os.Build.MANUFACTURER)
+      device.put("model", android.os.Build.MODEL)
+      device.put("device", android.os.Build.DEVICE)
+      device.put("brand", android.os.Build.BRAND)
+      device.put("osVersion", android.os.Build.VERSION.RELEASE)
+      device.put("sdkInt", android.os.Build.VERSION.SDK_INT)
+    } catch (_: Exception) {
+    }
+
+    return device
   }
 
   private fun parseChoices(json: String): List<Pair<String, String>> {
@@ -384,8 +473,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
@@ -421,8 +514,10 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
     val choicesJson = data["choices"] ?: ""
     val choices = parseChoices(choicesJson, domain, userToken)
     val sentAt = data["sentAt"]?.toLongOrNull()
-    val notificationReceivedAt = data["notificationReceivedAt"]?.toLongOrNull()
-    val receivedAt = notificationReceivedAt ?: now
+    val notificationDisplayedAt = System.currentTimeMillis()
+    val questionPayload = data["questionPayload"]
+    val questionSignature = data["questionSignature"]
+    val receivedAt = now
     val notificationId = questionId.hashCode()
     val sound = Uri.parse("android.resource://$packageName/raw/whistle")
     val collapsedTitle = if (gameId == "onboarding") "Expand to answer!" else (message.notification?.title ?: question)
@@ -456,7 +551,10 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             question,
             choicesJson,
             notificationId,
-            collapsedTitle
+            collapsedTitle,
+            notificationDisplayedAt,
+            questionPayload,
+            questionSignature
           )
         )
         contentView.addView(R.id.choices_container, single)
@@ -483,7 +581,10 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             question,
             choicesJson,
             notificationId,
-            collapsedTitle
+            collapsedTitle,
+            notificationDisplayedAt,
+            questionPayload,
+            questionSignature
           )
         )
 
@@ -508,7 +609,10 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             question,
             choicesJson,
             notificationId,
-            collapsedTitle
+            collapsedTitle,
+            notificationDisplayedAt,
+            questionPayload,
+            questionSignature
           )
         )
         contentView.addView(R.id.choices_container, row)
@@ -531,13 +635,13 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
     scheduleAutoCancel(manager, notificationId, timeoutAt)
 
     val initialRemaining = timeoutAt - now
-    logEvent(domain, userToken, "notification_viewed", mapOf(
+    logEvent(this, domain, userToken, "notification_displayed", mapOf(
       "questionText" to question,
       "timeoutAt" to timeoutAt,
       "remainingTimeMs" to initialRemaining,
       "alreadyExpired" to (initialRemaining <= 0),
       "sentAt" to sentAt,
-      "notificationReceivedAt" to notificationReceivedAt,
+      "notificationDisplayedAt" to notificationDisplayedAt,
       "receivedAt" to receivedAt,
       "questionId" to questionId,
       "gameId" to gameId
@@ -575,13 +679,13 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             contentView.setProgressBar(R.id.timer_ring, 100, 0, false)
             contentView.setTextViewText(R.id.timer_text, "0")
             manager.notify(notificationId, builder.build())
-            logEvent(domain, userToken, "question_timed_out", mapOf(
+            logEvent(this@${SERVICE_CLASS}, domain, userToken, "question_timed_out", mapOf(
               "timeoutAt" to timeoutAt,
               "timedOutAt" to System.currentTimeMillis(),
               "questionId" to questionId,
               "gameId" to gameId,
               "sentAt" to sentAt,
-              "notificationReceivedAt" to notificationReceivedAt,
+              "notificationDisplayedAt" to notificationDisplayedAt,
               "receivedAt" to receivedAt
             ))
           }
@@ -612,7 +716,10 @@ private fun buildActionIntent(
     questionText: String,
     choicesJson: String,
     notificationId: Int,
-    collapsedTitle: String
+    collapsedTitle: String,
+    notificationDisplayedAt: Long,
+    questionPayload: String?,
+    questionSignature: String?
   ): PendingIntent {
     val intent = Intent(context, ${RECEIVER_CLASS}::class.java).apply {
       putExtra("gameId", gameId)
@@ -630,6 +737,13 @@ private fun buildActionIntent(
       putExtra("choicesJson", choicesJson)
       putExtra("notificationId", notificationId)
       putExtra("collapsedTitle", collapsedTitle)
+      putExtra("notificationDisplayedAt", notificationDisplayedAt.toString())
+      if (!questionPayload.isNullOrEmpty()) {
+        putExtra("questionPayload", questionPayload)
+      }
+      if (!questionSignature.isNullOrEmpty()) {
+        putExtra("questionSignature", questionSignature)
+      }
     }
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
@@ -647,7 +761,7 @@ private fun buildActionIntent(
         id to value
       }
     } catch (e: Exception) {
-      logError(domain, token, "Failed to parse choices", mapOf("raw" to json))
+      logError(this, domain, token, "Failed to parse choices", mapOf("raw" to json))
       listOf("yes" to "Yes", "no" to "No")
     }
   }
@@ -699,7 +813,8 @@ private fun buildActionIntent(
     private const val CHANNEL_ID = "default"
   }
 
-  private fun logEvent(domain: String, token: String?, eventName: String, properties: Map<String, Any?>) {
+  private fun logEvent(context: Context, domain: String?, token: String?, eventName: String, properties: Map<String, Any?>) {
+    if (domain.isNullOrEmpty()) return
     try {
       val url = "$domain/api/log/event"
       val payload = JSONObject()
@@ -708,6 +823,7 @@ private fun buildActionIntent(
       properties.forEach { (k, v) ->
         if (v != null) propsJson.put(k, v)
       }
+      propsJson.put("device", getDeviceInfo(context))
       propsJson.put("source", "android_notification_service")
       payload.put("properties", propsJson)
 
@@ -724,8 +840,8 @@ private fun buildActionIntent(
     }
   }
 
-  private fun logError(domain: String, token: String?, message: String, context: Map<String, Any?> = emptyMap()) {
-    if (domain.isEmpty()) return
+  private fun logError(contextObj: Context, domain: String?, token: String?, message: String, context: Map<String, Any?> = emptyMap()) {
+    if (domain.isNullOrEmpty()) return
     try {
       val url = "$domain/api/log/error"
       val payload = JSONObject()
@@ -734,6 +850,7 @@ private fun buildActionIntent(
       context.forEach { (k, v) ->
         if (v != null) ctx.put(k, v)
       }
+      ctx.put("device", getDeviceInfo(contextObj))
       ctx.put("source", "android_notification_service")
       payload.put("context", ctx)
 
@@ -748,6 +865,47 @@ private fun buildActionIntent(
       client.newCall(reqBuilder.build()).execute().close()
     } catch (_: Exception) {
     }
+  }
+
+  private fun getDeviceInfo(context: Context): JSONObject {
+    val device = JSONObject()
+    try {
+      val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+      val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+      val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+      val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+      val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()) else null
+      device.put("batteryLevel", pct)
+      device.put("batteryState", when (status) {
+        BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+        BatteryManager.BATTERY_STATUS_FULL -> "full"
+        BatteryManager.BATTERY_STATUS_DISCHARGING -> "unplugged"
+        BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "unplugged"
+        else -> "unknown"
+      })
+    } catch (_: Exception) {
+    }
+
+    try {
+      val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      val active = cm.activeNetwork
+      val caps = cm.getNetworkCapabilities(active)
+      val reachable = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+      val connectionType = when {
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
+        caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"
+        reachable -> "other"
+        else -> "none"
+      }
+      val network = JSONObject()
+      network.put("reachable", reachable)
+      network.put("connectionType", connectionType)
+      device.put("networkStatus", network)
+    } catch (_: Exception) {
+    }
+
+    return device
   }
 }
 `

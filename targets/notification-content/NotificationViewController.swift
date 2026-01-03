@@ -511,6 +511,9 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       payload["questionSignature"] = qSignature
     }
 
+    // Attach device context for debugging/analytics parity with Android
+    payload["device"] = getDeviceContext()
+
     let authToken = userDefaults?.string(forKey: "WhistleAuthToken")
     print("[WhistleExtension] Auth token found: \(authToken != nil)")
     if let authToken {
@@ -567,6 +570,47 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     @unknown default:
       return "unknown"
     }
+  }
+
+  private func getDeviceContext() -> [String: Any] {
+    let device = UIDevice.current
+    var deviceContext: [String: Any] = [
+      "systemName": device.systemName,
+      "systemVersion": device.systemVersion,
+      "model": device.model,
+      "localizedModel": device.localizedModel,
+      "name": device.name,
+      "identifierForVendor": device.identifierForVendor?.uuidString ?? "",
+    ]
+
+    device.isBatteryMonitoringEnabled = true
+    deviceContext["batteryLevel"] = device.batteryLevel
+    deviceContext["batteryState"] = batteryStateString(device.batteryState)
+
+    let screen = UIScreen.main
+    deviceContext["screenBounds"] = [
+      "width": screen.bounds.width,
+      "height": screen.bounds.height,
+    ]
+    deviceContext["screenScale"] = screen.scale
+    deviceContext["screenNativeScale"] = screen.nativeScale
+
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+    let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+      }
+    }
+    if kerr == KERN_SUCCESS {
+      deviceContext["memoryUsageMB"] = Double(info.resident_size) / 1024.0 / 1024.0
+    }
+
+    deviceContext["locale"] = Locale.current.identifier
+    deviceContext["timezone"] = TimeZone.current.identifier
+    deviceContext["networkStatus"] = getNetworkStatus()
+
+    return deviceContext
   }
 
   private func parseTimeout(_ value: Any?) -> TimeInterval? {
