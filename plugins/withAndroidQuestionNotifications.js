@@ -935,6 +935,8 @@ const withAndroidQuestionFiles = (config) =>
           'Android package is required for question notification plugin'
         )
 
+      console.log('Adding Android notification extension for', pkg)
+
       const javaBase = path.join(
         androidRoot,
         'app/src/main/java',
