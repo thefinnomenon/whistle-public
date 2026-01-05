@@ -231,6 +231,9 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
     try {
       // Update UI: disable buttons and show spinner on selected
       val contentView = RemoteViews(context.packageName, R.layout.notification_question)
+      val isDark =
+        (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+      applyThemeToRemoteViews(contentView, isDark, context)
       contentView.setTextViewText(R.id.question_text, questionText)
       val choices = parseChoices(choicesJson)
       contentView.removeAllViews(R.id.choices_container)
@@ -260,8 +263,10 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
         }
       }
 
-      val builder = NotificationCompat.Builder(context, "default")
+      val builder = NotificationCompat.Builder(context, "questions")
         .setSmallIcon(R.drawable.ic_small_icon)
+        .setColor(ContextCompat.getColor(context, android.R.color.black))
+        .setColorized(true)
         .setContentTitle(collapsedTitle)
         .setCustomBigContentView(contentView)
         .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -343,6 +348,13 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
           "choiceTappedAt" to choiceTappedAt
         ))
     }
+  }
+
+  private fun applyThemeToRemoteViews(remoteViews: RemoteViews, isDark: Boolean, context: Context) {
+    val textColorRes = if (isDark) android.R.color.white else android.R.color.black
+    val color = ContextCompat.getColor(context, textColorRes)
+    remoteViews.setTextColor(R.id.question_text, color)
+    remoteViews.setTextColor(R.id.timer_text, color)
   }
 
   private fun logEvent(context: Context, domain: String?, token: String?, eventName: String, properties: Map<String, Any?>) {
@@ -474,6 +486,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.media.AudioAttributes
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -483,6 +496,7 @@ import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import android.service.notification.StatusBarNotification
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -524,6 +538,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
 
     ensureChannel()
     val contentView = RemoteViews(packageName, R.layout.notification_question)
+    val isDark = isDarkModeEnabled()
+    applyThemeToRemoteViews(contentView, isDark)
     contentView.setTextViewText(R.id.question_text, question)
 
     // Bind up to 3 choices for now
@@ -621,6 +637,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
 
     val builder = NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_small_icon)
+      .setColor(ContextCompat.getColor(this, android.R.color.black))
+      .setColorized(true)
       .setContentTitle(collapsedTitle)
       .setContentText(message.notification?.body ?: "")
       .setCustomBigContentView(contentView)
@@ -766,6 +784,21 @@ private fun buildActionIntent(
     }
   }
 
+  private fun applyThemeToRemoteViews(remoteViews: RemoteViews, isDark: Boolean) {
+    val textColorRes = if (isDark) android.R.color.white else android.R.color.black
+    val color = ContextCompat.getColor(this, textColorRes)
+    remoteViews.setTextColor(R.id.question_text, color)
+    remoteViews.setTextColor(R.id.timer_text, color)
+  }
+
+  private fun isDarkModeEnabled(): Boolean {
+    val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    if (uiMode == Configuration.UI_MODE_NIGHT_YES) return true
+    if (uiMode == Configuration.UI_MODE_NIGHT_NO) return false
+    val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+    return uiModeManager?.nightMode == android.app.UiModeManager.MODE_NIGHT_YES
+  }
+
   private fun ensureChannel() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val sound = Uri.parse("android.resource://$packageName/raw/whistle")
@@ -810,7 +843,7 @@ private fun buildActionIntent(
   }
 
   companion object {
-    private const val CHANNEL_ID = "default"
+    private const val CHANNEL_ID = "questions"
   }
 
   private fun logEvent(context: Context, domain: String?, token: String?, eventName: String, properties: Map<String, Any?>) {

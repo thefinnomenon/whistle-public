@@ -1,4 +1,7 @@
-import notifee from '@notifee/react-native'
+import notifee, {
+  AndroidImportance,
+  AndroidVisibility,
+} from '@notifee/react-native'
 import {
   collection,
   doc,
@@ -85,6 +88,30 @@ function AuthGate() {
     ? questionIdParam[0]
     : questionIdParam
   const { AuthConfig } = NativeModules as any
+
+  // Ensure the questions notification channel exists with high importance so pushes can surface/wake the device
+  useEffect(() => {
+    if (Platform.OS !== 'android' || isRunningInExpoGo()) return
+    if (!notifee?.createChannel) {
+      console.warn(
+        '[Notifications] Notifee unavailable, skipping channel setup'
+      )
+      return
+    }
+    notifee
+      .createChannel({
+        id: 'questions',
+        name: 'Questions',
+        importance: AndroidImportance.HIGH,
+        sound: 'whistle',
+        vibration: true,
+        vibrationPattern: [250, 500, 250, 500],
+        visibility: AndroidVisibility.PUBLIC,
+      })
+      .catch((err) =>
+        console.warn('[Notifications] Failed to create default channel', err)
+      )
+  }, [])
 
   useEffect(() => {
     if (loading || checkingActiveGame) return
