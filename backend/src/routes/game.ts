@@ -1399,7 +1399,7 @@ export const startGameById = async (gameId: string) => {
       priority: 'high' as const,
       collapseKey: collapseId,
       notification: {
-        channelId: 'default',
+        channelId: 'questions',
         tag: collapseId,
         priority: 'high' as const,
         sound: 'whistle',
