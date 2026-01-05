@@ -16,10 +16,6 @@ export const sendDismissNotification = async (
     android: {
       collapseKey: collapseId,
       priority: 'high' as const,
-      notification: {
-        tag: collapseId,
-        channelId: 'default',
-      },
     },
     apns: {
       headers: {
