@@ -308,18 +308,29 @@ router.post('/:id/end', isAdminMiddleware, async (req, res) => {
 
 router.post('/test-question', isAdminMiddleware, async (_req, res) => {
   try {
-    const targetEmail = 'configure@example.com'
-    const userRecord = await admin.auth().getUserByEmail(targetEmail)
-    const uid = userRecord.uid
+    const targetEmails = ['configure@example.com', 'configure@example.com']
 
-    const userDoc = await admin.firestore().doc(`users/${uid}`).get()
-    const tokensMap = (userDoc.data()?.tokens as any) || {}
-    const tokens: string[] = Object.values(tokensMap)
-      .map((t: any) => t?.token)
-      .filter((t: any) => typeof t === 'string' && t.length > 0)
+    const tokens: string[] = []
+
+    for (const targetEmail of targetEmails) {
+      const userRecord = await admin.auth().getUserByEmail(targetEmail)
+      const uid = userRecord.uid
+
+      console.log(`Fetching tokens for user ${targetEmail} (${uid})`)
+
+      const userDoc = await admin.firestore().doc(`users/${uid}`).get()
+      const tokensMap = (userDoc.data()?.tokens as any) || {}
+      const userTokens = Object.values(tokensMap)
+        .map((t: any) => t?.token)
+        .filter((t: any) => typeof t === 'string' && t.length > 0)
+
+      tokens.push(...userTokens)
+    }
 
     if (!tokens.length) {
-      return res.status(400).json({ error: 'No device tokens for target user' })
+      return res
+        .status(400)
+        .json({ error: 'No device tokens for target users' })
     }
 
     const now = Date.now()
@@ -389,10 +400,12 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
 
     await admin.messaging().sendEachForMulticast(message)
 
-    trackEvent('test_question_sent', {
-      targetEmail,
-      questionId,
-    })
+    for (const targetEmail of targetEmails) {
+      trackEvent('test_question_sent', {
+        targetEmail,
+        questionId,
+      })
+    }
 
     return res.json({ success: true })
   } catch (error) {
@@ -1369,13 +1382,13 @@ export const startGameById = async (gameId: string) => {
     { merge: true }
   )
 
-  const topic = 'app_notifications'
+  const topic = `game_${gameId}` //'app_notifications'
   const collapseId = `game_${gameId}`
   const message = {
     topic,
     notification: {
-      title: '🏈 Game Started!',
-      body: `${game.homeTeam} vs ${game.awayTeam} is now live. Join now and get ready to play!`,
+      title: 'Game Started!',
+      body: `${game.homeTeam} vs ${game.awayTeam} is now live. Get ready to play!`,
     },
     data: {
       gameId,

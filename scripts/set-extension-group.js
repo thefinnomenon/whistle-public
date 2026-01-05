@@ -1,17 +1,14 @@
 const path = require('path')
 const fs = require('fs')
-//const { getConfig } = require('@expo/config')
+const { getConfig } = require('@expo/config')
 
 // eslint-disable-next-line no-undef
 const projectRoot = path.join(__dirname, '..')
 const modeEnv = process.env.EXPO_PUBLIC_APP_ENV || process.env.APP_ENV
 const mode = modeEnv === 'production' ? 'production' : 'development'
 
-//const { exp } = getConfig(projectRoot, { mode })
-const group =
-  modeEnv === 'production'
-    ? 'group.com.finnternet.whistle'
-    : 'group.com.finnternet.whistle.dev' //exp?.ios?.infoPlist?.WhistleAppGroup
+const { exp } = getConfig(projectRoot, { mode })
+const group = exp?.ios?.infoPlist?.WhistleAppGroup
 
 if (!group) {
   console.error(
