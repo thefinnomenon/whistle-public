@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev:dev": "NEXT_PUBLIC_APP_ENV=development next dev --turbopack",
-    "dev:prod": "NEXT_PUBLIC_APP_ENV=production next dev --turbopack",
-    "build:dev": "NODE_ENV=development next build --turbopack",
-    "build:prod": "NODE_ENV=production next build --turbopack",
+    "dev:dev": "env-cmd -f .env.development next dev --turbopack",
+    "dev:prod": "env-cmd -f .env.production next dev --turbopack",
+    "build:dev": "env-cmd -f .env.development next build --turbopack",
+    "build:prod": "env-cmd -f .env.production NODE_ENV=production next build --turbopack",
     "start": "next start",
     "lint": "eslint"
   },
@@ -19,6 +19,7 @@
     "recharts": "^3.4.1"
   },
   "devDependencies": {
+    "env-cmd": "^10.1.0",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

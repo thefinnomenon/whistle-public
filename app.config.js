@@ -27,12 +27,7 @@ const getBundleIdentifier = () => {
   return 'com.finnternet.whistle'
 }
 
-const getPostUrl = () => {
-  if (IS_DEV)
-    return 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
-  // TODO: replace with prod when available
-  return 'https://us-east1-whistle-dev-c5bf9.cloudfunctions.net/submitPredictionFromNotification'
-}
+const getAppGroup = () => `group.${getBundleIdentifier()}`
 
 export default {
   expo: {
@@ -144,6 +139,12 @@ export default {
         'expo-notifications',
         {
           sounds: ['./assets/audio/whistle.wav'],
+        },
+      ],
+      [
+        './plugins/withAppGroupIdentifier',
+        {
+          appGroup: getAppGroup(),
         },
       ],
       './plugins/withAndroidQuestionNotifications',

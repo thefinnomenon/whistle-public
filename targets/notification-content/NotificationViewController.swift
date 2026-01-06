@@ -412,7 +412,13 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
       countdownLabel.text = nil
       return
     }
-    totalDurationMs = nil
+    if let timeoutAt = timeoutAt {
+      // Prefer sentAt for the full duration; fall back to when the notification was displayed/viewed
+      let startAnchor = notificationSentAt ?? notificationDisplayedAt ?? Date().timeIntervalSince1970 * 1000
+      totalDurationMs = max(timeoutAt - startAnchor, 0)
+    } else {
+      totalDurationMs = nil
+    }
     updateCountdown()
     countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       self?.updateCountdown()
@@ -423,13 +429,10 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     if hasExpiredHandled { return }
     guard let timeoutAt = timeoutAt else { return }
     let remaining = timeoutAt - Date().timeIntervalSince1970 * 1000
-    if totalDurationMs == nil {
-      totalDurationMs = max(remaining, 0)
-    }
     if remaining <= 0 {
       handleExpired()
     } else {
-      countdownLabel.text = "\(Int(remaining / 1000))"
+      countdownLabel.text = "\(max(0, Int(floor(remaining / 1000)) + 1))"
       if let total = totalDurationMs, total > 0 {
         let progress = max(0, min(1, remaining / total))
         progressLayer.strokeEnd = CGFloat(progress)
