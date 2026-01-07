@@ -205,14 +205,6 @@ export async function handleNotificationActionPress(
   analytics: { track: (event: string, data: any) => void },
   logContext: 'Background' | 'Foreground' = 'Foreground'
 ): Promise<void> {
-  // Skip practice/onboarding actions from writing predictions
-  if (data?.practice === 'true') {
-    console.log(
-      `[Notification ${logContext}] Practice notification action, skipping prediction`
-    )
-    return
-  }
-
   if (actionId !== 'yes' && actionId !== 'no') {
     return
   }
@@ -241,6 +233,49 @@ export async function handleNotificationActionPress(
 
     if (!userId) {
       console.warn(`[Notification ${logContext}] No user ID available`)
+      return
+    }
+
+    // Handle practice flows separately (no game collections)
+    if (data?.practice === 'true') {
+      const practicePredictionValue = actionId
+      const practicePredictionRef = doc(
+        firestore,
+        `users/${userId}/practice/predictions/items/${questionId}`
+      )
+      const practiceQuestionRef = doc(
+        firestore,
+        `users/${userId}/practice/questions/items/${questionId}`
+      )
+
+      await Promise.all([
+        setDoc(
+          practicePredictionRef,
+          {
+            prediction: practicePredictionValue,
+            source: 'notification',
+            createdAt: Timestamp.now(),
+            createdAtMs: answeredAt,
+            questionPayload: data?.questionPayload,
+            questionSignature: data?.questionSignature,
+          },
+          { merge: true }
+        ),
+        setDoc(
+          practiceQuestionRef,
+          {
+            updatedAt: Timestamp.now(),
+          },
+          { merge: true }
+        ),
+      ])
+
+      analytics.track('Practice Prediction', {
+        game_id: gameId,
+        question_id: questionId,
+        prediction: practicePredictionValue,
+        answered_at: answeredAt,
+      })
       return
     }
 

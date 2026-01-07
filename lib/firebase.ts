@@ -349,6 +349,71 @@ export const deleteGame = async (gameId: string) => {
   await deleteDoc(doc(db, 'games', gameId))
 }
 
+/***************
+  PRACTICE
+****************/
+export const createPracticeQuestionsCollection = (userId: string) => {
+  return collection<Question, DocumentData>(
+    db,
+    `users/${userId}/practice/questions/items`
+  )
+}
+
+export const getPracticeQuestionsStream = async (
+  userId: string,
+  setQuestions: (questions: Question[]) => void
+) => {
+  const q = query(
+    collection(db, `users/${userId}/practice/questions/items`),
+    orderBy('createdAt', 'asc')
+  )
+  return onSnapshot(q, (questionsSnap) => {
+    if (!questionsSnap || questionsSnap.empty) {
+      setQuestions([])
+      return
+    }
+    setQuestions(
+      questionsSnap.docs.map((questionSnap: any) => {
+        return {
+          ...(questionSnap.data() as Question),
+          id: questionSnap.id,
+        }
+      })
+    )
+  })
+}
+
+export const getPracticePredictionsStream = async (
+  userId: string,
+  setPredictions: (predictions: Map<string, string>) => void
+) => {
+  const q = query(
+    collection(db, `users/${userId}/practice/predictions/items`),
+    orderBy('createdAt', 'asc')
+  )
+
+  return onSnapshot(q, (predictionsSnap) => {
+    const predictionsMap = new Map<string, string>()
+
+    if (!predictionsSnap || predictionsSnap.empty) {
+      setPredictions(predictionsMap)
+      return
+    }
+
+    predictionsSnap.docs.forEach((predictionDoc: any) => {
+      const questionId = predictionDoc.id
+      const data = predictionDoc.data()
+      const value = data.prediction
+      predictionsMap.set(
+        questionId,
+        typeof value === 'string' ? value : String(value)
+      )
+    })
+
+    setPredictions(predictionsMap)
+  })
+}
+
 /***********
   QUESTIONS
 ************/

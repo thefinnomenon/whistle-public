@@ -104,6 +104,39 @@ router.post('/onboarding/practice-question', async (req, res) => {
     const { payloadString, signature } =
       buildSignedQuestionPayload(baseQuestionPayload)
 
+    const randomAnswer =
+      payloadChoices[Math.floor(Math.random() * payloadChoices.length)]?.id
+
+    // Auto-resolve the practice question shortly after creation so answers can be correct/incorrect
+    setTimeout(async () => {
+      try {
+        await db
+          .collection('users')
+          .doc(req.user!.uid)
+          .collection('practice')
+          .doc('questions')
+          .collection('items')
+          .doc(questionId)
+          .set(
+            {
+              state: 'resolved',
+              answer: randomAnswer,
+              resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          )
+      } catch (error) {
+        console.error(
+          '[practice/question] failed to resolve practice question',
+          {
+            questionId,
+            error,
+          }
+        )
+      }
+    }, 10_000)
+
     const message: admin.messaging.MulticastMessage = {
       tokens,
       // data-only for Android so our service handles display; iOS alert set in apns payload
@@ -159,6 +192,218 @@ router.post('/onboarding/practice-question', async (req, res) => {
     console.error('[onboarding/practice-question] error', error)
     trackEvent(
       'onboarding_practice_question_error',
+      { error: String(error) },
+      req.user?.uid
+    )
+    return res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+// Send a practice question to a single user (content extension driven)
+router.post('/practice/question', async (req, res) => {
+  try {
+    if (!req.user?.uid)
+      return res.status(400).json({ error: 'userId required' })
+
+    const userId = req.user.uid
+    const userDoc = await db.collection('users').doc(userId).get()
+    if (!userDoc.exists)
+      return res.status(404).json({ error: 'User not found' })
+
+    const tokensMap = (userDoc.data() as any)?.tokens || {}
+    const tokens: string[] = Object.values(tokensMap)
+      .map((t: any) => t?.token)
+      .filter((t: any) => typeof t === 'string' && t.length > 0)
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'No device tokens for user' })
+    }
+
+    const now = Date.now()
+    const gameId = `practice-${userId}`
+    const questionId = `practice-${now}`
+    const collapseId = `practice-${userId}`
+    const questions = [
+      {
+        question: 'Will the offense score on this drive?',
+        choices: [
+          { id: 'yes', value: 'Yes' },
+          { id: 'no', value: 'No' },
+        ],
+      },
+      {
+        question: 'Will the next play be a pass?',
+        choices: [
+          { id: 'pass', value: 'Pass' },
+          { id: 'run', value: 'Run' },
+        ],
+      },
+      {
+        question: 'Field goal attempt result?',
+        choices: [
+          { id: 'good', value: 'Good' },
+          { id: 'miss', value: 'Miss' },
+        ],
+      },
+      {
+        question: 'Will the defense force a turnover?',
+        choices: [
+          { id: 'yes', value: 'Yes' },
+          { id: 'no', value: 'No' },
+        ],
+      },
+      {
+        question: 'Will the next play gain 5+ yards?',
+        choices: [
+          { id: 'yes', value: 'Yes' },
+          { id: 'no', value: 'No' },
+        ],
+      },
+      {
+        question: 'Will the QB be sacked on this drive?',
+        choices: [
+          { id: 'yes', value: 'Yes' },
+          { id: 'no', value: 'No' },
+        ],
+      },
+    ]
+
+    const randomIndex = Math.floor(Math.random() * questions.length)
+    const { question: payloadQuestion, choices: payloadChoices } =
+      questions[randomIndex]
+    const randomAnswer =
+      payloadChoices[Math.floor(Math.random() * payloadChoices.length)]?.id
+    const timeoutAt = now + 30_000
+
+    // Persist the practice question for in-app listing
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('practice')
+      .doc('meta')
+      .set(
+        { updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      )
+
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('practice')
+      .doc('questions')
+      .collection('items')
+      .doc(questionId)
+      .set({
+        id: questionId,
+        gameId,
+        practice: true,
+        question: payloadQuestion,
+        choices: payloadChoices,
+        state: 'open',
+        type: 'YESNO',
+        timeoutAt,
+        randomAnswer,
+        triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+
+    const baseQuestionPayload = {
+      version: QUESTION_PAYLOAD_VERSION,
+      gameId,
+      questionId,
+      question: payloadQuestion,
+      choices: payloadChoices,
+      timeoutAt,
+      engineTag: 'practice',
+    }
+    const { payloadString, signature } =
+      buildSignedQuestionPayload(baseQuestionPayload)
+
+    const message: admin.messaging.MulticastMessage = {
+      tokens,
+      data: {
+        type: 'question',
+        gameId,
+        questionId,
+        question: payloadQuestion,
+        sentAt: String(now),
+        engineTag: 'practice',
+        collapseId,
+        practice: 'true',
+        choices: JSON.stringify(payloadChoices),
+        timeoutAt: String(timeoutAt),
+        questionPayload: payloadString,
+        questionSignature: signature,
+      },
+      android: {
+        priority: 'high',
+        ttl: 10,
+        collapseKey: collapseId,
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: 'Practice question',
+              body: payloadQuestion,
+            },
+            category: 'question',
+            sound: 'whistle.wav',
+            'mutable-content': 1,
+          },
+        },
+        headers: {
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'apns-collapse-id': collapseId,
+          'apns-expiration': Math.floor(timeoutAt / 1000).toString(),
+        },
+      },
+    }
+
+    // Auto-resolve practice question at timeout if user never answers
+    setTimeout(
+      async () => {
+        try {
+          await db
+            .collection('users')
+            .doc(userId)
+            .collection('practice')
+            .doc('questions')
+            .collection('items')
+            .doc(questionId)
+            .set(
+              {
+                state: 'resolved',
+                answer: randomAnswer,
+                resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            )
+        } catch (error) {
+          console.error('[practice/question] failed to auto-resolve', {
+            questionId,
+            error,
+          })
+        }
+      },
+      Math.max(0, timeoutAt - Date.now())
+    )
+
+    await admin.messaging().sendEachForMulticast(message)
+
+    trackEvent(
+      'practice_question_sent',
+      { userId, questionId, timeoutAt },
+      userId
+    )
+
+    return res.json({ ok: true, questionId, gameId })
+  } catch (error) {
+    console.error('[practice/question] error', error)
+    trackEvent(
+      'practice_question_error',
       { error: String(error) },
       req.user?.uid
     )
@@ -799,6 +1044,88 @@ router.post(
 
         trackEvent(
           'onboarding_practice_prediction',
+          {
+            userId,
+            questionId,
+            prediction,
+            source: normalizedSource,
+          },
+          userId
+        )
+
+        return res.json({ ok: true, practice: true })
+      }
+
+      const isPractice =
+        gameId?.startsWith('practice-') ||
+        (verifiedQuestionPayload as any)?.practice === true ||
+        (req.body?.practice as any) === true
+
+      if (isPractice) {
+        const practicePredictionRef = db
+          .collection('users')
+          .doc(userId)
+          .collection('practice')
+          .doc('predictions')
+          .collection('items')
+          .doc(questionId)
+
+        const practiceQuestionRef = db
+          .collection('users')
+          .doc(userId)
+          .collection('practice')
+          .doc('questions')
+          .collection('items')
+          .doc(questionId)
+
+        const practicePayload: any = {
+          prediction,
+          source: normalizedSource,
+          questionTimeoutAt: effectiveQuestionTimeoutAt,
+          createdAt: now,
+          createdAtMs: Date.now(),
+        }
+
+        if (verifiedQuestionPayload) {
+          practicePayload.questionPayload = verifiedQuestionPayload
+          practicePayload.questionSignature = questionSignature
+        }
+
+        // Fetch stored practice question to grab the predetermined answer
+        const practiceQuestionSnap = await practiceQuestionRef.get()
+        const practiceQuestionData = practiceQuestionSnap.data() as any
+        const resolvedAnswer =
+          practiceQuestionData?.answer || practiceQuestionData?.randomAnswer
+
+        await practicePredictionRef.set(practicePayload, { merge: true })
+
+        // Resolve after min(5s after answer, timeout)
+        const resolveDelay = (() => {
+          if (effectiveQuestionTimeoutAt) {
+            const timeUntilTimeout = effectiveQuestionTimeoutAt - nowMs
+            return Math.max(0, Math.min(5000, timeUntilTimeout))
+          }
+          return 5000
+        })()
+
+        setTimeout(async () => {
+          try {
+            await practiceQuestionRef.set(
+              {
+                state: 'resolved',
+                answer: resolvedAnswer ?? null,
+                resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            )
+          } catch (err) {
+            console.error('[practice/prediction] failed to resolve', err)
+          }
+        }, resolveDelay)
+
+        trackEvent(
+          'practice_prediction',
           {
             userId,
             questionId,

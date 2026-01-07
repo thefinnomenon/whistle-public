@@ -25,9 +25,15 @@ type Props = {
   question: Question | null
   gameId: string
   userId?: string
+  isPractice?: boolean
 }
 
-export function QuestionAnswerModal({ question, gameId, userId }: Props) {
+export function QuestionAnswerModal({
+  question,
+  gameId,
+  userId,
+  isPractice = false,
+}: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [timeRemainingMs, setTimeRemainingMs] = useState(0)
   const [totalDurationMs, setTotalDurationMs] = useState(0)
@@ -42,12 +48,13 @@ export function QuestionAnswerModal({ question, gameId, userId }: Props) {
     const startMs =
       (question.triggeredAt as any)?.toMillis?.() ??
       (question.createdAt as any)?.toMillis?.() ??
-      Date.now()
+      timeoutMs - 30_000
     const total = Math.max(0, timeoutMs - startMs)
     setTotalDurationMs(total)
 
     const update = () => {
-      const remaining = Math.max(0, timeoutMs - Date.now())
+      const now = Date.now()
+      const remaining = Math.max(0, timeoutMs - now)
       setTimeRemainingMs(remaining)
     }
     update()
@@ -75,6 +82,7 @@ export function QuestionAnswerModal({ question, gameId, userId }: Props) {
       const idToken = currentUser
         ? await getIdTokenModular(currentUser)
         : undefined
+      const isPractice = gameId?.startsWith('practice-')
       const apiUrl = `${env.DOMAIN}/api/games/${gameId}/questions/${question.id}/prediction`
 
       const resp = await fetch(apiUrl, {
@@ -87,6 +95,7 @@ export function QuestionAnswerModal({ question, gameId, userId }: Props) {
           prediction: answer,
           source: `${Platform.OS}-app`,
           questionTimeoutAt: Number(question.timeoutAt),
+          practice: isPractice,
         }),
       })
 
@@ -95,16 +104,27 @@ export function QuestionAnswerModal({ question, gameId, userId }: Props) {
       }
 
       const db = getFirestore()
-      const userPredictionRef = doc(
-        db,
-        `users/${userId}/games/${gameId}/predictions/${question.id}`
-      )
+      const userPredictionRef = isPractice
+        ? doc(db, `users/${userId}/practice/predictions/items/${question.id}`)
+        : doc(db, `users/${userId}/games/${gameId}/predictions/${question.id}`)
+      const userQuestionRef =
+        isPractice &&
+        doc(db, `users/${userId}/practice/questions/items/${question.id}`)
 
       await setDoc(userPredictionRef, {
         prediction: answer,
         source: 'app',
         createdAt: serverTimestamp(),
       })
+      if (userQuestionRef) {
+        await setDoc(
+          userQuestionRef,
+          {
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
+      }
 
       analytics.track('Prediction Made', {
         user_id: userId,
@@ -149,6 +169,9 @@ export function QuestionAnswerModal({ question, gameId, userId }: Props) {
                       cx={40}
                       cy={40}
                       r={36}
+                      rotation={-90}
+                      originX={40}
+                      originY={40}
                       stroke={
                         timeRemainingMs <= 5000
                           ? '#ef4444'

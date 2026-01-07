@@ -287,7 +287,19 @@ function AuthGate() {
       <Stack.Screen name="signout" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
       <Stack.Screen name="username" options={{ headerShown: false }} />
-      <Stack.Screen name="game" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="game"
+        options={({ route }: any) => {
+          const practice =
+            route?.params?.practice === 'true' ||
+            (typeof route?.params?.gameId === 'string' &&
+              route.params.gameId.startsWith('practice-'))
+          return {
+            headerShown: false,
+            gestureEnabled: !practice,
+          }
+        }}
+      />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
     </Stack>
   )

@@ -12,17 +12,6 @@ type Props = {
 }
 
 export function GameNavbar({ game, insetsTop, onLeave, onSettings }: Props) {
-  const handleLeave = () => {
-    Alert.alert(
-      'Leave Game',
-      'Are you sure you want to leave the game? You will forfeit your current score and will no longer receive questions.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'OK', onPress: onLeave },
-      ]
-    )
-  }
-
   return (
     <View
       className="flex flex-row items-center justify-center border-b border-gray-300 dark:border-gray-800 relative"
@@ -32,7 +21,7 @@ export function GameNavbar({ game, insetsTop, onLeave, onSettings }: Props) {
         <TouchableOpacity
           className="absolute left-4 z-50"
           style={{ top: insetsTop + 18 }}
-          onPress={handleLeave}
+          onPress={onLeave}
         >
           <Feather name="x" size={28} color="slategray" />
         </TouchableOpacity>

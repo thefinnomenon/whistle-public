@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons'
 import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
+import { router, useLocalSearchParams } from 'expo-router'
 import * as Updates from 'expo-updates'
-import { router } from 'expo-router'
 import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 
 export default function SettingsScreen() {
+  const { fromPractice } = useLocalSearchParams<{ fromPractice?: string }>()
   const { user } = useAuth()
   const { theme, setTheme, colorScheme } = useTheme()
   const insets = useSafeAreaInsets()
@@ -215,6 +216,25 @@ Thank you!`
           <Text className="text-sm font-semibold text-muted-foreground mb-3">
             ACTIONS
           </Text>
+          <TouchableOpacity
+            onPress={() =>
+              fromPractice === 'true'
+                ? undefined
+                : router.push({
+                    pathname: '/game',
+                    params: { practice: 'true' },
+                  })
+            }
+            disabled={fromPractice === 'true'}
+            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
+          >
+            <Text className="text-base text-foreground">Practice Mode</Text>
+            <Ionicons
+              name="game-controller-outline"
+              size={20}
+              color="slategray"
+            />
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={handleSignOut}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border"

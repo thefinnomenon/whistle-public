@@ -28,12 +28,18 @@ export function QuestionListItem({
   const colorScheme = useColorScheme()
   const isDark = colorScheme === 'dark'
 
+  const predictionValue =
+    prediction === undefined ? undefined : String(prediction)
+  const answerValue =
+    question.answer === undefined ? undefined : String(question.answer)
+
   let questionState: UserQuestionState = question.state
-  if (question.state === 'resolved' && prediction === undefined)
+  if (question.state === 'resolved' && predictionValue === undefined)
     questionState = 'incorrect'
-  else if (question.state === 'resolved' && prediction !== undefined)
+  else if (question.state === 'resolved' && predictionValue !== undefined) {
     questionState =
-      prediction === (question.answer ?? '') ? 'correct' : 'incorrect'
+      predictionValue === (answerValue ?? '') ? 'correct' : 'incorrect'
+  }
 
   let questionStyling = { bg: '', text: '', icon: '', iconColor: '' }
   switch (questionState) {
