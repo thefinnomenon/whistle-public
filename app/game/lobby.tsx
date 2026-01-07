@@ -18,7 +18,7 @@ import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import { subscribeToGameTopic } from '@/lib/fcm'
 import { getLatestGame, updateGamePlayer, updateUserGame } from '@/lib/firebase'
-import { NFL } from '@/logos'
+import { NBA, NFL } from '@/logos'
 
 export default function GameLobbyScreen() {
   const { user } = useAuth()
@@ -165,7 +165,11 @@ export default function GameLobbyScreen() {
           <Image
             className="w-32 h-32"
             resizeMode="contain"
-            source={NFL[game.homeTeam]}
+            source={
+              game.league === 'NBA'
+                ? NBA[game.homeTeam as keyof typeof NBA]
+                : NFL[game.homeTeam as keyof typeof NFL]
+            }
           />
         </View>
         <Text className="font-bold text-3xl mx-4 text-gray-900 dark:text-white">
@@ -175,7 +179,11 @@ export default function GameLobbyScreen() {
           <Image
             className="w-32 h-32"
             resizeMode="contain"
-            source={NFL[game.awayTeam]}
+            source={
+              game.league === 'NBA'
+                ? NBA[game.awayTeam as keyof typeof NBA]
+                : NFL[game.awayTeam as keyof typeof NFL]
+            }
           />
         </View>
       </View>

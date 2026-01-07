@@ -34,6 +34,8 @@ export type Username = {
 }
 
 export type GameState = 'scheduled' | 'open' | 'resolved' | 'cancelled'
+export type Sport = 'BASKETBALL' | 'FOOTBALL'
+export type League = 'NBA' | 'NFL'
 
 export type Game = {
   id: string
@@ -47,6 +49,8 @@ export type Game = {
   updatedAt?: FirestoreTimestamp
   leaderboard?: LeaderboardItem[]
   statistics?: GameStatistics
+  sport?: Sport
+  league?: League
 }
 
 export type LeaderboardItem = {

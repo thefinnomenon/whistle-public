@@ -49,6 +49,8 @@ type Username = {
 }
 
 type GameState = 'scheduled' | 'open' | 'resolved' | 'cancelled'
+type Sport = 'BASKETBALL' | 'FOOTBALL'
+type League = 'NBA' | 'NFL'
 
 type Game = {
   id: string
@@ -62,6 +64,8 @@ type Game = {
   createdAt: FirestoreTimestamp
   closedAt: FirestoreTimestamp
   updatedAt: FirestoreTimestamp
+  sport?: Sport
+  league?: League
 }
 
 type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'

@@ -2,7 +2,7 @@ import { Feather, Ionicons } from '@expo/vector-icons'
 import React from 'react'
 import { Alert, Image, Text, TouchableOpacity, View } from 'react-native'
 
-import { NFL } from '../../../logos'
+import { NBA, NFL } from '../../../logos'
 
 type Props = {
   game: any
@@ -37,7 +37,11 @@ export function GameNavbar({ game, insetsTop, onLeave, onSettings }: Props) {
         <Image
           className="h-12 w-12"
           resizeMode="contain"
-          source={NFL[game.homeTeam as keyof typeof NFL]}
+          source={
+            game.league === 'NBA'
+              ? NBA[game.homeTeam as keyof typeof NBA]
+              : NFL[game.homeTeam as keyof typeof NFL]
+          }
         />
         <Text className="font-bold text-lg text-gray-900 dark:text-white">
           VS
@@ -45,7 +49,11 @@ export function GameNavbar({ game, insetsTop, onLeave, onSettings }: Props) {
         <Image
           className="h-12 w-12"
           resizeMode="contain"
-          source={NFL[game.awayTeam as keyof typeof NFL]}
+          source={
+            game.league === 'NBA'
+              ? NBA[game.awayTeam as keyof typeof NBA]
+              : NFL[game.awayTeam as keyof typeof NFL]
+          }
         />
       </View>
     </View>
