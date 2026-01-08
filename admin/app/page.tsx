@@ -179,10 +179,10 @@ export default function HomePage() {
                     </div>
                     <div className="text-right">
                       <div className="text-sm text-gray-600">
-                        {game.userCount || 0} players
+                        {game.playerCount || 0} players
                       </div>
                       <div className="text-sm font-semibold">
-                        ${game.prize || 0} prize
+                        ${game.prizeAmount || 0} prize
                       </div>
                     </div>
                   </div>

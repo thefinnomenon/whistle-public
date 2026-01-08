@@ -55,7 +55,8 @@ export default function NewGamePage() {
   const [awayTeam, setAwayTeam] = useState<NFL_Team | ''>('')
   const [startDate, setStartDate] = useState('')
   const [startTime, setStartTime] = useState('')
-  const [prize, setPrize] = useState('0')
+  const [prizeAmount, setPrizeAmount] = useState('0')
+  const [prizeType, setPrizeType] = useState<'USD' | 'POINTS'>('USD')
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -93,9 +94,10 @@ export default function NewGamePage() {
           homeTeam,
           awayTeam,
           startTime: startDateTime.toISOString(),
-          prize: parseFloat(prize) || 0,
+          prizeAmount: parseFloat(prizeAmount) || 0,
+          prizeType,
           state: 'scheduled',
-          userCount: 0,
+          playerCount: 0,
           leaderboard: [],
         },
       })
@@ -195,18 +197,42 @@ export default function NewGamePage() {
 
             <div>
               <label htmlFor="prize" className="block text-sm font-medium text-gray-700 mb-2">
-                Prize Pool ($)
+                Prize Pool
               </label>
               <input
                 type="number"
                 id="prize"
-                value={prize}
-                onChange={(e) => setPrize(e.target.value)}
+                value={prizeAmount}
+                onChange={(e) => setPrizeAmount(e.target.value)}
                 min="0"
                 step="0.01"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
                 disabled={loading}
               />
+              <div className="flex items-center gap-4 text-sm">
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="prizeType"
+                    value="USD"
+                    checked={prizeType === 'USD'}
+                    onChange={() => setPrizeType('USD')}
+                    disabled={loading}
+                  />
+                  Cash (USD)
+                </label>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="prizeType"
+                    value="POINTS"
+                    checked={prizeType === 'POINTS'}
+                    onChange={() => setPrizeType('POINTS')}
+                    disabled={loading}
+                  />
+                  Points
+                </label>
+              </div>
             </div>
 
             <div className="bg-gray-50 p-4 rounded">

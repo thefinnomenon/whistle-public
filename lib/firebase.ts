@@ -289,9 +289,14 @@ export const getGames = async (setGames: (games: Game[]) => void) => {
     }
     setGames(
       gamesSnap.docs.map((gameSnap: any) => {
+        const data = gameSnap.data()
         return {
-          ...(gameSnap.data() as Game),
-          startTime: gameSnap.data().startTime,
+          ...(data as Game),
+          startTime: data.startTime,
+          playerCount:
+            (data as any).playerCount !== undefined
+              ? (data as any).playerCount
+              : (data as any).userCount || 0,
           id: gameSnap.id,
         }
       })

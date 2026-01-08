@@ -25,6 +25,8 @@ export type User = {
   username?: string
   loginMethod?: LoginType
   isAdmin?: boolean
+  winnings?: number
+  points?: number
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
 }
@@ -43,8 +45,9 @@ export type Game = {
   homeTeam: string
   awayTeam: string
   startTime: FirestoreTimestamp
-  prize: number
-  userCount: number
+  prizeAmount: number
+  prizeType?: 'USD' | 'POINTS'
+  playerCount: number
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
   leaderboard?: LeaderboardItem[]

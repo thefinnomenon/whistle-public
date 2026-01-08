@@ -37,6 +37,7 @@ type User = {
   loginMethod?: LoginType
   isAdmin?: boolean
   winnings?: number
+  points?: number
   onboardingComplete?: boolean
   onboardingPrediction?: Prediction
   createdAt: FirestoreTimestamp
@@ -55,10 +56,11 @@ type League = 'NBA' | 'NFL'
 type Game = {
   id: string
   state: GameState
-  prize: number
+  prizeAmount: number
+  prizeType?: 'USD' | 'POINTS'
   homeTeam: NFL_Team
   awayTeam: NFL_Team
-  userCount: number
+  playerCount: number
   leaderboard: LeaderboardItem[]
   startTime: FirestoreTimestamp
   createdAt: FirestoreTimestamp

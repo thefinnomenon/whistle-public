@@ -63,7 +63,8 @@ async function main() {
     const startTime = admin.firestore.Timestamp.fromDate(toDate(startUtc))
     const payload = {
       state: 'scheduled',
-      prize: 0,
+      prizeAmount: 0,
+      prizeType: 'POINTS',
       homeTeam: home,
       awayTeam: visitor,
       sport: 'BASKETBALL',

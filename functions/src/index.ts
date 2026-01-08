@@ -1215,10 +1215,10 @@ const distributeWinnings = async (
   }
 
   const numWinners = winnerDocs.size
-  const prizePerWinner = game.prize / numWinners
+  const prizePerWinner = game.prizeAmount / numWinners
 
   console.log(
-    `Distributing $${game.prize} to ${numWinners} first place winner(s) with score ${topScore}: $${prizePerWinner.toFixed(2)} each`
+    `Distributing $${game.prizeAmount} to ${numWinners} first place winner(s) with score ${topScore}: $${prizePerWinner.toFixed(2)} each`
   )
 
   // Update winnings for each winner (batch write)

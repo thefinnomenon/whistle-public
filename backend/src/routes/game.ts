@@ -1416,7 +1416,7 @@ const calculateGameStatistics = async (gameId: string) => {
 const distributeWinnings = async (
   gameId: string,
   game: any
-): Promise<{ userId: string; amount: number }[]> => {
+): Promise<{ userId: string; amount: number; type: 'USD' | 'POINTS' }[]> => {
   console.log('Calculating winnings for game', gameId)
 
   if (!game.leaderboard || game.leaderboard.length === 0) {
@@ -1425,6 +1425,8 @@ const distributeWinnings = async (
   }
 
   const topScore = game.leaderboard[0].score
+  const prizeAmount = game.prizeAmount ?? game.prize ?? 0
+  const prizeType: 'USD' | 'POINTS' = game.prizeType || 'USD'
 
   const winnerDocs = await admin
     .firestore()
@@ -1438,24 +1440,38 @@ const distributeWinnings = async (
   }
 
   const numWinners = winnerDocs.size
-  const prizePerWinner = game.prize / numWinners
+  const prizePerWinner = prizeAmount / numWinners
 
   console.log(
-    `Distributing $${game.prize} to ${numWinners} first place winner(s) with score ${topScore}: $${prizePerWinner.toFixed(2)} each`
+    `Distributing ${prizeType} ${prizeAmount} to ${numWinners} first place winner(s) with score ${topScore}: each ${prizePerWinner}`
   )
 
   const batch = admin.firestore().batch()
-  const winnerNotifications: { userId: string; amount: number }[] = []
+  const winnerNotifications: {
+    userId: string
+    amount: number
+    type: 'USD' | 'POINTS'
+  }[] = []
 
   winnerDocs.docs.forEach((winnerDoc) => {
     const userId = winnerDoc.id
     const userRef = admin.firestore().doc(`users/${userId}`)
 
-    batch.update(userRef, {
-      winnings: admin.firestore.FieldValue.increment(prizePerWinner),
-    })
+    if (prizeType === 'USD') {
+      batch.update(userRef, {
+        winnings: admin.firestore.FieldValue.increment(prizePerWinner),
+      })
+    } else {
+      batch.update(userRef, {
+        points: admin.firestore.FieldValue.increment(prizePerWinner),
+      })
+    }
 
-    winnerNotifications.push({ userId, amount: prizePerWinner })
+    winnerNotifications.push({
+      userId,
+      amount: prizePerWinner,
+      type: prizeType,
+    })
   })
 
   await batch.commit()
@@ -1465,7 +1481,11 @@ const distributeWinnings = async (
 }
 
 const notifyWinners = async (
-  winnerNotifications: { userId: string; amount: number }[],
+  winnerNotifications: {
+    userId: string
+    amount: number
+    type: 'USD' | 'POINTS'
+  }[],
   game: any
 ) => {
   if (winnerNotifications.length === 0) {
@@ -1476,7 +1496,7 @@ const notifyWinners = async (
   console.log(`Notifying ${winnerNotifications.length} winners`)
 
   await Promise.all(
-    winnerNotifications.map(async ({ userId, amount }) => {
+    winnerNotifications.map(async ({ userId, amount, type: prizeType }) => {
       const userDoc = await admin
         .firestore()
         .collection('users')
@@ -1489,21 +1509,27 @@ const notifyWinners = async (
         return
       }
 
-      const tokens = Object.values(userData.tokens)
+      const tokens = Object.values(
+        userData.tokens as { token?: string } | Record<string, any>
+      ) as { token?: string }[]
       for (const tokenData of tokens) {
-        const token = tokenData.token
+        const token = tokenData?.token
         if (!token) continue
 
         const dataPayload = {
           gameId: String(game.id || ''),
-          winnings: String(amount.toFixed(2)),
+          winnings: String(amount),
+          prizeType: prizeType,
         }
+
+        const prizeText =
+          prizeType === 'USD' ? `$${amount.toFixed(2)}` : `${amount} Whistles`
 
         const message = {
           token,
           notification: {
             title: '🎉 You Won!',
-            body: `Congratulations! You won $${amount.toFixed(2)} in ${game.homeTeam} vs. ${game.awayTeam}!`,
+            body: `Congratulations! You won ${prizeText} in ${game.homeTeam} vs. ${game.awayTeam}!`,
           },
           data: dataPayload,
           android: {

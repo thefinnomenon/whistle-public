@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons'
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'
 import { router, useFocusEffect } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -191,19 +191,34 @@ export default function GameLobbyScreen() {
       {/* Game Info */}
       <View className="w-full items-center gap-6 mt-8">
         <View className="items-center">
-          <Text className="text-4xl font-bold text-gray-900 dark:text-white">
-            $
-            {game.prize.toLocaleString('en-US', {
-              currency: 'USD',
-              maximumFractionDigits: 0,
-            })}
-          </Text>
+          {game.prizeType === 'USD' ? (
+            <Text className="text-4xl font-bold text-gray-900 dark:text-white">
+              $
+              {game.prizeAmount.toLocaleString('en-US', {
+                currency: 'USD',
+                maximumFractionDigits: 0,
+              })}
+            </Text>
+          ) : (
+            <View className="flex-row items-center gap-2">
+              <MaterialCommunityIcons
+                name="whistle-outline"
+                size={32}
+                color="black"
+              />
+              <Text className="text-4xl font-bold text-gray-900 dark:text-white">
+                {game.prizeAmount.toLocaleString('en-US', {
+                  maximumFractionDigits: 0,
+                })}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View className="flex-row items-center gap-2">
           <Ionicons name="people-sharp" size={40} color="slategray" />
           <Text className="text-2xl text-gray-900 dark:text-white">
-            {game.userCount || 0}
+            {game.playerCount || 0}
           </Text>
         </View>
 

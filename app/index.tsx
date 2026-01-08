@@ -7,6 +7,8 @@ import {
   Alert,
   Animated,
   FlatList,
+  LayoutAnimation,
+  Platform,
   ScrollView,
   Text,
   View,
@@ -25,11 +27,18 @@ import {
 } from '@/lib/firebase'
 import { cn } from '@/lib/utils'
 import { NBA, NFL } from '@/logos'
-import { Ionicons } from '@expo/vector-icons'
+import { Ionicons, MaterialCommunityIcons, Octicons } from '@expo/vector-icons'
 import { cssInterop } from 'nativewind'
 import { toast } from 'sonner-native'
 // This is needed since ExpoImage isn't supported by NativeWind
 cssInterop(ExpoImage, { className: 'style' })
+
+if (
+  Platform.OS === 'android' &&
+  (global as any).UIManager?.setLayoutAnimationEnabledExperimental
+) {
+  ;(global as any).UIManager.setLayoutAnimationEnabledExperimental(true)
+}
 
 type DayOption = { label: string; date: Date; dayNum: number }
 
@@ -73,6 +82,7 @@ export default function GamesScreen() {
     []
   )
   const fadeAnim = useRef(new Animated.Value(1)).current
+  const isFirstRenderRef = useRef(true)
 
   useEffect(() => {
     Asset.loadAsync(logoAssets as any).catch((err) =>
@@ -107,12 +117,18 @@ export default function GamesScreen() {
 
   // Fade in list on day change
   useEffect(() => {
-    fadeAnim.setValue(0)
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false
+      return
+    }
+    fadeAnim.setValue(0.7)
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 180,
       useNativeDriver: true,
     }).start()
+    // soften layout change for Android
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
   }, [selectedDay, fadeAnim])
 
   const dayOptions = useMemo(buildDayOptions, [])
@@ -162,6 +178,19 @@ export default function GamesScreen() {
         username: user.username,
         game_state: game.state,
       })
+      // Optimistic count + membership
+      setUserGames((prev) => {
+        const next = new Map(prev)
+        next.set(game.id, { score: 0, updatedAt: new Date() as any } as any)
+        return next
+      })
+      setGames((prev) =>
+        prev.map((g) =>
+          g.id === game.id
+            ? { ...g, playerCount: Math.max(0, (g.playerCount || 0) + 1) }
+            : g
+        )
+      )
       toast.success(
         `Joined ${game.awayTeam} vs ${game.homeTeam}. Enter when live at ${kickoffTime || ''}.`
       )
@@ -193,6 +222,16 @@ export default function GamesScreen() {
                 next.delete(game.id)
                 return next
               })
+              setGames((prev) =>
+                prev.map((g) =>
+                  g.id === game.id
+                    ? {
+                        ...g,
+                        playerCount: Math.max(0, (g.playerCount || 1) - 1),
+                      }
+                    : g
+                )
+              )
               toast.success(`Left ${game.awayTeam} vs ${game.homeTeam}`)
             } catch (err) {
               console.error('Leave failed', err)
@@ -227,6 +266,31 @@ export default function GamesScreen() {
         hour: '2-digit',
         minute: '2-digit',
       })
+    const isCashPrize =
+      item.prizeType === 'USD' ||
+      (item as any)?.prizeType === 'USD' ||
+      (item as any)?.prize === 'cash'
+    const prizeAmount = (item.prizeAmount ||
+      (item as any)?.prize ||
+      0) as number
+    const prizeLabel = isCashPrize ? (
+      <Text className="text-sm font-semibold text-foreground">
+        {`$${prizeAmount.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+      </Text>
+    ) : (
+      <View className="flex-row items-center">
+        <MaterialCommunityIcons
+          name="whistle-outline"
+          size={16}
+          color="black"
+        />
+        <Text className="text-sm font-semibold text-foreground">
+          {prizeAmount.toLocaleString('en-US', {
+            maximumFractionDigits: 0,
+          })}
+        </Text>
+      </View>
+    )
 
     return (
       <View className="bg-card border border-border rounded-2xl p-4 mb-4">
@@ -256,14 +320,28 @@ export default function GamesScreen() {
               </Text>
             </View>
           </View>
-          <View className="w-36 justify-between bg-background/60 rounded-xl">
+          <View className="h-28 w-36 justify-between bg-background/60 rounded-xl">
             <View className="items-end">
               <Text className="text-sm font-semibold text-foreground">
                 {kickoffTime || ''}
               </Text>
-              <Text className="text-xs text-muted-foreground">
-                Players: {item.userCount || 0}
-              </Text>
+              {prizeAmount > 0 && (
+                <View className="flex-row items-center gap-1">
+                  <Octicons
+                    name="trophy"
+                    size={12}
+                    color="black"
+                    className="mr-1"
+                  />
+                  {prizeLabel}
+                </View>
+              )}
+              <View className="flex-row items-center gap-1">
+                <Ionicons name="people-outline" size={16} color="black" />
+                <Text className="text-sm font-semibold text-foreground">
+                  {item.playerCount || 0}
+                </Text>
+              </View>
             </View>
             {joined ? (
               <View className="flex-row items-center gap-2">
@@ -290,7 +368,7 @@ export default function GamesScreen() {
                 </Button>
                 <Button
                   variant="ghost"
-                  className="h-11 px-3"
+                  className="h-11 ml-1 px-0"
                   onPress={() => handleLeave(item)}
                   disabled={leavingGameId === item.id}
                 >
@@ -324,13 +402,23 @@ export default function GamesScreen() {
 
   return (
     <View className="flex-1 bg-background px-4 pt-12">
-      <View className="h-14 flex-row items-center justify-end">
+      <View className="h-14 flex-row items-center justify-end gap-2">
+        <View className="flex-row items-center gap-1">
+          <MaterialCommunityIcons
+            name="whistle-outline"
+            size={18}
+            color="black"
+          />
+          <Text className="text-sm font-semibold text-foreground">
+            {(user?.points ?? 0).toLocaleString()}
+          </Text>
+        </View>
         <Button
           variant="ghost"
           className="w-14 h-14 rounded-full"
           onPress={() => router.push('/settings')}
         >
-          <Ionicons name="settings-outline" size={22} color="slategray" />
+          <Ionicons name="settings-outline" size={20} color="slategray" />
         </Button>
       </View>
 
@@ -398,7 +486,20 @@ export default function GamesScreen() {
         </ScrollView>
       </View>
 
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <Animated.View
+        style={{
+          flex: 1,
+          opacity: fadeAnim,
+          transform: [
+            {
+              translateY: fadeAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [8, 0],
+              }),
+            },
+          ],
+        }}
+      >
         {gamesForDay.length === 0 ? (
           <View className="flex-1 items-center justify-center">
             <Text className="text-muted-foreground">No games scheduled</Text>
