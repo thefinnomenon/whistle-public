@@ -3,16 +3,6 @@ import notifee, {
   AndroidVisibility,
 } from '@notifee/react-native'
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  limit,
-  orderBy,
-  query,
-} from '@react-native-firebase/firestore'
-import {
   DarkTheme,
   DefaultTheme,
   ThemeProvider as NavigationThemeProvider,
@@ -80,7 +70,6 @@ function AuthGate() {
       gameId?: string | string[]
       questionId?: string | string[]
     }>()
-  const [checkingActiveGame, setCheckingActiveGame] = React.useState(false)
   const incomingGameId = Array.isArray(gameIdParam)
     ? gameIdParam[0]
     : gameIdParam
@@ -114,14 +103,13 @@ function AuthGate() {
   }, [])
 
   useEffect(() => {
-    if (loading || checkingActiveGame) return
+    if (loading) return
 
     console.log('[AuthGate] evaluate routing', {
       pathname,
       incomingGameId,
       incomingQuestionId,
       loading,
-      checkingActiveGame,
     })
 
     const inAuthGroup = pathname.startsWith('sign-in')
@@ -157,88 +145,12 @@ function AuthGate() {
       hasUsername &&
       (inAuthGroup || inOnboarding || inUsername || pathname === '') &&
       !inGame &&
-      !inSettings
+      !inSettings &&
+      pathname !== ''
     ) {
-      // Check if user has an active game before redirecting to lobby
-      setCheckingActiveGame(true)
-      const checkActiveGame = async () => {
-        try {
-          const db = getFirestore()
-
-          // If we already have a specific game (e.g., from a deep link), try to route there first
-          if (incomingGameId) {
-            const playerDoc = await getDoc(
-              doc(db, `games/${incomingGameId}/users`, user.id)
-            )
-
-            if (playerDoc.exists()) {
-              console.log(
-                '[AuthGate] Redirect -> game (deep link membership)',
-                incomingGameId,
-                incomingQuestionId
-              )
-              router.replace({
-                pathname: '/game',
-                params: {
-                  gameId: incomingGameId,
-                  ...(incomingQuestionId
-                    ? { questionId: incomingQuestionId }
-                    : {}),
-                },
-              })
-              SplashScreen.hideAsync()
-              setCheckingActiveGame(false)
-              return
-            }
-          }
-
-          // Get the latest game
-          const gamesQuery = query(
-            collection(db, 'games'),
-            orderBy('createdAt', 'desc'),
-            limit(1)
-          )
-
-          const gamesSnapshot = await getDocs(gamesQuery)
-
-          if (!gamesSnapshot.empty) {
-            const gameDoc = gamesSnapshot.docs[0]
-            const gameData = gameDoc.data()
-            const gameId = gameDoc.id
-
-            // Check if game is open and user is a player
-            if (gameData?.state === 'open') {
-              const playerDoc = await getDoc(
-                doc(db, `games/${gameId}/users`, user.id)
-              )
-
-              if (playerDoc.exists()) {
-                console.log(
-                  '[AuthGate] Redirect -> game (active membership)',
-                  gameId
-                )
-                router.replace({ pathname: '/game', params: { gameId } })
-                SplashScreen.hideAsync()
-                setCheckingActiveGame(false)
-                return
-              }
-            }
-          }
-
-          // No active game found, go to lobby
-          console.log('[AuthGate] Redirect -> lobby (no active game)')
-          router.replace('/game/lobby')
-          SplashScreen.hideAsync()
-          setCheckingActiveGame(false)
-        } catch (error) {
-          console.error('[AuthGate] Error checking active game:', error)
-          router.replace('/game/lobby')
-          SplashScreen.hideAsync()
-          setCheckingActiveGame(false)
-        }
-      }
-
-      checkActiveGame()
+      console.log('[AuthGate] Redirect -> games list')
+      router.replace('/')
+      SplashScreen.hideAsync()
     } else {
       // Hide splash screen once auth is loaded and routing is complete
       SplashScreen.hideAsync()
@@ -249,7 +161,6 @@ function AuthGate() {
     hasCompletedOnboarding,
     hasUsername,
     pathname,
-    checkingActiveGame,
     incomingGameId,
     incomingQuestionId,
   ])
@@ -275,8 +186,8 @@ function AuthGate() {
     }
   }, [user, firebaseUser, AuthConfig])
 
-  // Don't render anything while loading or checking for active game - splash screen will stay visible
-  if (loading || checkingActiveGame) {
+  // Don't render anything while loading- splash screen will stay visible
+  if (loading) {
     return null
   }
 
@@ -300,7 +211,14 @@ function AuthGate() {
           }
         }}
       />
-      <Stack.Screen name="settings" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="settings"
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+        }}
+      />
     </Stack>
   )
 }

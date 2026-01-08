@@ -220,6 +220,20 @@ export const getUserGameStream = async (
   })
 }
 
+export const getUserGamesStream = async (
+  userId: string,
+  setUserGames: (games: Map<string, UserGame>) => void
+) => {
+  const q = query(collection(db, `users/${userId}/games`))
+  return onSnapshot(q, (snapshot) => {
+    const map = new Map<string, UserGame>()
+    snapshot.docs.forEach((docSnap: any) => {
+      map.set(docSnap.id, docSnap.data() as UserGame)
+    })
+    setUserGames(map)
+  })
+}
+
 /**********************
   USERNAMES COLLECTION
 ***********************/

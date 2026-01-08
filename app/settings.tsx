@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons'
 import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -8,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { Ionicons } from '@expo/vector-icons'
 
 export default function SettingsScreen() {
   const { fromPractice } = useLocalSearchParams<{ fromPractice?: string }>()
@@ -93,25 +93,16 @@ Thank you!`
 
   return (
     <View className="flex-1 bg-white dark:bg-black">
-      {/* Header */}
-      <View
-        className="flex flex-row items-center justify-between border-b border-gray-300 dark:border-gray-800 px-4"
-        style={{ paddingTop: insets.top, height: 64 + insets.top }}
-      >
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="slategray" />
-        </TouchableOpacity>
-        <Text className="text-xl font-bold text-gray-900 dark:text-white">
+      <View className="p-5 border-b border-gray-300 dark:border-gray-800">
+        <Text className="text-2xl font-bold text-gray-900 dark:text-white">
           Settings
         </Text>
-        <View style={{ width: 24 }} />
       </View>
-
       {/* Content */}
       <ScrollView
         className="flex-1 px-4"
         contentContainerStyle={{
-          paddingVertical: 24,
+          paddingVertical: 16,
           paddingBottom: insets.bottom + 24,
         }}
         showsVerticalScrollIndicator={false}
