@@ -210,8 +210,8 @@ Thank you!`
           <TouchableOpacity
             onPress={() =>
               fromPractice === 'true'
-                ? undefined
-                : router.push({
+                ? router.back()
+                : router.replace({
                     pathname: '/game',
                     params: { practice: 'true' },
                   })
