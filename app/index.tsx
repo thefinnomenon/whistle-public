@@ -191,8 +191,12 @@ export default function GamesScreen() {
             : g
         )
       )
+      if (game.state === 'open') {
+        router.push({ pathname: '/game', params: { gameId: game.id } })
+        return
+      }
       toast.success(
-        `Joined ${game.awayTeam} vs ${game.homeTeam}. Enter when live at ${kickoffTime || ''}.`
+        `Joined ${game.awayTeam} vs ${game.homeTeam}!\nEnter when live at ${kickoffTime || ''}.`
       )
     } catch (err) {
       console.error('Join failed', err)
@@ -232,7 +236,6 @@ export default function GamesScreen() {
                     : g
                 )
               )
-              toast.success(`Left ${game.awayTeam} vs ${game.homeTeam}`)
             } catch (err) {
               console.error('Leave failed', err)
               Alert.alert(
@@ -354,30 +357,38 @@ export default function GamesScreen() {
                       params: { gameId: item.id },
                     })
                   }
-                  className={`flex-1 h-11 rounded-lg ${
-                    canEnter ? 'bg-green-600' : 'bg-gray-400'
-                  }`}
+                  className={cn(
+                    'flex-1 h-11 rounded-lg',
+                    canEnter ? 'bg-blue-600 opacity-90' : 'bg-muted'
+                  )}
                 >
                   {leavingGameId === item.id ? (
                     <ActivityIndicator color="white" style={{ height: 12 }} />
                   ) : (
-                    <Text className="text-white font-semibold text-center">
+                    <Text
+                      className={cn(
+                        'font-semibold text-center',
+                        canEnter ? 'text-white' : 'text-foreground'
+                      )}
+                    >
                       Enter
                     </Text>
                   )}
                 </Button>
-                <Button
-                  variant="ghost"
-                  className="h-11 ml-1 px-0"
-                  onPress={() => handleLeave(item)}
-                  disabled={leavingGameId === item.id}
-                >
-                  {leavingGameId === item.id ? (
-                    <ActivityIndicator color="red" style={{ height: 10 }} />
-                  ) : (
-                    <Ionicons name="log-out-outline" size={16} color="red" />
-                  )}
-                </Button>
+                {item.state !== 'open' && (
+                  <Button
+                    variant="ghost"
+                    className="h-11 ml-1 px-0"
+                    onPress={() => handleLeave(item)}
+                    disabled={leavingGameId === item.id}
+                  >
+                    {leavingGameId === item.id ? (
+                      <ActivityIndicator color="red" style={{ height: 10 }} />
+                    ) : (
+                      <Ionicons name="log-out-outline" size={16} color="red" />
+                    )}
+                  </Button>
+                )}
               </View>
             ) : (
               <Button

@@ -232,28 +232,6 @@ export default function GameScreen() {
     )
   }, [user, game, gameId, isPracticeMode])
 
-  // Prompt to leave game on hardware back press
-  useEffect(() => {
-    // Delay setting up the listener to avoid triggering on initial mount/navigation
-    const timeout = setTimeout(() => {
-      isMountedRef.current = true
-    }, 500)
-
-    const listener = navigation.addListener('beforeRemove', (e) => {
-      // Don't prevent if intentionally leaving or if just mounted
-      if (isLeavingRef.current || !isMountedRef.current) {
-        return
-      }
-      e.preventDefault()
-      handleLeaveGame()
-    })
-
-    return () => {
-      clearTimeout(timeout)
-      listener()
-    }
-  }, [handleLeaveGame, navigation])
-
   // Handle app state changes (background/foreground)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {

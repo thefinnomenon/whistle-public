@@ -91,6 +91,20 @@ Thank you!`
     )
   }
 
+  const handlePracticeMode = () => {
+    if (fromPractice === 'true') return
+    // Close the modal first so practice runs in the main stack, then navigate
+    router.dismiss()
+    setTimeout(
+      () =>
+        router.push({
+          pathname: '/game',
+          params: { practice: 'true' },
+        }),
+      20
+    )
+  }
+
   return (
     <View className="flex-1 bg-white dark:bg-black">
       <View className="p-5 border-b border-gray-300 dark:border-gray-800">
@@ -208,14 +222,7 @@ Thank you!`
             ACTIONS
           </Text>
           <TouchableOpacity
-            onPress={() =>
-              fromPractice === 'true'
-                ? router.back()
-                : router.replace({
-                    pathname: '/game',
-                    params: { practice: 'true' },
-                  })
-            }
+            onPress={handlePracticeMode}
             disabled={fromPractice === 'true'}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >
