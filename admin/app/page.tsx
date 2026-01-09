@@ -52,6 +52,7 @@ export default function HomePage() {
         }
       )
       setTestStatus(`Sent: ${body.sent || 0}, Failed: ${body.failed || 0}`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       console.error('Failed to send test question', err)
       setTestStatus(`Error: ${err.message || err}`)

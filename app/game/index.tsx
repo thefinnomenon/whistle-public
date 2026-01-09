@@ -1,9 +1,4 @@
-import {
-  router,
-  useFocusEffect,
-  useLocalSearchParams,
-  useNavigation,
-} from 'expo-router'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, AppState, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -34,7 +29,6 @@ import { QuestionAnswerModal } from './components/QuestionAnswerModal'
 import { QuestionList } from './components/QuestionList'
 
 export default function GameScreen() {
-  const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { game, setGame } = useGame()
@@ -60,7 +54,6 @@ export default function GameScreen() {
     null
   )
   const isLeavingRef = useRef(false)
-  const isMountedRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeQuestionsRef = useRef<(() => void) | undefined>(null)
   const unsubscribeUserGameRef = useRef<(() => void) | undefined>(null)
@@ -474,12 +467,7 @@ export default function GameScreen() {
         game={game}
         insetsTop={insets.top}
         onLeave={handleLeaveGame}
-        onSettings={() =>
-          router.push({
-            pathname: '/settings',
-            params: isPracticeMode ? { fromPractice: 'true' } : undefined,
-          })
-        }
+        showLeave={!isPracticeMode}
       />
       <GameInfoBar game={game} gamePlayer={gamePlayer} />
       {isPracticeMode && (

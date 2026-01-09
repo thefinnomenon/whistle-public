@@ -359,7 +359,7 @@ export default function GamesScreen() {
                   }
                   className={cn(
                     'flex-1 h-11 rounded-lg',
-                    canEnter ? 'bg-blue-600 opacity-90' : 'bg-muted'
+                    canEnter ? 'bg-blue-600 opacity-90' : 'bg-blue-200'
                   )}
                 >
                   {leavingGameId === item.id ? (
@@ -368,7 +368,7 @@ export default function GamesScreen() {
                     <Text
                       className={cn(
                         'font-semibold text-center',
-                        canEnter ? 'text-white' : 'text-foreground'
+                        canEnter ? 'text-white' : 'text-blue-900'
                       )}
                     >
                       Enter
