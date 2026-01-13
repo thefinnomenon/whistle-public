@@ -4,7 +4,7 @@
   "version": "2.0.6",
   "scripts": {
     "android:studio": "open -a \"Android Studio\"",
-    "start:dev": "expo start --dev-client --tunnel",
+    "dev": "expo start --dev-client --tunnel",
     "prebuild:dev": "EXPO_PUBLIC_APP_ENV=development expo prebuild",
     "prebuild:dev:clean": "EXPO_PUBLIC_APP_ENV=development expo prebuild --clean",
     "prebuild:prod": "EXPO_PUBLIC_APP_ENV=production expo prebuild",

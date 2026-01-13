@@ -88,6 +88,7 @@ export default function GameScreen() {
   const setUserGameRef = useRef(setUserGame)
   const setGamePlayerRef = useRef(setGamePlayer)
   const setPredictionsRef = useRef(setPredictions)
+  const practiceAlertShownRef = useRef(false)
 
   // Keep refs updated
   useEffect(() => {
@@ -310,6 +311,19 @@ export default function GameScreen() {
 
     return () => {
       subscription.remove()
+    }
+  }, [isPracticeMode])
+
+  useEffect(() => {
+    if (isPracticeMode && !practiceAlertShownRef.current) {
+      const timer = setTimeout(() => {
+        practiceAlertShownRef.current = true
+        Alert.alert(
+          'Practice mode',
+          'Tap "Send Practice Question" to simulate a game. You can answer here on the game screen, or answer from the notification — long press to expand on iOS or tap the arrow to expand on Android.'
+        )
+      }, 1000)
+      return () => clearTimeout(timer)
     }
   }, [isPracticeMode])
 

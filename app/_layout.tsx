@@ -200,15 +200,9 @@ function AuthGate() {
       <Stack.Screen name="username" options={{ headerShown: false }} />
       <Stack.Screen
         name="game"
-        options={({ route }: any) => {
-          const practice =
-            route?.params?.practice === 'true' ||
-            (typeof route?.params?.gameId === 'string' &&
-              route.params.gameId.startsWith('practice-'))
-          return {
-            headerShown: false,
-            gestureEnabled: !practice,
-          }
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
         }}
       />
       <Stack.Screen

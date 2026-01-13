@@ -254,7 +254,10 @@ export default function GamesScreen() {
 
   const renderGame = ({ item }: { item: Game & { start?: Date } }) => {
     const joined = userGames.has(item.id)
-    const canEnter = joined && item.state === 'open'
+    const canEnter =
+      joined &&
+      item.state !== 'cancelled' &&
+      (item.state === 'open' || item.state === 'resolved')
     const logoHome =
       item.league === 'NBA'
         ? NBA[item.homeTeam as keyof typeof NBA]
@@ -375,7 +378,7 @@ export default function GamesScreen() {
                     </Text>
                   )}
                 </Button>
-                {item.state !== 'open' && (
+                {item.state === 'scheduled' && (
                   <Button
                     variant="ghost"
                     className="h-11 ml-1 px-0"
