@@ -1,6 +1,15 @@
 import https from 'https'
 import { admin, db } from '../firebase'
 import { endGameById } from '../routes/game'
+import {
+  EngineEventSource,
+  EventType,
+  NbaEventResult,
+  NbaEventSubType,
+  type NbaEventContext,
+  type EngineEvent,
+  type EngineGameState,
+} from '../types/engine'
 
 const NBA_SCHEDULE_URL =
   'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
@@ -150,6 +159,146 @@ const fetchPlayByPlay = async (nbaGameId: string) => {
     game: data?.game || {},
     gameId: String(data?.game?.gameId || ''),
   }
+}
+
+const fetchBoxScore = async (nbaGameId: string) => {
+  const url = `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_${nbaGameId}.json`
+  const data = await fetchJson<any>(url)
+  return data?.game || null
+}
+
+const toEnumValue = (value: any) => {
+  if (value === null || value === undefined) return 'UNKNOWN'
+  const text = String(value).trim()
+  if (!text) return 'UNKNOWN'
+  return text
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .toUpperCase()
+}
+
+const ENGINE_EVENT_SUBTYPE_VALUES = new Set(
+  Object.values(NbaEventSubType) as string[]
+)
+
+const toEngineEventSubType = (value: any): NbaEventSubType => {
+  const key = toEnumValue(value)
+  return ENGINE_EVENT_SUBTYPE_VALUES.has(key)
+    ? (key as NbaEventSubType)
+    : NbaEventSubType.OTHER
+}
+
+const toEventType = (
+  actionType: any,
+  subType: NbaEventSubType,
+  result: NbaEventResult,
+  description: any
+): EventType => {
+  const base = toEnumValue(actionType)
+  if (base === '2PT') {
+    return result === NbaEventResult.MADE
+      ? EventType.MADE_FG
+      : EventType.MISSED_FG
+  }
+  if (base === '3PT') {
+    return result === NbaEventResult.MADE
+      ? EventType.MADE_3
+      : EventType.MISSED_3
+  }
+  if (base === 'FREETHROW') {
+    return result === NbaEventResult.MADE
+      ? EventType.MADE_FT
+      : EventType.MISSED_FT
+  }
+  if (base === 'FOUL') return EventType.FOUL
+  if (base === 'TURNOVER') return EventType.TURNOVER
+  if (base === 'REBOUND') return EventType.REBOUND
+  if (base === 'STEAL') return EventType.STEAL
+  if (base === 'BLOCK') return EventType.BLOCK
+  if (base === 'SUBSTITUTION') return EventType.SUBSTITUTION
+  if (base === 'TIMEOUT') return EventType.TIMEOUT
+  if (base === 'JUMPBALL') return EventType.JUMP_BALL
+  if (base === 'PERIOD') {
+    if (subType === NbaEventSubType.START) return EventType.PERIOD_START
+    if (subType === NbaEventSubType.END) return EventType.PERIOD_END
+  }
+  if (base === 'GAME' || isGameEndAction({ description }))
+    return EventType.GAME_END
+  if (base === 'INSTANTREPLAY' || base === 'CHALLENGE') return EventType.REVIEW
+  return EventType.OTHER
+}
+
+const toEventResult = (action: any): NbaEventResult => {
+  const result = String(action?.shotResult || '').toUpperCase()
+  if (result === 'MADE') return NbaEventResult.MADE
+  if (result === 'MISSED') return NbaEventResult.MISSED
+  const desc = String(action?.description || '').toUpperCase()
+  if (desc.startsWith('MISS')) return NbaEventResult.MISSED
+  if (desc.includes('PTS')) return NbaEventResult.MADE
+  return NbaEventResult.NA
+}
+
+const toEventContext = (
+  type: EventType,
+  subType: NbaEventSubType,
+  action: any
+): NbaEventContext | null => {
+  const context: NbaEventContext = {}
+  const primaryPlayerId =
+    typeof action?.personId === 'number' ? action.personId : null
+  const secondaryPlayerIds = Array.isArray(action?.personIdsFilter)
+    ? action.personIdsFilter.filter((id: any) => typeof id === 'number')
+    : []
+  const teamId = typeof action?.teamId === 'number' ? action.teamId : null
+  const teamTricode =
+    typeof action?.teamTricode === 'string' ? action.teamTricode : null
+
+  if (type === EventType.MADE_FT || type === EventType.MISSED_FT) {
+    const match = String(action?.subType || '').match(/(\d+)\s*of\s*(\d+)/i)
+    const attemptNumber = match ? Number(match[1]) : null
+    const attemptsTotal = match ? Number(match[2]) : null
+    context.freeThrow = {
+      shooterId: primaryPlayerId,
+      teamId,
+      teamTricode,
+      result: toEventResult(action),
+      attemptsTotal,
+      attemptNumber,
+    }
+  }
+
+  if (
+    type === EventType.MADE_FG ||
+    type === EventType.MISSED_FG ||
+    type === EventType.MADE_3 ||
+    type === EventType.MISSED_3
+  ) {
+    context.shot = {
+      shooterId: primaryPlayerId,
+      teamId,
+      teamTricode,
+      result: toEventResult(action),
+      shotType: subType,
+    }
+  }
+
+  if (primaryPlayerId !== null) context.primaryPlayerId = primaryPlayerId
+  if (secondaryPlayerIds.length) context.secondaryPlayerIds = secondaryPlayerIds
+  if (teamId !== null) context.teamId = teamId
+  if (teamTricode) context.teamTricode = teamTricode
+
+  return Object.keys(context).length ? context : null
+}
+
+const parseClockToMs = (value: any): number | null => {
+  if (typeof value !== 'string') return null
+  const match = value.match(/PT(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/)
+  if (!match) return null
+  const minutes = match[1] ? Number(match[1]) : 0
+  const seconds = match[2] ? Number(match[2]) : 0
+  if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null
+  return Math.round((minutes * 60 + seconds) * 1000)
 }
 
 const isFinalStatus = (status: any, statusText: any) => {
@@ -330,8 +479,14 @@ export const syncNbaLiveEvents = async () => {
     }
 
     let payload
+    let boxScore: any = null
     try {
-      payload = await fetchPlayByPlay(nbaGameId)
+      const [pbp, box] = await Promise.all([
+        fetchPlayByPlay(nbaGameId),
+        fetchBoxScore(nbaGameId),
+      ])
+      payload = pbp
+      boxScore = box
     } catch (err) {
       const message = String(err)
       if (message.includes('NBA not modified')) {
@@ -374,29 +529,66 @@ export const syncNbaLiveEvents = async () => {
       continue
     }
 
-    const eventWrites = newActions.map((action: any) => {
+    const eventWrites = newActions.flatMap((action: any) => {
       const actionNumber = action.actionNumber as number
-      const eventRef = db
-        .collection(`games/${gameId}/events`)
+      const rawRef = db
+        .collection(`games/${gameId}/rawEvents`)
         .doc(String(actionNumber))
-      const eventPayload = {
+      const rawPayload = {
         source: 'nba.com',
         nbaGameId,
         actionNumber,
-        period: action?.period ?? null,
-        clock: action?.clock ?? null,
-        description: action?.description ?? '',
-        teamId: action?.teamId ?? null,
-        teamTricode: action?.teamTricode ?? null,
-        scoreHome: action?.scoreHome ?? null,
-        scoreAway: action?.scoreAway ?? null,
-        actionType: action?.actionType ?? null,
-        subType: action?.subType ?? null,
-        shotResult: action?.shotResult ?? null,
         raw: action,
         ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
       }
-      return { ref: eventRef, data: eventPayload }
+
+      const eventRef = db
+        .collection(`games/${gameId}/events`)
+        .doc(String(actionNumber))
+      const gameState: EngineGameState = {
+        period: boxScore?.period ?? action?.period ?? null,
+        clockMs: parseClockToMs(boxScore?.gameClock ?? action?.clock),
+        scoreHome: boxScore?.homeTeam?.score ?? action?.scoreHome ?? null,
+        scoreAway: boxScore?.awayTeam?.score ?? action?.scoreAway ?? null,
+        possession: action?.possession ?? null,
+        boxScore: boxScore
+          ? {
+              gameId: boxScore.gameId ?? null,
+              gameStatus: boxScore.gameStatus ?? null,
+              gameStatusText: boxScore.gameStatusText ?? '',
+              period: boxScore.period ?? null,
+              gameClock: boxScore.gameClock ?? null,
+              homeTeam: boxScore.homeTeam ?? null,
+              awayTeam: boxScore.awayTeam ?? null,
+            }
+          : null,
+      }
+
+      const eventSubType = toEngineEventSubType(action?.subType)
+      const eventResult = toEventResult(action)
+      const eventType = toEventType(
+        action?.actionType,
+        eventSubType,
+        eventResult,
+        action?.description
+      )
+      const eventContext = toEventContext(eventType, eventSubType, action)
+
+      const eventPayload: EngineEvent = {
+        eventId: actionNumber,
+        source: EngineEventSource.NBA_COM,
+        type: eventType,
+        subType: eventSubType,
+        context: eventContext,
+        description: action?.description ?? '',
+        questionId: null,
+        gameState,
+        ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }
+      return [
+        { ref: rawRef, data: rawPayload },
+        { ref: eventRef, data: eventPayload },
+      ]
     })
 
     await commitInBatches(eventWrites)
