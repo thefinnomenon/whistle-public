@@ -121,14 +121,12 @@ export default function GamesScreen() {
       isFirstRenderRef.current = false
       return
     }
-    fadeAnim.setValue(0.7)
+    fadeAnim.setValue(0.3)
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 180,
+      duration: 260,
       useNativeDriver: true,
     }).start()
-    // soften layout change for Android
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
   }, [selectedDay, fadeAnim])
 
   const dayOptions = useMemo(buildDayOptions, [])
@@ -456,6 +454,7 @@ export default function GamesScreen() {
                   'mr-2 h-16 w-16 rounded-full items-center justify-center border p-0',
                   baseBg,
                   baseBorder,
+                  isSelected ? 'active:bg-blue-600' : 'active:bg-transparent',
                   !games.some((g) => {
                     const start =
                       (g.startTime as any)?.toDate?.() ??
@@ -504,14 +503,6 @@ export default function GamesScreen() {
         style={{
           flex: 1,
           opacity: fadeAnim,
-          transform: [
-            {
-              translateY: fadeAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [8, 0],
-              }),
-            },
-          ],
         }}
       >
         {gamesForDay.length === 0 ? (

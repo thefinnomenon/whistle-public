@@ -19,7 +19,7 @@ export function GameInfoBar({ game, gamePlayer }: Props) {
     0
   const isCash =
     game?.prizeType === 'USD' || (game as any)?.prize === 'cash' || false
-  const playerCount = game?.playerCount ?? game?.userCount ?? 0
+  const playerCount = game?.playerCount || 0
 
   return (
     <View className="flex flex-row items-center justify-between h-12 border-b border-gray-300 dark:border-gray-700 px-4">

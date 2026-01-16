@@ -69,7 +69,7 @@ async function main() {
       awayTeam: visitor,
       sport: 'BASKETBALL',
       league: 'NBA',
-      userCount: 0,
+      playerCount: 0,
       leaderboard: [],
       startTime,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),

@@ -293,10 +293,7 @@ export const getGames = async (setGames: (games: Game[]) => void) => {
         return {
           ...(data as Game),
           startTime: data.startTime,
-          playerCount:
-            (data as any).playerCount !== undefined
-              ? (data as any).playerCount
-              : (data as any).userCount || 0,
+          playerCount: (data as any).playerCount || 0,
           id: gameSnap.id,
         }
       })

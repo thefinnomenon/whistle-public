@@ -8,6 +8,7 @@ import gameRouter, {
   updatePlayerCountsForActiveGames,
 } from './routes/game'
 import logsRouter from './routes/logs'
+import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 
 const LOG_BLACKLIST = ['/health', '/api/log']
 
@@ -49,6 +50,12 @@ app.listen(PORT, () => {
     console.log('[sentry] Initialized')
 })
 
+const NBA_SCHEDULE_DAYS_AHEAD = Number(process.env.NBA_SCHEDULE_DAYS_AHEAD ?? 7)
+const NBA_SCHEDULE_POLL_MS = Number(
+  process.env.NBA_SCHEDULE_POLL_MS ?? 3_600_000
+)
+const NBA_LIVE_POLL_MS = Number(process.env.NBA_LIVE_POLL_MS ?? 10_000)
+
 // Background worker: update player counts for active games every minute
 const startPlayerCountWorker = () => {
   console.log('[worker] Update player counts for active games worker started')
@@ -66,7 +73,7 @@ const startPlayerCountWorker = () => {
   setInterval(run, 60_000)
 }
 
-startPlayerCountWorker()
+// startPlayerCountWorker()
 
 // Background worker: start scheduled games every minute
 const startScheduledGamesWorker = () => {
@@ -84,6 +91,47 @@ const startScheduledGamesWorker = () => {
 }
 
 startScheduledGamesWorker()
+
+// Background worker: sync NBA schedule every hour
+const startNbaScheduleWorker = () => {
+  console.log('[worker] NBA schedule sync worker started')
+  const run = async () => {
+    try {
+      const { processed, created } = await syncNbaSchedule(
+        NBA_SCHEDULE_DAYS_AHEAD
+      )
+      console.log(
+        `[worker] NBA schedule sync complete. games processed=${processed} created=${created}`
+      )
+    } catch (err) {
+      console.error('[worker] NBA schedule sync error', err)
+      Sentry.captureException(err)
+    }
+  }
+  run()
+  setInterval(run, NBA_SCHEDULE_POLL_MS)
+}
+
+startNbaScheduleWorker()
+
+// Background worker: sync NBA live events for open games
+const startNbaLiveFeedWorker = () => {
+  console.log('[worker] NBA live feed worker started')
+  const run = async () => {
+    try {
+      const updated = await syncNbaLiveEvents()
+      if (updated > 0)
+        console.log(`[worker] NBA live events updated for ${updated} games`)
+    } catch (err) {
+      console.error('[worker] NBA live feed error', err)
+      Sentry.captureException(err)
+    }
+  }
+  run()
+  setInterval(run, NBA_LIVE_POLL_MS)
+}
+
+startNbaLiveFeedWorker()
 
 // Background worker: close expired questions every second (small batch)
 const closeExpiredQuestionsWorker = () => {

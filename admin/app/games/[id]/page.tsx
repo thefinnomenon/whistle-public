@@ -139,8 +139,7 @@ export default function GamePage() {
 
     const currentPlayerCount =
       playerCountHistory[playerCountHistory.length - 1]?.count ??
-      (game as any)?.playerCount ??
-      (game as any)?.userCount ??
+      (game as any)?.playerCount ?? 0
       0
     const currentPlayerCountByPlatform =
       playerCountHistory[playerCountHistory.length - 1]?.byPlatform ||

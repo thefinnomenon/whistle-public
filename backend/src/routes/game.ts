@@ -414,6 +414,44 @@ router.post('/practice/question', async (req, res) => {
 // All remaining routes require admin
 
 // GAME ROUTES
+router.get('/:gameId/events', isAdminMiddleware, async (req, res) => {
+  try {
+    const { gameId } = req.params
+    const rawLimit = req.query.limit
+    const rawSince = req.query.sinceActionNumber
+    const limit = Math.min(Number(rawLimit) || 200, 500)
+
+    if (rawSince !== undefined && Number.isNaN(Number(rawSince))) {
+      return res
+        .status(400)
+        .json({ error: 'sinceActionNumber must be a number' })
+    }
+
+    let query = db
+      .collection(`games/${gameId}/events`)
+      .orderBy('actionNumber', 'asc')
+
+    if (rawSince !== undefined) {
+      query = query.where('actionNumber', '>', Number(rawSince))
+    }
+
+    const snap = await query.limit(limit).get()
+    const events = snap.docs.map((doc) => ({
+      id: doc.id,
+      ...(doc.data() as any),
+    }))
+    const lastActionNumber =
+      events.length > 0
+        ? (events[events.length - 1]?.actionNumber ?? null)
+        : null
+
+    return res.json({ ok: true, events, lastActionNumber })
+  } catch (error) {
+    console.error('[games/events] error', error)
+    return res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
 router.post('/', isAdminMiddleware, async (req, res) => {
   console.log('[games/create] game', req.body)
   try {
@@ -501,40 +539,10 @@ router.post('/:id/end', isAdminMiddleware, async (req, res) => {
   const { id } = req.params
   console.log('[games/end] game', id)
   try {
-    const gameRef = db.collection('games').doc(id)
-    const gameSnap = await gameRef.get()
-    if (!gameSnap.exists) {
+    const result = await endGameById(id, req.user?.uid)
+    if (result?.status === 404) {
       return res.status(404).json({ error: 'Game not found' })
     }
-    const game = gameSnap.data() as any
-
-    // Mark game resolved
-    await gameRef.set(
-      {
-        state: 'resolved',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    )
-
-    // Calculate stats, winnings, notifications
-    await calculateGameStatistics(id)
-    const winnerNotifications = await distributeWinnings(id, game)
-    await notifyWinners(winnerNotifications, game)
-    const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
-    await sendNotificationsToGameUsers(id, message)
-
-    trackEvent(
-      'game_ended',
-      {
-        gameId: id,
-        userId: req.user?.uid,
-        homeTeam: game.homeTeam,
-        awayTeam: game.awayTeam,
-      },
-      req.user?.uid
-    )
-
     return res.json({ ok: true })
   } catch (err) {
     console.error('[games/end] error', err)
@@ -553,7 +561,7 @@ router.post('/:id/end', isAdminMiddleware, async (req, res) => {
 
 router.post('/test-question', isAdminMiddleware, async (_req, res) => {
   try {
-    const targetEmails = ['configure@example.com', 'configure@example.com']
+    const targetEmails = ['configure@example.com'] //, 'configure@example.com']
 
     const tokens: string[] = []
 
@@ -2138,4 +2146,45 @@ const sendNotificationsToGameUsers = async (
       error
     )
   }
+}
+
+export const endGameById = async (gameId: string, userId?: string) => {
+  const gameRef = db.collection('games').doc(gameId)
+  const gameSnap = await gameRef.get()
+  if (!gameSnap.exists) {
+    return { status: 404 }
+  }
+  const game = gameSnap.data() as any
+  if (game?.state === 'resolved') {
+    return { status: 200, alreadyResolved: true }
+  }
+
+  await gameRef.set(
+    {
+      state: 'resolved',
+      endedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  )
+
+  await calculateGameStatistics(gameId)
+  const winnerNotifications = await distributeWinnings(gameId, game)
+  await notifyWinners(winnerNotifications, game)
+  const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
+  await sendNotificationsToGameUsers(gameId, message)
+
+  trackEvent(
+    'game_ended',
+    {
+      gameId,
+      userId,
+      homeTeam: game.homeTeam,
+      awayTeam: game.awayTeam,
+      source: userId ? 'manual' : 'worker',
+    },
+    userId
+  )
+
+  return { status: 200 }
 }

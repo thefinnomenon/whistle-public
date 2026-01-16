@@ -152,7 +152,7 @@ export default function GameScreen() {
       prize: 0,
       homeTeam: prev?.homeTeam || 'NE',
       awayTeam: prev?.awayTeam || 'NYJ',
-      userCount: 1,
+      playerCount: 1,
       leaderboard: [
         {
           userId: user.id,
@@ -355,7 +355,7 @@ export default function GameScreen() {
             prize: 0,
             homeTeam: 'NE',
             awayTeam: 'NYJ',
-            userCount: 1,
+            playerCount: 1,
             leaderboard: [],
             startTime: new Date() as any,
             createdAt: new Date() as any,

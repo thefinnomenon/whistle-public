@@ -183,7 +183,14 @@ export default function HomePage() {
                         {game.playerCount || 0} players
                       </div>
                       <div className="text-sm font-semibold">
-                        ${game.prizeAmount || 0} prize
+                        {game.prizeType === 'USD'
+                          ? `$${(game.prizeAmount || 0).toLocaleString('en-US', {
+                              maximumFractionDigits: 0,
+                            })}`
+                          : `${(game.prizeAmount || 0).toLocaleString('en-US', {
+                              maximumFractionDigits: 0,
+                            })} points`}{' '}
+                        prize
                       </div>
                     </div>
                   </div>
