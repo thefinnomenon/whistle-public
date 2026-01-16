@@ -7,7 +7,6 @@ import {
   Alert,
   Animated,
   FlatList,
-  LayoutAnimation,
   Platform,
   ScrollView,
   Text,
