@@ -9,6 +9,7 @@ import gameRouter, {
 } from './routes/game'
 import logsRouter from './routes/logs'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
+import { startSeasonProfilesWorker } from './workers/seasonProfilesWorker'
 
 const LOG_BLACKLIST = ['/health', '/api/log']
 
@@ -132,6 +133,17 @@ const startNbaLiveFeedWorker = () => {
 }
 
 startNbaLiveFeedWorker()
+
+// Background worker: refresh NBA season profiles every 24h
+const startSeasonProfilesCacheWorker = () => {
+  console.log('[worker] NBA season profiles worker started')
+  startSeasonProfilesWorker().catch((err) => {
+    console.error('[worker] season profiles error', err)
+    Sentry.captureException(err)
+  })
+}
+
+startSeasonProfilesCacheWorker()
 
 // Background worker: close expired questions every second (small batch)
 const closeExpiredQuestionsWorker = () => {

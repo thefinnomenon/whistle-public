@@ -12,7 +12,7 @@
     "tunnel": "ssh -p 443 -R0:localhost:4000 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 configure@example.com",
     "run:dev": "env-cmd -f .env.development -- ts-node",
     "run:prod": "env-cmd -f .env.production -- ts-node",
-    "test:event-gen": "ts-node scripts/parseTestGames.ts testGames/playbyplay_0022400247.json"
+    "sim-game": "ts-node scripts/parseTestGames.ts testGames/playbyplay_0022400247.json"
   },
   "dependencies": {
     "@sentry/node": "^7.120.3",

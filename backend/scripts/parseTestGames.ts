@@ -16,6 +16,12 @@ import {
   type EngineGameState,
   type NbaEventContext,
 } from '../src/types/engine'
+import {
+  triggerBasketballQuestion,
+  triggerGameStartQuestions,
+  type EngineQuestionPayload,
+} from '../src/lib/engine'
+import { fetchSeasonProfilesOnce } from '../src/workers/seasonProfilesWorker'
 
 const toEnumValue = (value: any) => {
   if (value === null || value === undefined) return 'UNKNOWN'
@@ -156,6 +162,14 @@ const parseClockToMs = (value: any): number | null => {
   return Math.round((minutes * 60 + seconds) * 1000)
 }
 
+const getElapsedMs = (period: number, clockMs: number): number => {
+  const periodLengthMs = period > 4 ? 5 * 60 * 1000 : 12 * 60 * 1000
+  const elapsedThisPeriod = periodLengthMs - clockMs
+  const regulationElapsed = Math.max(0, period - 1) * 12 * 60 * 1000
+  const overtimeElapsed = period > 4 ? (period - 5) * 5 * 60 * 1000 : 0
+  return regulationElapsed + overtimeElapsed + elapsedThisPeriod
+}
+
 const buildGameState = (game: any, action: any): EngineGameState => ({
   period: action?.period ?? null,
   clockMs: parseClockToMs(action?.clock),
@@ -190,7 +204,7 @@ const toEngineEvent = (gameId: string, game: any, action: any): EngineEvent => {
   }
 }
 
-const main = () => {
+const main = async () => {
   const filePath = process.argv[2]
   if (!filePath) {
     console.error('Usage: ts-node backend/scripts/parseTestGames.ts <file>')
@@ -204,6 +218,13 @@ const main = () => {
   const actions = parsed?.game?.actions || []
   const game = parsed?.game || {}
   const gameId = String(game?.gameId || '')
+  const boxScorePath = path.join(
+    path.dirname(absolutePath),
+    `boxscore_${gameId}.json`
+  )
+  const boxScore = fs.existsSync(boxScorePath)
+    ? JSON.parse(fs.readFileSync(boxScorePath, 'utf8'))
+    : null
 
   if (!gameId) {
     console.error('Missing gameId in input JSON')
@@ -213,12 +234,77 @@ const main = () => {
   const events = actions.map((action: any) =>
     toEngineEvent(gameId, game, action)
   )
-  const outputPath = path.join(
-    path.dirname(absolutePath),
-    `${path.basename(absolutePath, '.json')}_engine.json`
+  const seasonProfiles = await fetchSeasonProfilesOnce()
+  const playersById = new Map(
+    seasonProfiles.players.map((player) => [player.playerId, player])
   )
-  fs.writeFileSync(outputPath, JSON.stringify({ gameId, events }, null, 2))
-  console.log(`Wrote ${events.length} events to ${outputPath}`)
+  const teamsById = new Map(
+    seasonProfiles.teams.map((team) => [team.teamId, team])
+  )
+  const questions: EngineQuestionPayload[] = []
+  const firstEvent = events[0]
+  if (firstEvent) {
+    const gameStartQuestions = triggerGameStartQuestions(
+      gameId,
+      firstEvent.gameState,
+      boxScore,
+      {
+        suppressLogs: true,
+        nowMs: 0,
+        seasonProfiles: { playersById, teamsById },
+      }
+    )
+    questions.push(...gameStartQuestions)
+  }
+  let lastElapsedMs = 0
+  for (const event of events) {
+    lastElapsedMs += 30_000
+    const question = await triggerBasketballQuestion(gameId, event, boxScore, {
+      nowMs: lastElapsedMs,
+      bypassMarginConditions: true,
+      suppressLogs: true,
+      seasonProfiles: { playersById, teamsById },
+    })
+    if (question) questions.push(question)
+  }
+  const outputDir = path.dirname(absolutePath)
+  const baseName = path.basename(absolutePath, '.json')
+  const eventsOutputPath = path.join(outputDir, `${baseName}_engine.json`)
+  const questionsOutputPath = path.join(outputDir, `${baseName}_questions.json`)
+  const seasonProfilesOutputPath = path.join(
+    outputDir,
+    `${baseName}_season_profiles.json`
+  )
+  fs.writeFileSync(
+    eventsOutputPath,
+    JSON.stringify({ gameId, events }, null, 2)
+  )
+  fs.writeFileSync(
+    questionsOutputPath,
+    JSON.stringify({ gameId, questions }, null, 2)
+  )
+  fs.writeFileSync(
+    seasonProfilesOutputPath,
+    JSON.stringify(
+      {
+        season: seasonProfiles.season,
+        seasonType: seasonProfiles.seasonType,
+        fetchedAt: seasonProfiles.fetchedAt,
+        playersCount: seasonProfiles.players.length,
+        teamsCount: seasonProfiles.teams.length,
+        players: seasonProfiles.players,
+        teams: seasonProfiles.teams,
+      },
+      null,
+      2
+    )
+  )
+  console.log(
+    `Sim output counts: events=${events.length} questions=${questions.length} players=${seasonProfiles.players.length} teams=${seasonProfiles.teams.length}`
+  )
 }
 
-main()
+main().catch((error) => {
+  console.error('Failed to parse test game', error)
+  process.exit(1)
+})

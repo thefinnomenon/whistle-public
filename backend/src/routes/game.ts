@@ -680,6 +680,7 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       choices,
       timeoutAt,
       engineTag,
+      windowType,
       type = 'YESNO',
     } = req.body || {}
     if (!req.user?.uid) return res.status(401).json({ error: 'Unauthorized' })
@@ -694,6 +695,7 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       state: 'open',
       timeoutAt: timeoutAt ? timeoutAt : null,
       engineTag: engineTag || '',
+      ...(windowType ? { windowType } : {}),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       triggeredAt: admin.firestore.FieldValue.serverTimestamp(),

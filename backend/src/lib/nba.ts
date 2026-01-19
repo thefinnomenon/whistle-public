@@ -6,10 +6,11 @@ import {
   EventType,
   NbaEventResult,
   NbaEventSubType,
-  type NbaEventContext,
   type EngineEvent,
   type EngineGameState,
+  type NbaEventContext,
 } from '../types/engine'
+import { triggerBasketballQuestion, triggerGameStartQuestions } from './engine'
 
 const NBA_SCHEDULE_URL =
   'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
@@ -500,6 +501,38 @@ export const syncNbaLiveEvents = async () => {
         ? game.lastNbaActionNumber
         : 0
 
+    const gameStartState: EngineGameState = {
+      period: boxScore?.period ?? null,
+      clockMs: parseClockToMs(boxScore?.gameClock),
+      scoreHome: boxScore?.homeTeam?.score ?? null,
+      scoreAway: boxScore?.awayTeam?.score ?? null,
+      possession: null,
+      boxScore: boxScore
+        ? {
+            gameId: boxScore.gameId ?? null,
+            gameStatus: boxScore.gameStatus ?? null,
+            gameStatusText: boxScore.gameStatusText ?? '',
+            period: boxScore.period ?? null,
+            gameClock: boxScore.gameClock ?? null,
+            homeTeam: boxScore.homeTeam ?? null,
+            awayTeam: boxScore.awayTeam ?? null,
+          }
+        : null,
+    }
+    if (!game?.gameStartQuestionsScheduledAt) {
+      triggerGameStartQuestions(gameId, gameStartState, boxScore, {
+        delayMs: 10_000,
+        persistQuestions: true,
+      })
+      await doc.ref.set(
+        {
+          gameStartQuestionsScheduledAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+
     const newActions = actions
       .filter(
         (action: any) =>
@@ -529,7 +562,10 @@ export const syncNbaLiveEvents = async () => {
       continue
     }
 
-    const eventWrites = newActions.flatMap((action: any) => {
+    const eventWrites: { ref: any; data: any }[] = []
+    const newEventPayloads: EngineEvent[] = []
+
+    for (const action of newActions) {
       const actionNumber = action.actionNumber as number
       const rawRef = db
         .collection(`games/${gameId}/rawEvents`)
@@ -585,13 +621,18 @@ export const syncNbaLiveEvents = async () => {
         gameState,
         ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
       }
-      return [
-        { ref: rawRef, data: rawPayload },
-        { ref: eventRef, data: eventPayload },
-      ]
-    })
+
+      eventWrites.push({ ref: rawRef, data: rawPayload })
+      eventWrites.push({ ref: eventRef, data: eventPayload })
+      newEventPayloads.push(eventPayload)
+    }
 
     await commitInBatches(eventWrites)
+    for (const eventPayload of newEventPayloads) {
+      await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
+        persistQuestions: true,
+      })
+    }
 
     const latestAction = newActions[newActions.length - 1]?.actionNumber ?? 0
     const latestActionObj = newActions[newActions.length - 1]
