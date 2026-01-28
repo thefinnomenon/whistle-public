@@ -154,6 +154,19 @@ const getPlayerNameFromBoxScore = (
   return null
 }
 
+const getPlayerFromBoxScore = (
+  boxScore: Record<string, any> | null,
+  playerId: number | null
+): any | null => {
+  if (!playerId) return null
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const players: any[] = []
+  if (Array.isArray(homeTeam?.players)) players.push(...homeTeam.players)
+  if (Array.isArray(awayTeam?.players)) players.push(...awayTeam.players)
+  const match = players.find((player) => getPlayerId(player) === playerId)
+  return match ?? null
+}
+
 const getPlayerPerQuarterTarget = (
   profile: PlayerSeasonProfile | undefined,
   statType: string
@@ -369,8 +382,9 @@ const recordRecentEvent = (gameId: string, event: EngineEvent) => {
   const entry = { timeMs, type: event.type, playerId, teamTricode }
   const list = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
   list.push(entry)
-  const cutoff = timeMs - 120_000
-  const trimmed = list.filter((item) => item.timeMs >= cutoff)
+  const cutoff = timeMs - 60_000
+  const recent = list.filter((item) => item.timeMs >= cutoff)
+  const trimmed = recent.length > 10 ? recent.slice(recent.length - 10) : recent
   RECENT_EVENTS_BY_GAME.set(gameId, trimmed)
 }
 
@@ -1850,12 +1864,14 @@ export const triggerGameStartQuestions = (
       text: 'Who will win the game?',
       weight: 1,
       windowType: 'GAME',
+      resolutionContext: { type: 'GAME_WINNER' },
     },
     {
       id: 'JUMP_BALL_WINNER',
       text: 'Who will win the opening jump ball?',
       weight: 1,
       windowType: 'JUMP_BALL',
+      resolutionContext: { type: 'JUMP_BALL_WINNER' },
     },
   ]
   const emit = () => {
@@ -1914,12 +1930,14 @@ export const scheduleGameStartQuestions = (
       text: 'Who will win the game?',
       weight: 1,
       windowType: 'GAME',
+      resolutionContext: { type: 'GAME_WINNER' },
     },
     {
       id: 'JUMP_BALL_WINNER',
       text: 'Who will win the opening jump ball?',
       weight: 1,
       windowType: 'JUMP_BALL',
+      resolutionContext: { type: 'JUMP_BALL_WINNER' },
     },
   ]
   const randDelay = (range: { min: number; max: number }) => {
@@ -2093,10 +2111,14 @@ const buildResolutionContext = (
       }
     }
     case 'MADE_3_COUNT_NEXT_N': {
+      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES') ?? null
+      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES') ?? null
       return {
         ...base,
         minMade3Count: template.resolutionContext?.target ?? 0,
         windowMs: resolutionWindowMs,
+        startHomeThrees: homeThrees,
+        startAwayThrees: awayThrees,
       }
     }
     case 'MADE_FG_BEFORE_PERIOD_END':
@@ -2109,10 +2131,14 @@ const buildResolutionContext = (
     }
     case 'ANY_3_THIS_PERIOD':
     case 'THREE_COUNT_THIS_PERIOD': {
+      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES') ?? null
+      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES') ?? null
       return {
         ...base,
         endPeriod: base.startPeriod,
         minMade3Count: template.resolutionContext?.target ?? 0,
+        startHomeThrees: homeThrees,
+        startAwayThrees: awayThrees,
       }
     }
     case 'LEADER_END_OF_PERIOD': {
@@ -2183,6 +2209,22 @@ const buildResolutionContext = (
       }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
+      const playerIds = Array.isArray(template.resolutionContext?.playerIds)
+        ? template.resolutionContext?.playerIds
+        : []
+      const startPlayerStats: Record<string, number> = {}
+      if (playerIds.length) {
+        for (const playerId of playerIds) {
+          const player = getPlayerFromBoxScore(boxScore, Number(playerId))
+          if (!player) continue
+          const stat = getPlayerGameStat(
+            player,
+            template.resolutionContext?.statType ?? ''
+          )
+          if (stat === null || Number.isNaN(stat)) continue
+          startPlayerStats[String(playerId)] = stat
+        }
+      }
       return {
         ...base,
         statType: template.resolutionContext?.statType ?? null,
@@ -2191,6 +2233,8 @@ const buildResolutionContext = (
         playerIds: template.resolutionContext?.playerIds ?? [],
         choices: template.resolutionContext?.choices ?? [],
         tiedStatValue: template.resolutionContext?.tiedStatValue ?? null,
+        startPlayerStats:
+          Object.keys(startPlayerStats).length > 0 ? startPlayerStats : null,
       }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT':
@@ -2687,4 +2731,508 @@ export const triggerBasketballQuestion = async (
   }
   markGroup(gameId, period, QUESTION_GROUPS[template.id])
   return questionPayload
+}
+
+type QuestionResolutionDecision = {
+  state: 'resolved' | 'cancelled'
+  answer: string | null
+}
+
+const getEventPlayerId = (event: EngineEvent): number | null =>
+  event.context?.shot?.shooterId ??
+  event.context?.freeThrow?.shooterId ??
+  event.context?.primaryPlayerId ??
+  null
+
+const getEventTeamTricode = (event: EngineEvent): string | null =>
+  event.context?.shot?.teamTricode ??
+  event.context?.freeThrow?.teamTricode ??
+  event.context?.teamTricode ??
+  null
+
+const getEventTeamId = (event: EngineEvent): number | null =>
+  event.context?.shot?.teamId ??
+  event.context?.freeThrow?.teamId ??
+  event.context?.teamId ??
+  null
+
+const normalizeCode = (value: string | null | undefined): string | null => {
+  if (!value) return null
+  return value.trim().toUpperCase()
+}
+
+const resolveTeamSide = (
+  event: EngineEvent,
+  boxScore: Record<string, any> | null,
+  context: Record<string, any>
+): 'HOME' | 'AWAY' | null => {
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const homeTricode =
+    normalizeCode(context.homeTricode) ??
+    normalizeCode(homeTeam?.teamTricode) ??
+    normalizeCode(event.gameState?.boxScore?.homeTeam?.teamTricode)
+  const awayTricode =
+    normalizeCode(context.awayTricode) ??
+    normalizeCode(awayTeam?.teamTricode) ??
+    normalizeCode(event.gameState?.boxScore?.awayTeam?.teamTricode)
+  const eventTricode = normalizeCode(getEventTeamTricode(event))
+  if (eventTricode && homeTricode && eventTricode === homeTricode) return 'HOME'
+  if (eventTricode && awayTricode && eventTricode === awayTricode) return 'AWAY'
+  const eventTeamId = getEventTeamId(event)
+  if (eventTeamId && homeTeam?.teamId === eventTeamId) return 'HOME'
+  if (eventTeamId && awayTeam?.teamId === eventTeamId) return 'AWAY'
+  return null
+}
+
+const getCurrentScore = (
+  event: EngineEvent,
+  boxScore: Record<string, any> | null,
+  team: 'HOME' | 'AWAY'
+): number | null => {
+  const stateScore =
+    team === 'HOME' ? event.gameState?.scoreHome : event.gameState?.scoreAway
+  if (stateScore !== null && stateScore !== undefined) return Number(stateScore)
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const boxScoreValue =
+    team === 'HOME' ? (homeTeam?.score ?? null) : (awayTeam?.score ?? null)
+  if (boxScoreValue !== null && boxScoreValue !== undefined)
+    return Number(boxScoreValue)
+  return null
+}
+
+const isScoringEvent = (type: EventType) =>
+  type === EventType.MADE_FG ||
+  type === EventType.MADE_3 ||
+  type === EventType.MADE_FT
+
+const matchesExpectedEvent = (type: EventType, expected: string): boolean => {
+  if (expected === 'MADE_FG')
+    return type === EventType.MADE_FG || type === EventType.MADE_3
+  return String(type) === expected
+}
+
+const isMissForExpected = (type: EventType, expected: string): boolean => {
+  if (expected === 'MADE_FG')
+    return type === EventType.MISSED_FG || type === EventType.MISSED_3
+  if (expected === 'MADE_3') return type === EventType.MISSED_3
+  if (expected === 'MADE_FT') return type === EventType.MISSED_FT
+  return false
+}
+
+const isFinalStatus = (boxScore: Record<string, any> | null): boolean => {
+  const status = boxScore?.gameStatus ?? boxScore?.game?.gameStatus
+  const statusText = String(
+    boxScore?.gameStatusText ?? boxScore?.game?.gameStatusText ?? ''
+  ).toLowerCase()
+  const numeric = typeof status === 'number' ? status : Number(status)
+  if (numeric === 3) return true
+  if (statusText.includes('final')) return true
+  if (statusText.includes('game over')) return true
+  return false
+}
+
+export const resolveQuestionForEvent = (
+  question: any,
+  event: EngineEvent,
+  boxScore: Record<string, any> | null
+): QuestionResolutionDecision | null => {
+  const context = question?.resolutionContext ?? {}
+  const type = String(context.type || '')
+  if (!type) return null
+
+  const startEventId =
+    typeof context.startEventId === 'number' ? context.startEventId : null
+  if (startEventId !== null && event.eventId <= startEventId) return null
+
+  const currentPeriod = event.gameState?.period ?? null
+  const currentClockMs = event.gameState?.clockMs ?? null
+  const startPeriod = context.startPeriod ?? null
+  const startClockMs = context.startClockMs ?? null
+  const windowMs =
+    typeof question?.resolutionWindowMs === 'number'
+      ? question.resolutionWindowMs
+      : typeof context.windowMs === 'number'
+        ? context.windowMs
+        : null
+
+  const periodEnded =
+    !!startPeriod &&
+    !!currentPeriod &&
+    (currentPeriod > startPeriod ||
+      (event.type === EventType.PERIOD_END && currentPeriod === startPeriod))
+
+  const windowExpired =
+    windowMs !== null &&
+    !!startPeriod &&
+    !!currentPeriod &&
+    (currentPeriod > startPeriod ||
+      (currentPeriod === startPeriod &&
+        startClockMs !== null &&
+        currentClockMs !== null &&
+        startClockMs - currentClockMs >= windowMs))
+
+  const gameEnded =
+    event.type === EventType.GAME_END ||
+    (isFinalStatus(boxScore) &&
+      event.type === EventType.PERIOD_END &&
+      (event.gameState?.period ?? 0) >= 4)
+
+  const homeScore = getCurrentScore(event, boxScore, 'HOME')
+  const awayScore = getCurrentScore(event, boxScore, 'AWAY')
+
+  switch (type) {
+    case 'TOTAL_POINTS_NEXT_N': {
+      const currentTotal = (homeScore ?? 0) + (awayScore ?? 0)
+      if (
+        typeof context.minTotalScore === 'number' &&
+        currentTotal >= context.minTotalScore
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'TEAM_POINTS_NEXT_N':
+    case 'TEAM_POINTS_REST_PERIOD':
+    case 'TEAM_POINTS_THIS_PERIOD': {
+      const team = context.team === 'AWAY' ? 'AWAY' : 'HOME'
+      const current = getCurrentScore(event, boxScore, team)
+      if (
+        typeof context.minTeamScore === 'number' &&
+        current !== null &&
+        current >= context.minTeamScore
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded || windowExpired)
+        return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'TEAM_STAT_THIS_PERIOD': {
+      const team = context.team === 'AWAY' ? 'AWAY' : 'HOME'
+      const statType = String(context.statType || '')
+      const current = getTeamStat(boxScore, team, statType)
+      if (
+        typeof context.minTeamStat === 'number' &&
+        current !== null &&
+        current >= context.minTeamStat
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'BOTH_TEAMS_10_REST_PERIOD': {
+      if (
+        typeof context.minHomeScore === 'number' &&
+        typeof context.minAwayScore === 'number' &&
+        homeScore !== null &&
+        awayScore !== null &&
+        homeScore >= context.minHomeScore &&
+        awayScore >= context.minAwayScore
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'MADE_3_COUNT_NEXT_N': {
+      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
+      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      if (
+        homeThrees === null ||
+        awayThrees === null ||
+        typeof context.startHomeThrees !== 'number' ||
+        typeof context.startAwayThrees !== 'number'
+      ) {
+        if (windowExpired) return { state: 'cancelled', answer: null }
+        return null
+      }
+      const delta =
+        homeThrees +
+        awayThrees -
+        context.startHomeThrees -
+        context.startAwayThrees
+      if (
+        typeof context.minMade3Count === 'number' &&
+        delta >= context.minMade3Count
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'MADE_FG_BEFORE_PERIOD_END':
+    case 'MADE_3_BEFORE_PERIOD_END':
+    case 'MADE_FT_BEFORE_PERIOD_END': {
+      const expected =
+        type === 'MADE_3_BEFORE_PERIOD_END'
+          ? 'MADE_3'
+          : type === 'MADE_FT_BEFORE_PERIOD_END'
+            ? 'MADE_FT'
+            : 'MADE_FG'
+      if (matchesExpectedEvent(event.type, expected))
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'ANY_3_THIS_PERIOD':
+    case 'THREE_COUNT_THIS_PERIOD': {
+      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
+      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      if (
+        homeThrees === null ||
+        awayThrees === null ||
+        typeof context.startHomeThrees !== 'number' ||
+        typeof context.startAwayThrees !== 'number'
+      ) {
+        if (periodEnded) return { state: 'cancelled', answer: null }
+        return null
+      }
+      const delta =
+        homeThrees +
+        awayThrees -
+        context.startHomeThrees -
+        context.startAwayThrees
+      if (
+        typeof context.minMade3Count === 'number' &&
+        delta >= context.minMade3Count
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'LEADER_END_OF_PERIOD': {
+      if (!periodEnded) return null
+      if (homeScore === null || awayScore === null)
+        return { state: 'cancelled', answer: null }
+      const leader =
+        homeScore === awayScore
+          ? 'TIE'
+          : homeScore > awayScore
+            ? 'HOME'
+            : 'AWAY'
+      if (context.requiresTrailing) {
+        if (leader === 'TIE') return { state: 'resolved', answer: 'no' }
+        return {
+          state: 'resolved',
+          answer: leader === context.trailingTeam ? 'yes' : 'no',
+        }
+      }
+      if (context.requiresLeading) {
+        if (leader === 'TIE') return { state: 'resolved', answer: 'no' }
+        return {
+          state: 'resolved',
+          answer: leader === context.leadingTeam ? 'yes' : 'no',
+        }
+      }
+      if (leader === 'TIE') return { state: 'cancelled', answer: null }
+      return {
+        state: 'resolved',
+        answer: leader === 'HOME' ? 'home' : 'away',
+      }
+    }
+    case 'TEAM_COMPARE_PERIOD': {
+      if (!periodEnded) return null
+      const statType = String(context.statType || '')
+      const homeStat = getTeamStat(boxScore, 'HOME', statType)
+      const awayStat = getTeamStat(boxScore, 'AWAY', statType)
+      if (
+        homeStat === null ||
+        awayStat === null ||
+        typeof context.minHomeStat !== 'number' ||
+        typeof context.minAwayStat !== 'number'
+      )
+        return { state: 'cancelled', answer: null }
+      const homeDelta = homeStat - context.minHomeStat
+      const awayDelta = awayStat - context.minAwayStat
+      if (homeDelta === awayDelta) return { state: 'cancelled', answer: null }
+      return {
+        state: 'resolved',
+        answer: homeDelta > awayDelta ? 'home' : 'away',
+      }
+    }
+    case 'PLAYER_MILESTONE_PERIOD': {
+      const playerId = Number(context.playerId ?? 0)
+      const period = context.endPeriod ?? startPeriod ?? currentPeriod
+      if (!playerId || !period) return null
+      const player = getPlayerFromBoxScore(boxScore, playerId)
+      const statType = String(context.statType || 'POINTS')
+      const current =
+        getPlayerPeriodStat(player, period, statType) ??
+        getPlayerGameStat(player, statType)
+      if (
+        typeof context.target === 'number' &&
+        current !== null &&
+        current >= context.target
+      )
+        return { state: 'resolved', answer: 'yes' }
+      if (periodEnded) {
+        if (current === null) return { state: 'cancelled', answer: null }
+        return { state: 'resolved', answer: 'no' }
+      }
+      return null
+    }
+    case 'PLAYER_COMPARE_PERIOD': {
+      if (!periodEnded) return null
+      const statType = String(context.statType || '')
+      const playerIds = Array.isArray(context.playerIds)
+        ? context.playerIds
+        : []
+      const period = context.endPeriod ?? startPeriod ?? currentPeriod
+      if (!period || playerIds.length < 2)
+        return { state: 'cancelled', answer: null }
+      let bestId: string | null = null
+      let bestValue: number | null = null
+      let tie = false
+      for (const id of playerIds) {
+        const player = getPlayerFromBoxScore(boxScore, Number(id))
+        const stat =
+          getPlayerPeriodStat(player, period, statType) ??
+          getPlayerGameStat(player, statType)
+        if (stat === null || Number.isNaN(stat)) continue
+        if (bestValue === null || stat > bestValue) {
+          bestValue = stat
+          bestId = String(id)
+          tie = false
+        } else if (stat === bestValue) {
+          tie = true
+        }
+      }
+      if (!bestId || bestValue === null)
+        return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'cancelled', answer: null }
+      return { state: 'resolved', answer: bestId }
+    }
+    case 'PLAYER_COMPARE_NEXT_N': {
+      if (!windowExpired) return null
+      const statType = String(context.statType || '')
+      const playerIds = Array.isArray(context.playerIds)
+        ? context.playerIds
+        : []
+      const startStats =
+        typeof context.startPlayerStats === 'object' && context.startPlayerStats
+          ? context.startPlayerStats
+          : null
+      if (playerIds.length < 2) return { state: 'cancelled', answer: null }
+      let bestId: string | null = null
+      let bestValue: number | null = null
+      let tie = false
+      for (const id of playerIds) {
+        const player = getPlayerFromBoxScore(boxScore, Number(id))
+        const current = getPlayerGameStat(player, statType)
+        if (current === null || Number.isNaN(current)) continue
+        const start = startStats?.[String(id)]
+        const delta =
+          typeof start === 'number' && Number.isFinite(start)
+            ? current - start
+            : current
+        if (bestValue === null || delta > bestValue) {
+          bestValue = delta
+          bestId = String(id)
+          tie = false
+        } else if (delta === bestValue) {
+          tie = true
+        }
+      }
+      if (!bestId || bestValue === null)
+        return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'cancelled', answer: null }
+      return { state: 'resolved', answer: bestId }
+    }
+    case 'TEAM_SCORE_AFTER_TIMEOUT': {
+      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      if (!isScoringEvent(event.type)) return null
+      const teamSide = resolveTeamSide(event, boxScore, context)
+      if (!teamSide) return null
+      if (teamSide !== context.team) return null
+      return { state: 'resolved', answer: 'yes' }
+    }
+    case 'TEAM_SCORE_AFTER_FREETHROWS': {
+      if (!isScoringEvent(event.type)) return null
+      const teamSide = resolveTeamSide(event, boxScore, context)
+      if (!teamSide) return null
+      return {
+        state: 'resolved',
+        answer: teamSide === context.team ? 'yes' : 'no',
+      }
+    }
+    case 'NEXT_EVENT': {
+      const expected = String(context.expectedEventType || '')
+      if (!expected) return null
+      const playerId = context.playerId ? Number(context.playerId) : null
+      const teamTricode = context.teamTricode
+      if (playerId) {
+        const evtPlayerId = getEventPlayerId(event)
+        if (evtPlayerId !== playerId) return null
+      }
+      if (teamTricode) {
+        const evtTeamTricode = normalizeCode(getEventTeamTricode(event))
+        if (normalizeCode(teamTricode) !== evtTeamTricode) return null
+      }
+      if (matchesExpectedEvent(event.type, expected))
+        return { state: 'resolved', answer: 'yes' }
+      if (isMissForExpected(event.type, expected))
+        return { state: 'resolved', answer: 'no' }
+      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'LEAD_CHANGE_REST_GAME': {
+      const startLeader = context.leader
+      if (!startLeader || startLeader === 'TIE') {
+        if (gameEnded) return { state: 'cancelled', answer: null }
+        return null
+      }
+      if (homeScore === null || awayScore === null) return null
+      const leader =
+        homeScore === awayScore
+          ? 'TIE'
+          : homeScore > awayScore
+            ? 'HOME'
+            : 'AWAY'
+      if (leader !== 'TIE' && leader !== startLeader)
+        return { state: 'resolved', answer: 'yes' }
+      if (gameEnded) return { state: 'resolved', answer: 'no' }
+      return null
+    }
+    case 'GAME_POINTS_PACE': {
+      if (!gameEnded) return null
+      const currentTotal = (homeScore ?? 0) + (awayScore ?? 0)
+      if (typeof context.paceTotal !== 'number')
+        return { state: 'cancelled', answer: null }
+      return {
+        state: 'resolved',
+        answer: currentTotal >= context.paceTotal ? 'yes' : 'no',
+      }
+    }
+    case 'OVERTIME': {
+      if (!gameEnded) return null
+      const period = boxScore?.period ?? boxScore?.game?.period ?? null
+      const statusText = String(
+        boxScore?.gameStatusText ?? boxScore?.game?.gameStatusText ?? ''
+      ).toLowerCase()
+      const wentToOt =
+        (typeof period === 'number' && period > 4) || statusText.includes('ot')
+      return {
+        state: 'resolved',
+        answer: wentToOt ? 'yes' : 'no',
+      }
+    }
+    case 'GAME_WINNER': {
+      if (!gameEnded) return null
+      if (homeScore === null || awayScore === null)
+        return { state: 'cancelled', answer: null }
+      if (homeScore === awayScore) return { state: 'cancelled', answer: null }
+      return {
+        state: 'resolved',
+        answer: homeScore > awayScore ? 'home' : 'away',
+      }
+    }
+    case 'JUMP_BALL_WINNER': {
+      if (event.type !== EventType.JUMP_BALL) return null
+      const teamSide = resolveTeamSide(event, boxScore, context)
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      return {
+        state: 'resolved',
+        answer: teamSide === 'HOME' ? 'home' : 'away',
+      }
+    }
+    default:
+      return null
+  }
 }

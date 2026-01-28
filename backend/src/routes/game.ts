@@ -866,6 +866,7 @@ router.post(
           {
             state: 'cancelled',
             closedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cancelReason: 'manual',
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -1578,7 +1579,7 @@ const notifyWinners = async (
   )
 }
 
-const calculateScores = async (
+export const calculateScores = async (
   gameId: string,
   questionId: string,
   opts: { revertIfResolved?: boolean } = {}
@@ -1827,7 +1828,7 @@ export const startGameById = async (gameId: string) => {
 
 export const startScheduledGames = async () => {
   const now = admin.firestore.Timestamp.now()
-  const cutoffMs = now.toMillis() - 2 * 60 * 60 * 1000
+  const cutoffMs = now.toMillis() - 5 * 60 * 1000
   const gamesSnap = await admin
     .firestore()
     .collection('games')
@@ -1840,6 +1841,7 @@ export const startScheduledGames = async () => {
   }
 
   let started = 0
+  let cancelled = 0
   for (const doc of gamesSnap.docs) {
     try {
       const startTime = doc.data()?.startTime as
@@ -1847,6 +1849,16 @@ export const startScheduledGames = async () => {
         | null
         | undefined
       if (startTime && startTime.toMillis() < cutoffMs) {
+        await doc.ref.set(
+          {
+            state: 'cancelled',
+            cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+            cancelReason: 'missed_open_window',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+        cancelled++
         continue
       }
       await startGameById(doc.id)
@@ -1858,6 +1870,8 @@ export const startScheduledGames = async () => {
 
   if (started > 0)
     console.log(`[games/startScheduledGames] started ${started} games`)
+  if (cancelled > 0)
+    console.log(`[games/startScheduledGames] cancelled ${cancelled} games`)
 
   return started
 }

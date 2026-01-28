@@ -1,6 +1,6 @@
 import https from 'https'
 import { admin, db } from '../firebase'
-import { endGameById } from '../routes/game'
+import { calculateScores, endGameById } from '../routes/game'
 import {
   EngineEventSource,
   EventType,
@@ -10,7 +10,12 @@ import {
   type EngineGameState,
   type NbaEventContext,
 } from '../types/engine'
-import { triggerBasketballQuestion, triggerGameStartQuestions } from './engine'
+import {
+  resolveQuestionForEvent,
+  triggerBasketballQuestion,
+  triggerGameStartQuestions,
+} from './engine'
+import { sendDismissNotification } from '../lib/notifications'
 import { getSeasonProfilesById } from '../workers/seasonProfilesWorker'
 
 const NBA_SCHEDULE_URL =
@@ -340,6 +345,61 @@ const resolveGameDoc = async (nbaGameId: string) => {
   }
 }
 
+const resolveOpenQuestionsForEvent = async (
+  gameId: string,
+  event: EngineEvent,
+  boxScore: Record<string, any> | null,
+  windowTypes: string[]
+): Promise<number> => {
+  let query = db
+    .collection('games')
+    .doc(gameId)
+    .collection('questions')
+    .where('state', '==', 'open')
+  if (windowTypes.length) {
+    query = query.where('windowType', 'in', windowTypes)
+  }
+  const questionsSnap = await query.get()
+
+  if (questionsSnap.empty) return 0
+
+  let resolvedCount = 0
+  for (const doc of questionsSnap.docs) {
+    const data = doc.data() as any
+    const decision = resolveQuestionForEvent(data, event, boxScore)
+    if (!decision) continue
+
+    if (decision.state === 'resolved') {
+      await doc.ref.set(
+        {
+          state: 'resolved',
+          answer: decision.answer ?? null,
+          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      await calculateScores(gameId, doc.id)
+    } else {
+      await doc.ref.set(
+        {
+          state: 'cancelled',
+          closedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+    await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
+    console.log(
+      `[nba] question resolved game=${gameId} question=${doc.id} state=${decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`
+    )
+    resolvedCount += 1
+  }
+
+  return resolvedCount
+}
+
 const buildBaseGamePayload = (game: any, startTime: Date | null) => {
   const homeTeam = resolveTeamCode(game?.homeTeam)
   const awayTeam = resolveTeamCode(game?.awayTeam)
@@ -540,13 +600,20 @@ export const syncNbaLiveEvents = async () => {
       )
     }
 
-    const newActions = actions
+    let newActions = actions
       .filter(
         (action: any) =>
           typeof action?.actionNumber === 'number' &&
           action.actionNumber > lastActionNumber
       )
       .sort((a: any, b: any) => a.actionNumber - b.actionNumber)
+
+    if (!lastActionNumber && newActions.length > 10) {
+      console.log(
+        `[nba] live sync backlog cap game=${gameId} actions=${newActions.length} cap=10`
+      )
+      newActions = newActions.slice(-10)
+    }
 
     if (newActions.length === 0) {
       await doc.ref.set(
@@ -569,81 +636,104 @@ export const syncNbaLiveEvents = async () => {
       continue
     }
 
-    const eventWrites: { ref: any; data: any }[] = []
-    const newEventPayloads: EngineEvent[] = []
+    const batchSize = 200
+    let latestActionObj = newActions[newActions.length - 1]
+    for (let i = 0; i < newActions.length; i += batchSize) {
+      const batch = newActions.slice(i, i + batchSize)
+      const eventWrites: { ref: any; data: any }[] = []
+      const newEventPayloads: EngineEvent[] = []
 
-    for (const action of newActions) {
-      const actionNumber = action.actionNumber as number
-      const rawRef = db
-        .collection(`games/${gameId}/rawEvents`)
-        .doc(String(actionNumber))
-      const rawPayload = {
-        source: 'nba.com',
-        nbaGameId,
-        actionNumber,
-        raw: action,
-        ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+      for (const action of batch) {
+        const actionNumber = action.actionNumber as number
+        const rawRef = db
+          .collection(`games/${gameId}/rawEvents`)
+          .doc(String(actionNumber))
+        const rawPayload = {
+          source: 'nba.com',
+          nbaGameId,
+          actionNumber,
+          raw: action,
+          ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }
+
+        const eventRef = db
+          .collection(`games/${gameId}/events`)
+          .doc(String(actionNumber))
+        const gameState: EngineGameState = {
+          period: boxScore?.period ?? action?.period ?? null,
+          clockMs: parseClockToMs(boxScore?.gameClock ?? action?.clock),
+          scoreHome: boxScore?.homeTeam?.score ?? action?.scoreHome ?? null,
+          scoreAway: boxScore?.awayTeam?.score ?? action?.scoreAway ?? null,
+          possession: action?.possession ?? null,
+          boxScore: boxScore
+            ? {
+                gameId: boxScore.gameId ?? null,
+                gameStatus: boxScore.gameStatus ?? null,
+                gameStatusText: boxScore.gameStatusText ?? '',
+                period: boxScore.period ?? null,
+                gameClock: boxScore.gameClock ?? null,
+                homeTeam: boxScore.homeTeam ?? null,
+                awayTeam: boxScore.awayTeam ?? null,
+              }
+            : null,
+        }
+
+        const eventSubType = toEngineEventSubType(action?.subType)
+        const eventResult = toEventResult(action)
+        const eventType = toEventType(
+          action?.actionType,
+          eventSubType,
+          eventResult,
+          action?.description
+        )
+        const eventContext = toEventContext(eventType, eventSubType, action)
+
+        const eventPayload: EngineEvent = {
+          eventId: actionNumber,
+          source: EngineEventSource.NBA_COM,
+          type: eventType,
+          subType: eventSubType,
+          context: eventContext,
+          description: action?.description ?? '',
+          questionId: null,
+          gameState,
+          ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }
+
+        eventWrites.push({ ref: rawRef, data: rawPayload })
+        eventWrites.push({ ref: eventRef, data: eventPayload })
+        newEventPayloads.push(eventPayload)
       }
 
-      const eventRef = db
-        .collection(`games/${gameId}/events`)
-        .doc(String(actionNumber))
-      const gameState: EngineGameState = {
-        period: boxScore?.period ?? action?.period ?? null,
-        clockMs: parseClockToMs(boxScore?.gameClock ?? action?.clock),
-        scoreHome: boxScore?.homeTeam?.score ?? action?.scoreHome ?? null,
-        scoreAway: boxScore?.awayTeam?.score ?? action?.scoreAway ?? null,
-        possession: action?.possession ?? null,
-        boxScore: boxScore
-          ? {
-              gameId: boxScore.gameId ?? null,
-              gameStatus: boxScore.gameStatus ?? null,
-              gameStatusText: boxScore.gameStatusText ?? '',
-              period: boxScore.period ?? null,
-              gameClock: boxScore.gameClock ?? null,
-              homeTeam: boxScore.homeTeam ?? null,
-              awayTeam: boxScore.awayTeam ?? null,
-            }
-          : null,
+      await commitInBatches(eventWrites)
+      for (const eventPayload of newEventPayloads) {
+        await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
+          persistQuestions: true,
+          seasonProfiles,
+        })
+        const windowTypes: string[] = ['NEXT_EVENT', 'NEXT_N_MIN']
+        if (eventPayload.type === EventType.PERIOD_END) {
+          windowTypes.push('PERIOD')
+          windowTypes.push('GAME')
+        }
+        if (eventPayload.type === EventType.JUMP_BALL) {
+          windowTypes.push('JUMP_BALL')
+        }
+        if (eventPayload.type === EventType.GAME_END) {
+          windowTypes.push('GAME')
+        }
+        await resolveOpenQuestionsForEvent(
+          gameId,
+          eventPayload,
+          boxScore,
+          windowTypes
+        )
       }
 
-      const eventSubType = toEngineEventSubType(action?.subType)
-      const eventResult = toEventResult(action)
-      const eventType = toEventType(
-        action?.actionType,
-        eventSubType,
-        eventResult,
-        action?.description
-      )
-      const eventContext = toEventContext(eventType, eventSubType, action)
-
-      const eventPayload: EngineEvent = {
-        eventId: actionNumber,
-        source: EngineEventSource.NBA_COM,
-        type: eventType,
-        subType: eventSubType,
-        context: eventContext,
-        description: action?.description ?? '',
-        questionId: null,
-        gameState,
-        ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }
-
-      eventWrites.push({ ref: rawRef, data: rawPayload })
-      eventWrites.push({ ref: eventRef, data: eventPayload })
-      newEventPayloads.push(eventPayload)
+      latestActionObj = batch[batch.length - 1] ?? latestActionObj
     }
 
-    await commitInBatches(eventWrites)
-    for (const eventPayload of newEventPayloads) {
-      await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
-        persistQuestions: true,
-        seasonProfiles,
-      })
-    }
-
-    const latestAction = newActions[newActions.length - 1]?.actionNumber ?? 0
-    const latestActionObj = newActions[newActions.length - 1]
+    const latestAction = latestActionObj?.actionNumber ?? 0
     await doc.ref.set(
       {
         lastNbaActionNumber: latestAction,

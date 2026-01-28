@@ -19,6 +19,7 @@ import {
 import {
   triggerBasketballQuestion,
   triggerGameStartQuestions,
+  resolveQuestionForEvent,
   type EngineQuestionPayload,
 } from '../src/lib/engine'
 import { fetchSeasonProfilesOnce } from '../src/workers/seasonProfilesWorker'
@@ -226,6 +227,10 @@ const main = async () => {
     path.dirname(absolutePath),
     `boxscore_${gameId}.json`
   )
+  const seasonProfilesPath = path.join(
+    path.dirname(absolutePath),
+    `playbyplay_${gameId}_season_profiles.json`
+  )
   const boxScore = fs.existsSync(boxScorePath)
     ? JSON.parse(fs.readFileSync(boxScorePath, 'utf8'))
     : null
@@ -244,14 +249,28 @@ const main = async () => {
   const baseTimeMs = firstActionWithTime
     ? Date.parse(firstActionWithTime.timeActual)
     : null
-  const seasonProfiles = await fetchSeasonProfilesOnce()
-  const playersById = new Map(
-    seasonProfiles.players.map((player) => [player.playerId, player])
+  const seasonProfiles = fs.existsSync(seasonProfilesPath)
+    ? JSON.parse(fs.readFileSync(seasonProfilesPath, 'utf8'))
+    : await fetchSeasonProfilesOnce()
+  const playersById = new Map<string, any>(
+    (seasonProfiles.players || []).map((player: any) => [
+      String(player.playerId),
+      player,
+    ])
   )
-  const teamsById = new Map(
-    seasonProfiles.teams.map((team) => [team.teamId, team])
+  const teamsById = new Map<string, any>(
+    (seasonProfiles.teams || []).map((team: any) => [String(team.teamId), team])
   )
-  const questions: EngineQuestionPayload[] = []
+  type SimQuestion = EngineQuestionPayload & {
+    id: string
+    state: 'open' | 'resolved' | 'cancelled'
+    answer?: string | null
+    resolvedAtEventId?: number
+  }
+  const questions: SimQuestion[] = []
+  const openQuestions: SimQuestion[] = []
+  const resolvedQuestions: SimQuestion[] = []
+  const cancelledQuestions: SimQuestion[] = []
   const firstEvent = events[0]
   if (firstEvent) {
     const gameStartQuestions = triggerGameStartQuestions(
@@ -264,7 +283,15 @@ const main = async () => {
         seasonProfiles: { playersById, teamsById },
       }
     )
-    questions.push(...gameStartQuestions)
+    for (const payload of gameStartQuestions) {
+      const question: SimQuestion = {
+        ...payload,
+        id: `q_${questions.length + 1}`,
+        state: 'open',
+      }
+      questions.push(question)
+      openQuestions.push(question)
+    }
   }
   let lastElapsedMs = 0
   for (let index = 0; index < events.length; index++) {
@@ -283,7 +310,32 @@ const main = async () => {
       suppressLogs: true,
       seasonProfiles: { playersById, teamsById },
     })
-    if (question) questions.push(question)
+    if (question) {
+      const simQuestion: SimQuestion = {
+        ...question,
+        id: `q_${questions.length + 1}`,
+        state: 'open',
+      }
+      questions.push(simQuestion)
+      openQuestions.push(simQuestion)
+    }
+
+    if (openQuestions.length) {
+      for (let i = openQuestions.length - 1; i >= 0; i -= 1) {
+        const open = openQuestions[i]
+        const decision = resolveQuestionForEvent(open, event, boxScore)
+        if (!decision) continue
+        open.state = decision.state
+        open.answer = decision.answer ?? null
+        open.resolvedAtEventId = event.eventId
+        openQuestions.splice(i, 1)
+        if (decision.state === 'resolved') resolvedQuestions.push(open)
+        else cancelledQuestions.push(open)
+        console.log(
+          `[sim/resolve] event=${event.eventId} type=${event.type} question=${open.templateId} state=${decision.state} answer=${decision.answer ?? 'null'}`
+        )
+      }
+    }
   }
   const outputDir = path.dirname(absolutePath)
   const baseName = path.basename(absolutePath, '.json')
@@ -299,7 +351,19 @@ const main = async () => {
   )
   fs.writeFileSync(
     questionsOutputPath,
-    JSON.stringify({ gameId, questions }, null, 2)
+    JSON.stringify(
+      {
+        gameId,
+        questions,
+        counts: {
+          open: openQuestions.length,
+          resolved: resolvedQuestions.length,
+          cancelled: cancelledQuestions.length,
+        },
+      },
+      null,
+      2
+    )
   )
   fs.writeFileSync(
     seasonProfilesOutputPath,
@@ -318,7 +382,7 @@ const main = async () => {
     )
   )
   console.log(
-    `Sim output counts: events=${events.length} questions=${questions.length} players=${seasonProfiles.players.length} teams=${seasonProfiles.teams.length}`
+    `Sim output counts: events=${events.length} questions=${questions.length} open=${openQuestions.length} resolved=${resolvedQuestions.length} cancelled=${cancelledQuestions.length} players=${seasonProfiles.players.length} teams=${seasonProfiles.teams.length}`
   )
 }
 
