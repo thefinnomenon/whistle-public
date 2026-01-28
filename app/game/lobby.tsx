@@ -111,11 +111,7 @@ export default function GameLobbyScreen() {
         game_state: game.state,
       })
 
-      if (game?.state === 'open') {
-        router.push({ pathname: '/game', params: { gameId: game.id } })
-      } else {
-        toast.success("You're in! We'll notify you when the game starts.")
-      }
+      toast.success("You're in! We'll notify you when the game starts.")
     } catch (e) {
       console.error('Failed to join game, ', e)
     } finally {

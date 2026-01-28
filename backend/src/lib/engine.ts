@@ -773,6 +773,8 @@ const createAndSendEngineQuestion = async (
   question: EngineQuestionPayload
 ): Promise<void> => {
   const { admin, db } = await import('../firebase')
+  const isDev = process.env.NODE_ENV !== 'production'
+  const questionText = isDev ? `[DEV] ${question.question}` : question.question
   const now = Date.now()
   const timeoutAt = now + question.timeoutMs
   const choices = buildQuestionChoices(question)
@@ -781,7 +783,7 @@ const createAndSendEngineQuestion = async (
     : 'YESNO'
 
   const questionPayload = {
-    question: question.question,
+    question: questionText,
     choices,
     type,
     state: 'open',
@@ -806,7 +808,7 @@ const createAndSendEngineQuestion = async (
     version: QUESTION_PAYLOAD_VERSION,
     gameId,
     questionId: qRef.id,
-    question: question.question,
+    question: questionText,
     choices,
     timeoutAt,
     engineTag: question.templateId,
@@ -819,14 +821,15 @@ const createAndSendEngineQuestion = async (
 
   const topic = `game_${gameId}`
   const collapseId = topic
-  const title = buildTeamTitle(question)
+  const baseTitle = buildTeamTitle(question)
+  const title = isDev ? `[DEV] ${baseTitle}` : baseTitle
   const message = {
     topic,
     data: {
       type: 'question',
       gameId,
       questionId: qRef.id,
-      question: question.question,
+      question: questionText,
       title,
       sentAt: now.toString(),
       engineTag: question.templateId,
