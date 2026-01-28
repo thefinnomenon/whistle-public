@@ -46,6 +46,7 @@ type TriggerOptions = {
   bypassMarginConditions?: boolean
   bypassCooldown?: boolean
   suppressLogs?: boolean
+  skipQuestionGeneration?: boolean
   delayMs?: number
   persistQuestions?: boolean
   seasonProfiles?: {
@@ -2520,6 +2521,14 @@ export const triggerBasketballQuestion = async (
 
   recordRecentEvent(gameId, event)
   updateStreaksForEvent(gameId, event)
+  if (opts?.skipQuestionGeneration) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question generation game=${gameId} reason=catchup`
+      )
+    }
+    return null
+  }
 
   const window = getPeriodWindow(clockMs)
   const isTimeout = event.type === EventType.TIMEOUT

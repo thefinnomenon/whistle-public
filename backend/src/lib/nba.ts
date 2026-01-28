@@ -545,6 +545,22 @@ export const syncNbaLiveEvents = async () => {
       continue
     }
 
+    const lastActionNumber =
+      typeof game?.lastNbaActionNumber === 'number'
+        ? game.lastNbaActionNumber
+        : 0
+    const nowMs = Date.now()
+    const lastSyncMs =
+      typeof game?.nbaLastSyncAt?.toMillis === 'function'
+        ? game.nbaLastSyncAt.toMillis()
+        : null
+    const startScheduledMs =
+      typeof game?.gameStartQuestionsScheduledAt?.toMillis === 'function'
+        ? game.gameStartQuestionsScheduledAt.toMillis()
+        : null
+    const isCatchup = lastSyncMs
+      ? nowMs - lastSyncMs > 2 * 60 * 1000
+      : !!startScheduledMs && nowMs - startScheduledMs > 2 * 60 * 1000
     let payload
     let boxScore: any = null
     try {
@@ -559,13 +575,15 @@ export const syncNbaLiveEvents = async () => {
       if (message.includes('NBA not modified')) {
         continue
       }
+      if (message.includes('NBA request failed 403') && !lastActionNumber) {
+        console.log(
+          `[nba] live sync skip game=${gameId} nbaGameId=${nbaGameId} reason=pbp_forbidden_not_started`
+        )
+        continue
+      }
       throw err
     }
     const actions = payload?.actions || []
-    const lastActionNumber =
-      typeof game?.lastNbaActionNumber === 'number'
-        ? game.lastNbaActionNumber
-        : 0
 
     const gameStartState: EngineGameState = {
       period: boxScore?.period ?? null,
@@ -613,6 +631,11 @@ export const syncNbaLiveEvents = async () => {
         `[nba] live sync backlog cap game=${gameId} actions=${newActions.length} cap=10`
       )
       newActions = newActions.slice(-10)
+    }
+    if (isCatchup && newActions.length) {
+      console.log(
+        `[nba] live sync catchup mode game=${gameId} actions=${newActions.length}`
+      )
     }
 
     if (newActions.length === 0) {
@@ -708,7 +731,9 @@ export const syncNbaLiveEvents = async () => {
       await commitInBatches(eventWrites)
       for (const eventPayload of newEventPayloads) {
         await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
-          persistQuestions: true,
+          persistQuestions: !isCatchup,
+          skipQuestionGeneration: isCatchup,
+          suppressLogs: isCatchup,
           seasonProfiles,
         })
         const windowTypes: string[] = ['NEXT_EVENT', 'NEXT_N_MIN']
