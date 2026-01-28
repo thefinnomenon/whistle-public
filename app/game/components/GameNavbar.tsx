@@ -1,5 +1,4 @@
 import { Feather, Ionicons } from '@expo/vector-icons'
-import { Asset } from 'expo-asset'
 import { Image as ExpoImage } from 'expo-image'
 import React, { useMemo } from 'react'
 import { Text, TouchableOpacity, View } from 'react-native'
@@ -30,8 +29,8 @@ export function GameNavbar({
         ? NBA[game.awayTeam as keyof typeof NBA]
         : NFL[game.awayTeam as keyof typeof NFL]
     return {
-      homeUri: Asset.fromModule(home as any).uri,
-      awayUri: Asset.fromModule(away as any).uri,
+      home,
+      away,
     }
   }, [game.awayTeam, game.homeTeam, game.league])
 
@@ -65,7 +64,7 @@ export function GameNavbar({
         <ExpoImage
           className="h-12 w-12"
           contentFit="contain"
-          source={{ uri: logos.homeUri }}
+          source={logos.home}
         />
         <Text className="font-bold text-lg text-gray-900 dark:text-white">
           VS
@@ -73,7 +72,7 @@ export function GameNavbar({
         <ExpoImage
           className="h-12 w-12"
           contentFit="contain"
-          source={{ uri: logos.awayUri }}
+          source={logos.away}
         />
       </View>
     </View>

@@ -304,7 +304,7 @@ export default function GamesScreen() {
                 className="w-16 h-16"
                 contentFit="contain"
                 transition={0}
-                source={{ uri: Asset.fromModule(logoAway as any).uri }}
+                source={logoAway}
               />
               <Text className="text-sm font-semibold text-foreground mt-1">
                 {item.awayTeam}
@@ -316,7 +316,7 @@ export default function GamesScreen() {
                 className="w-16 h-16"
                 contentFit="contain"
                 transition={0}
-                source={{ uri: Asset.fromModule(logoHome as any).uri }}
+                source={logoHome}
               />
               <Text className="text-sm font-semibold text-foreground mt-1">
                 {item.homeTeam}
