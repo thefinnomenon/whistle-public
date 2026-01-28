@@ -74,7 +74,7 @@ const startPlayerCountWorker = () => {
   setInterval(run, 60_000)
 }
 
-// startPlayerCountWorker()
+startPlayerCountWorker()
 
 // Background worker: start scheduled games every minute
 const startScheduledGamesWorker = () => {

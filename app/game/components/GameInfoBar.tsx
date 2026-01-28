@@ -1,4 +1,8 @@
-import { FontAwesome5, Ionicons } from '@expo/vector-icons'
+import {
+  FontAwesome5,
+  Ionicons,
+  MaterialCommunityIcons,
+} from '@expo/vector-icons'
 import { router } from 'expo-router'
 import React from 'react'
 import { Text, TouchableOpacity, View } from 'react-native'
@@ -35,13 +39,27 @@ export function GameInfoBar({ game, gamePlayer }: Props) {
       </View>
       <View className="flex flex-row items-center gap-2">
         <FontAwesome5 name="coins" size={24} color="slategray" />
-        <Text className="text-gray-900 dark:text-white">
-          {isCash ? '$' : ''}
-          {prizeAmount.toLocaleString('en-US', {
-            maximumFractionDigits: 0,
-          })}
-          {!isCash && prizeAmount > 0 ? ' Whistles' : ''}
-        </Text>
+        {isCash ? (
+          <Text className="text-gray-900 dark:text-white">
+            $
+            {prizeAmount.toLocaleString('en-US', {
+              maximumFractionDigits: 0,
+            })}
+          </Text>
+        ) : (
+          <>
+            <MaterialCommunityIcons
+              name="whistle-outline"
+              size={20}
+              color="slategray"
+            />
+            <Text className="text-gray-900 dark:text-white">
+              {prizeAmount.toLocaleString('en-US', {
+                maximumFractionDigits: 0,
+              })}
+            </Text>
+          </>
+        )}
       </View>
       <TouchableOpacity onPress={handleLeaderboard}>
         <Ionicons name="trophy-sharp" size={24} color="slategray" />

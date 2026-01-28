@@ -32,6 +32,9 @@ export function QuestionListItem({
     prediction === undefined ? undefined : String(prediction)
   const answerValue =
     question.answer === undefined ? undefined : String(question.answer)
+  const timeoutAt =
+    (question.timeoutAt as any)?.toMillis?.() ?? Number(question.timeoutAt)
+  const timedOut = Number.isFinite(timeoutAt) && timeoutAt <= Date.now()
 
   let questionState: UserQuestionState = question.state
   if (question.state === 'resolved' && predictionValue === undefined)
@@ -40,6 +43,7 @@ export function QuestionListItem({
     questionState =
       predictionValue === (answerValue ?? '') ? 'correct' : 'incorrect'
   }
+  if (questionState === 'open' && timedOut) questionState = 'closed'
 
   let questionStyling = { bg: '', text: '', icon: '', iconColor: '' }
   switch (questionState) {
@@ -85,21 +89,22 @@ export function QuestionListItem({
   }
 
   const canAnswer =
-    question.state === 'open' && prediction === undefined && !!userId
+    question.state === 'open' &&
+    !timedOut &&
+    prediction === undefined &&
+    !!userId
 
   const content = (
-    <View className={`flex flex-row items-center p-6 ${questionStyling.bg}`}>
+    <View className={`flex flex-row items-start p-6 ${questionStyling.bg}`}>
       <Feather
         name={questionStyling.icon as any}
         size={24}
         color={questionStyling.iconColor}
       />
-      <View className="flex-1 flex-row justify-between bg-transparent">
-        <Text className={`ml-4 ${questionStyling.text}`}>
-          {question.question}
-        </Text>
+      <View className="flex-1 ml-4 bg-transparent">
+        <Text className={`${questionStyling.text}`}>{question.question}</Text>
         {prediction !== undefined && (
-          <Text className={`${questionStyling.text} text-md font-bold ml-2`}>
+          <Text className={`${questionStyling.text} text-md font-bold mt-2`}>
             {resolveChoiceLabel(question, prediction)}
           </Text>
         )}

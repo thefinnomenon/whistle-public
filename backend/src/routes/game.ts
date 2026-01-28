@@ -3,6 +3,8 @@ import { Router } from 'express'
 import { admin, db } from '../firebase'
 import { trackEvent } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
+import { scheduleGameStartQuestions } from '../lib/engine'
+import type { EngineGameState } from '../types/engine'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
 
@@ -1745,6 +1747,44 @@ export const startGameById = async (gameId: string) => {
     { merge: true }
   )
 
+  if (!game?.gameStartQuestionsScheduledAt) {
+    const homeTeam = game?.homeTeam ?? null
+    const awayTeam = game?.awayTeam ?? null
+    const gameStartState: EngineGameState = {
+      period: 1,
+      clockMs: 12 * 60 * 1000,
+      scoreHome: 0,
+      scoreAway: 0,
+      possession: null,
+      boxScore: {
+        gameId: game?.nbaGameId ?? null,
+        gameStatus: game?.nbaGameStatus ?? null,
+        gameStatusText: game?.nbaGameStatusText ?? '',
+        period: 1,
+        gameClock: null,
+        homeTeam: homeTeam ? { teamTricode: homeTeam } : null,
+        awayTeam: awayTeam ? { teamTricode: awayTeam } : null,
+      },
+    }
+    scheduleGameStartQuestions(
+      gameId,
+      gameStartState,
+      gameStartState.boxScore,
+      {
+        persistQuestions: true,
+        winnerDelayMs: { min: 10_000, max: 30_000 },
+        jumpBallDelayMs: { min: 60_000, max: 90_000 },
+      }
+    )
+    await gameRef.set(
+      {
+        gameStartQuestionsScheduledAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+  }
+
   const topic = `game_${gameId}` //'app_notifications'
   const collapseId = `game_${gameId}`
   const message = {
@@ -1787,6 +1827,7 @@ export const startGameById = async (gameId: string) => {
 
 export const startScheduledGames = async () => {
   const now = admin.firestore.Timestamp.now()
+  const cutoffMs = now.toMillis() - 2 * 60 * 60 * 1000
   const gamesSnap = await admin
     .firestore()
     .collection('games')
@@ -1801,6 +1842,13 @@ export const startScheduledGames = async () => {
   let started = 0
   for (const doc of gamesSnap.docs) {
     try {
+      const startTime = doc.data()?.startTime as
+        | admin.firestore.Timestamp
+        | null
+        | undefined
+      if (startTime && startTime.toMillis() < cutoffMs) {
+        continue
+      }
       await startGameById(doc.id)
       started++
     } catch (err) {
@@ -1808,7 +1856,9 @@ export const startScheduledGames = async () => {
     }
   }
 
-  console.log(`[games/startScheduledGames] started ${started} games`)
+  if (started > 0)
+    console.log(`[games/startScheduledGames] started ${started} games`)
+
   return started
 }
 
@@ -1819,7 +1869,7 @@ export const closeExpiredQuestions = async (): Promise<number> => {
     .firestore()
     .collectionGroup('questions')
     .where('state', '==', 'open')
-    .where('timeoutAt', '<=', nowMs.toString())
+    .where('timeoutAt', '<=', nowMs)
     .limit(200)
     .get()
 

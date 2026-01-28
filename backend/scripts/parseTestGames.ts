@@ -149,6 +149,10 @@ const toEventContext = (
   if (teamId !== null) context.teamId = teamId
   if (teamTricode) context.teamTricode = teamTricode
 
+  if (typeof action?.timeActual === 'string') {
+    context.raw = { timeActual: action.timeActual }
+  }
+
   return Object.keys(context).length ? context : null
 }
 
@@ -234,6 +238,12 @@ const main = async () => {
   const events = actions.map((action: any) =>
     toEngineEvent(gameId, game, action)
   )
+  const firstActionWithTime = actions.find((action: any) =>
+    Number.isFinite(Date.parse(action?.timeActual))
+  )
+  const baseTimeMs = firstActionWithTime
+    ? Date.parse(firstActionWithTime.timeActual)
+    : null
   const seasonProfiles = await fetchSeasonProfilesOnce()
   const playersById = new Map(
     seasonProfiles.players.map((player) => [player.playerId, player])
@@ -257,8 +267,16 @@ const main = async () => {
     questions.push(...gameStartQuestions)
   }
   let lastElapsedMs = 0
-  for (const event of events) {
-    lastElapsedMs += 30_000
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]
+    const action = actions[index]
+    const timeActual = Date.parse(action?.timeActual)
+    if (Number.isFinite(timeActual) && baseTimeMs !== null) {
+      const elapsedMs = Math.max(0, timeActual - baseTimeMs)
+      lastElapsedMs = Math.max(lastElapsedMs, elapsedMs)
+    } else {
+      lastElapsedMs += 30_000
+    }
     const question = await triggerBasketballQuestion(gameId, event, boxScore, {
       nowMs: lastElapsedMs,
       bypassMarginConditions: true,

@@ -70,6 +70,9 @@ export function QuestionAnswerModal({
   }, [question])
 
   if (!question) return null
+  const timeoutAt =
+    (question.timeoutAt as any)?.toMillis?.() ?? Number(question.timeoutAt)
+  const timedOut = Number.isFinite(timeoutAt) && timeoutAt <= Date.now()
 
   const handleAnswer = async (answer: string) => {
     if (!userId) return
@@ -142,7 +145,10 @@ export function QuestionAnswerModal({
   }
 
   const canAnswer =
-    question.state === 'open' && userId !== undefined && !submitting
+    question.state === 'open' &&
+    !timedOut &&
+    userId !== undefined &&
+    !submitting
 
   return (
     <Modal visible={!!question} transparent animationType="fade">

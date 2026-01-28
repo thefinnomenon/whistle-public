@@ -480,3 +480,8 @@ export const getSeasonProfilesMeta = () => ({
   seasonType: getEnvSeasonType(),
   playersCount: playerSeasonById.size,
 })
+
+export const getSeasonProfilesById = () => ({
+  playersById: new Map(playerSeasonById),
+  teamsById: new Map(teamSeasonById),
+})

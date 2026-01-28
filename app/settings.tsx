@@ -2,7 +2,14 @@ import Constants from 'expo-constants'
 import * as Linking from 'expo-linking'
 import { router, useLocalSearchParams } from 'expo-router'
 import * as Updates from 'expo-updates'
-import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native'
+import {
+  Alert,
+  Platform,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
@@ -107,10 +114,23 @@ Thank you!`
 
   return (
     <View className="flex-1 bg-white dark:bg-black">
-      <View className="p-5 border-b border-gray-300 dark:border-gray-800">
-        <Text className="text-2xl font-bold text-gray-900 dark:text-white">
-          Settings
-        </Text>
+      <View
+        className="px-5 pb-4 border-b border-gray-300 dark:border-gray-800"
+        style={{ paddingTop: Platform.OS === 'android' ? insets.top + 12 : 20 }}
+      >
+        <View className="flex-row items-center justify-between">
+          <Text className="text-2xl font-bold text-gray-900 dark:text-white">
+            Settings
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.dismiss()}
+            accessibilityRole="button"
+            accessibilityLabel="Close settings"
+            className="h-9 w-9 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-900"
+          >
+            <Ionicons name="close" size={18} color="slategray" />
+          </TouchableOpacity>
+        </View>
       </View>
       {/* Content */}
       <ScrollView

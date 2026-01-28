@@ -11,6 +11,7 @@ import {
   type NbaEventContext,
 } from '../types/engine'
 import { triggerBasketballQuestion, triggerGameStartQuestions } from './engine'
+import { getSeasonProfilesById } from '../workers/seasonProfilesWorker'
 
 const NBA_SCHEDULE_URL =
   'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
@@ -289,6 +290,10 @@ const toEventContext = (
   if (teamId !== null) context.teamId = teamId
   if (teamTricode) context.teamTricode = teamTricode
 
+  if (typeof action?.timeActual === 'string') {
+    context.raw = { timeActual: action.timeActual }
+  }
+
   return Object.keys(context).length ? context : null
 }
 
@@ -456,6 +461,7 @@ export const syncNbaSchedule = async (daysAhead: number) => {
 }
 
 export const syncNbaLiveEvents = async () => {
+  const seasonProfiles = getSeasonProfilesById()
   const gamesSnap = await db
     .collection('games')
     .where('state', '==', 'open')
@@ -523,6 +529,7 @@ export const syncNbaLiveEvents = async () => {
       triggerGameStartQuestions(gameId, gameStartState, boxScore, {
         delayMs: 10_000,
         persistQuestions: true,
+        seasonProfiles,
       })
       await doc.ref.set(
         {
@@ -631,6 +638,7 @@ export const syncNbaLiveEvents = async () => {
     for (const eventPayload of newEventPayloads) {
       await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
         persistQuestions: true,
+        seasonProfiles,
       })
     }
 

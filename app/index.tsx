@@ -399,7 +399,7 @@ export default function GamesScreen() {
                 {joiningGameId === item.id ? (
                   <ActivityIndicator color="white" style={{ height: 16 }} />
                 ) : (
-                  <Text className="text-white font-semibold text-center">
+                  <Text className="text-white font-semibold text-center leading-none">
                     Join
                   </Text>
                 )}

@@ -23,6 +23,11 @@ type QuestionTemplate = {
   resolutionContext?: Record<string, any>
 }
 
+type SelectionReason = {
+  code: string
+  detail?: string
+}
+
 export type EngineQuestionPayload = {
   templateId: string
   question: string
@@ -30,6 +35,7 @@ export type EngineQuestionPayload = {
   timeoutMs: number
   resolutionWindowMs?: number | null
   resolutionContext?: Record<string, any>
+  selectionReason?: SelectionReason[]
   trigger: string
   period: number
   clockMs: number
@@ -49,11 +55,27 @@ type TriggerOptions = {
 }
 
 const LAST_QUESTION_AT_BY_GAME = new Map<string, number>()
+const LAST_QUESTION_GAME_ELAPSED_BY_GAME = new Map<string, number>()
+const PLAYER_THREE_STREAK_BY_GAME = new Map<string, Map<number, number>>()
+const PLAYER_FG_STREAK_BY_GAME = new Map<string, Map<number, number>>()
+const TEAM_THREE_STREAK_BY_GAME = new Map<string, Map<string, number>>()
+const RECENT_EVENTS_BY_GAME = new Map<
+  string,
+  {
+    timeMs: number
+    type: EventType
+    playerId: number | null
+    teamTricode: string | null
+  }[]
+>()
 const GAME_START_ASKED_BY_GAME = new Set<string>()
 const PERIOD_GROUPS_BY_GAME = new Map<string, Map<number, Set<string>>>()
 const HALF_GROUPS_BY_GAME = new Map<string, Map<number, Set<string>>>()
 const GAME_GROUPS_BY_GAME = new Map<string, Set<string>>()
-const PLAYER_IDS_BY_GAME = new Map<string, Map<number, Set<number>>>()
+const PLAYER_USAGE_BY_GAME = new Map<
+  string,
+  Map<number, { period: number; clockMs: number; askedAt: number }>
+>()
 const QUESTION_SIGNATURE_SECRET = process.env.WHISTLE_JWT_SECRET
 const QUESTION_PAYLOAD_VERSION = 1
 const MIN_QUESTION_INTERVAL_MS = 5 * 60 * 1000
@@ -97,16 +119,600 @@ const filterPlayersBySeasonCandidate = (
     if (statType === 'ASSISTS') return profile.isAssistCandidate
     if (statType === 'REBOUNDS') return profile.isReboundCandidate
     if (statType === 'STEALS') return profile.isStealsCandidate
+    if (statType === 'THREES') return profile.isThreeCandidate
+    if (statType === 'FTM') return profile.isFreeThrowCandidate
     if (statType === 'BLOCKS') return profile.isBlocksCandidate
     return profile.isScoringCandidate
   })
   return filtered.length ? filtered : players
 }
 
+const getPlayerId = (player: any): number | null =>
+  typeof player?.personId === 'number'
+    ? player.personId
+    : typeof player?.playerId === 'number'
+      ? player.playerId
+      : null
+
+const getPlayerNameFromBoxScore = (
+  boxScore: Record<string, any> | null,
+  playerId: number | null
+): string | null => {
+  if (!playerId) return null
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const players: any[] = []
+  if (Array.isArray(homeTeam?.players)) players.push(...homeTeam.players)
+  if (Array.isArray(awayTeam?.players)) players.push(...awayTeam.players)
+  const match = players.find((player) => getPlayerId(player) === playerId)
+  if (!match) return null
+  if (typeof match?.name === 'string') return match.name
+  if (
+    typeof match?.firstName === 'string' &&
+    typeof match?.lastName === 'string'
+  )
+    return `${match.firstName} ${match.lastName}`
+  return null
+}
+
+const getPlayerPerQuarterTarget = (
+  profile: PlayerSeasonProfile | undefined,
+  statType: string
+): number | null => {
+  if (!profile) return null
+  const avg =
+    statType === 'POINTS'
+      ? profile.ppg
+      : statType === 'REBOUNDS'
+        ? profile.rpg
+        : statType === 'ASSISTS'
+          ? profile.apg
+          : statType === 'STEALS'
+            ? profile.spg
+            : statType === 'THREES'
+              ? profile.fg3m
+              : statType === 'FTM'
+                ? profile.ftm
+                : statType === 'BLOCKS'
+                  ? profile.bpg
+                  : 0
+  if (!Number.isFinite(avg) || avg <= 0) return null
+  const perQuarter = avg / 4
+  return Math.max(1, Math.ceil(perQuarter * 1.3))
+}
+
+const getPeriodLengthMs = (period: number): number =>
+  period > 4 ? 5 * 60 * 1000 : 12 * 60 * 1000
+
+const getPlayerTargetInfo = (
+  profile: PlayerSeasonProfile | undefined,
+  statType: string,
+  period: number,
+  clockMs: number | null,
+  currentStat: number | null
+): {
+  target: number | null
+  perQuarterAvg: number | null
+  timeLeftRatio: number | null
+} => {
+  if (!profile)
+    return { target: null, perQuarterAvg: null, timeLeftRatio: null }
+  const avg =
+    statType === 'POINTS'
+      ? profile.ppg
+      : statType === 'REBOUNDS'
+        ? profile.rpg
+        : statType === 'ASSISTS'
+          ? profile.apg
+          : statType === 'STEALS'
+            ? profile.spg
+            : statType === 'BLOCKS'
+              ? profile.bpg
+              : 0
+  if (!Number.isFinite(avg) || avg <= 0)
+    return { target: null, perQuarterAvg: null, timeLeftRatio: null }
+  const perQuarterAvg = avg / 4
+  if (
+    clockMs !== null &&
+    Number.isFinite(clockMs) &&
+    currentStat !== null &&
+    Number.isFinite(currentStat)
+  ) {
+    const periodLengthMs = getPeriodLengthMs(period)
+    const timeLeftRatio = Math.max(0, Math.min(1, clockMs / periodLengthMs))
+    const target = Math.max(
+      1,
+      Math.ceil(currentStat + perQuarterAvg * timeLeftRatio)
+    )
+    return { target, perQuarterAvg, timeLeftRatio }
+  }
+  return {
+    target: Math.max(1, Math.ceil(perQuarterAvg * 1.3)),
+    perQuarterAvg,
+    timeLeftRatio: null,
+  }
+}
+
+const getPlayerPeriodStat = (
+  player: any,
+  period: number,
+  statType: string
+): number | null => {
+  const periods =
+    player?.statistics?.periods ||
+    player?.periods ||
+    player?.stats?.periods ||
+    null
+  if (!Array.isArray(periods)) return null
+  const entry = periods.find((p: any) => Number(p?.period) === period)
+  if (!entry) return null
+  const stats = entry.statistics || entry
+  const key = String(statType || '').toUpperCase()
+  if (key === 'POINTS') return Number(stats.points ?? 0)
+  if (key === 'REBOUNDS')
+    return Number(stats.reboundsTotal ?? stats.rebounds ?? 0)
+  if (key === 'ASSISTS') return Number(stats.assists ?? 0)
+  if (key === 'STEALS') return Number(stats.steals ?? 0)
+  if (key === 'BLOCKS') return Number(stats.blocks ?? 0)
+  if (key === 'THREES' || key === 'FG3M')
+    return Number(stats.threePointersMade ?? stats.fg3m ?? 0)
+  if (key === 'FTM') return Number(stats.freeThrowsMade ?? stats.ftm ?? 0)
+  return null
+}
+
+const getPlayerGameStat = (player: any, statType: string): number | null => {
+  const stats = player?.statistics
+  if (!stats) return null
+  const key = String(statType || '').toUpperCase()
+  if (key === 'POINTS') return Number(stats.points ?? 0)
+  if (key === 'REBOUNDS')
+    return Number(stats.reboundsTotal ?? stats.rebounds ?? 0)
+  if (key === 'ASSISTS') return Number(stats.assists ?? 0)
+  if (key === 'STEALS') return Number(stats.steals ?? 0)
+  if (key === 'BLOCKS') return Number(stats.blocks ?? 0)
+  if (key === 'THREES' || key === 'FG3M')
+    return Number(stats.threePointersMade ?? stats.fg3m ?? 0)
+  return null
+}
+
+const getPlayerCurrentStat = (
+  player: any,
+  period: number,
+  statType: string
+): number | null => {
+  const periodStat = getPlayerPeriodStat(player, period, statType)
+  if (periodStat !== null) return periodStat
+  return getPlayerGameStat(player, statType)
+}
+
+const getStreakValue = (
+  map: Map<string, Map<number, number>> | Map<string, Map<string, number>>,
+  gameId: string,
+  key: number | string
+): number => {
+  const gameMap = map.get(gameId)
+  if (!gameMap) return 0
+  return (gameMap as Map<any, number>).get(key) ?? 0
+}
+
+const setStreakValue = (
+  map: Map<string, Map<number, number>> | Map<string, Map<string, number>>,
+  gameId: string,
+  key: number | string,
+  value: number
+) => {
+  let gameMap = map.get(gameId) as Map<any, number> | undefined
+  if (!gameMap) {
+    gameMap = new Map()
+    map.set(gameId, gameMap as any)
+  }
+  gameMap.set(key, value)
+}
+
+const updateStreaksForEvent = (gameId: string, event: EngineEvent) => {
+  const shot = event.context?.shot
+  const playerId = shot?.shooterId ?? event.context?.primaryPlayerId ?? null
+  const teamTricode = shot?.teamTricode ?? event.context?.teamTricode ?? null
+  if (!playerId && !teamTricode) return
+
+  const isMade3 = event.type === EventType.MADE_3
+  const isMissed3 = event.type === EventType.MISSED_3
+  const isMadeFg = event.type === EventType.MADE_FG || isMade3
+  const isMissedFg = event.type === EventType.MISSED_FG || isMissed3
+
+  if (playerId) {
+    const currentFg = getStreakValue(PLAYER_FG_STREAK_BY_GAME, gameId, playerId)
+    const current3 = getStreakValue(
+      PLAYER_THREE_STREAK_BY_GAME,
+      gameId,
+      playerId
+    )
+    const nextFg = isMadeFg ? currentFg + 1 : isMissedFg ? 0 : currentFg
+    const next3 = isMade3 ? current3 + 1 : isMissed3 ? 0 : current3
+    setStreakValue(PLAYER_FG_STREAK_BY_GAME, gameId, playerId, nextFg)
+    setStreakValue(PLAYER_THREE_STREAK_BY_GAME, gameId, playerId, next3)
+  }
+
+  if (teamTricode) {
+    const currentTeam3 = getStreakValue(
+      TEAM_THREE_STREAK_BY_GAME,
+      gameId,
+      teamTricode
+    )
+    const nextTeam3 = isMade3 ? currentTeam3 + 1 : isMissed3 ? 0 : currentTeam3
+    setStreakValue(TEAM_THREE_STREAK_BY_GAME, gameId, teamTricode, nextTeam3)
+  }
+}
+
+const getEventTimeActualMs = (event: EngineEvent): number | null => {
+  const timeActual =
+    (event.context as any)?.raw?.timeActual ??
+    (event.context as any)?.timeActual ??
+    null
+  if (typeof timeActual !== 'string') return null
+  const parsed = Date.parse(timeActual)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const recordRecentEvent = (gameId: string, event: EngineEvent) => {
+  const timeMs = getEventTimeActualMs(event)
+  if (timeMs === null) return
+  const playerId =
+    event.context?.shot?.shooterId ??
+    event.context?.freeThrow?.shooterId ??
+    event.context?.primaryPlayerId ??
+    null
+  const teamTricode =
+    event.context?.shot?.teamTricode ??
+    event.context?.freeThrow?.teamTricode ??
+    event.context?.teamTricode ??
+    null
+  const entry = { timeMs, type: event.type, playerId, teamTricode }
+  const list = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  list.push(entry)
+  const cutoff = timeMs - 120_000
+  const trimmed = list.filter((item) => item.timeMs >= cutoff)
+  RECENT_EVENTS_BY_GAME.set(gameId, trimmed)
+}
+
+const shouldSkipForLatency = (
+  gameId: string,
+  event: EngineEvent,
+  questionPayload: EngineQuestionPayload
+): boolean => {
+  const timeMs = getEventTimeActualMs(event)
+  if (timeMs === null) return false
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  const futureCutoff = timeMs + 60_000
+  const relevant = recent.filter(
+    (item) => item.timeMs > timeMs && item.timeMs <= futureCutoff
+  )
+  if (!relevant.length) return false
+  const context = questionPayload.resolutionContext ?? {}
+  const type = context.type
+
+  const matchesEventType = (evt: EventType, expected: string) =>
+    String(evt) === expected
+
+  if (type === 'NEXT_EVENT') {
+    const expected = String(context.expectedEventType || '')
+    if (!expected) return false
+    return relevant.some((item) => {
+      if (!matchesEventType(item.type, expected)) return false
+      if (context.playerId && item.playerId !== context.playerId) return false
+      if (context.teamTricode && item.teamTricode !== context.teamTricode)
+        return false
+      return true
+    })
+  }
+
+  const isScoringEvent = (evt: EventType) =>
+    evt === EventType.MADE_FG ||
+    evt === EventType.MADE_3 ||
+    evt === EventType.MADE_FT
+  const isMadeThree = (evt: EventType) => evt === EventType.MADE_3
+  const isSteal = (evt: EventType) => evt === EventType.STEAL
+  const isBlock = (evt: EventType) => evt === EventType.BLOCK
+  const isRebound = (evt: EventType) => evt === EventType.REBOUND
+
+  if (type === 'TOTAL_POINTS_NEXT_N') {
+    return relevant.some((item) => isScoringEvent(item.type))
+  }
+
+  if (type === 'TEAM_POINTS_NEXT_N') {
+    const team =
+      context.team === 'HOME' ? context.homeTricode : context.awayTricode
+    return relevant.some((item) => {
+      if (!isScoringEvent(item.type)) return false
+      if (team && item.teamTricode !== team) return false
+      return true
+    })
+  }
+
+  if (type === 'MADE_3_COUNT_NEXT_N') {
+    return relevant.some((item) => isMadeThree(item.type))
+  }
+
+  if (type === 'PLAYER_COMPARE_NEXT_N') {
+    const statType = String(context.statType || '').toUpperCase()
+    const playerIds = Array.isArray(context.playerIds) ? context.playerIds : []
+    const matchesPlayer = (item: (typeof relevant)[number]) =>
+      playerIds.length ? playerIds.includes(item.playerId) : true
+    const eventMatchesStat = (evt: EventType) => {
+      if (statType === 'POINTS') return isScoringEvent(evt)
+      if (statType === 'THREES') return isMadeThree(evt)
+      if (statType === 'STEALS') return isSteal(evt)
+      if (statType === 'BLOCKS') return isBlock(evt)
+      if (statType === 'REBOUNDS') return isRebound(evt)
+      if (statType === 'ASSISTS')
+        return evt === EventType.MADE_FG || evt === EventType.MADE_3
+      return false
+    }
+    return relevant.some(
+      (item) => matchesPlayer(item) && eventMatchesStat(item.type)
+    )
+  }
+
+  return false
+}
+
+const buildPlayerStreakTemplate = (opts: {
+  id: string
+  text: string
+  statType: string
+  expectedEventType: string
+  playerId: number
+  playerName: string
+  teamTricode: string | null
+  streak: number
+}): QuestionTemplate => ({
+  id: opts.id,
+  text: opts.text,
+  weight: 6,
+  windowType: 'NEXT_EVENT',
+  resolutionWindowMs: 180_000,
+  resolutionContext: {
+    type: 'NEXT_EVENT',
+    expectedEventType: opts.expectedEventType,
+    playerId: opts.playerId,
+    playerName: opts.playerName,
+    teamTricode: opts.teamTricode,
+    streak: opts.streak,
+  },
+})
+
+const buildTeamThreeStreakTemplate = (opts: {
+  teamTricode: string
+  streak: number
+}): QuestionTemplate => ({
+  id: 'PERIOD_TEAM_THREE_STREAK',
+  text: `${opts.teamTricode} has hit ${opts.streak} 3s in a row. Will they hit their next 3?`,
+  weight: 5,
+  windowType: 'NEXT_EVENT',
+  resolutionWindowMs: 180_000,
+  resolutionContext: {
+    type: 'NEXT_EVENT',
+    expectedEventType: 'MADE_3',
+    teamTricode: opts.teamTricode,
+    streak: opts.streak,
+  },
+})
+
+const getStreakQuestionTemplates = (
+  gameId: string,
+  event: EngineEvent,
+  boxScore: Record<string, any> | null,
+  seasonProfiles?: {
+    playersById: Map<string, PlayerSeasonProfile>
+  }
+): QuestionTemplate[] => {
+  const templates: QuestionTemplate[] = []
+  const shot = event.context?.shot
+  const playerId = shot?.shooterId ?? event.context?.primaryPlayerId ?? null
+  const teamTricode = shot?.teamTricode ?? event.context?.teamTricode ?? null
+
+  if (playerId) {
+    const profile = seasonProfiles?.playersById.get(String(playerId))
+    const playerName = getPlayerNameFromBoxScore(boxScore, playerId)
+    const used = PLAYER_USAGE_BY_GAME.get(gameId)?.has(playerId) ?? false
+    const threeStreak = getStreakValue(
+      PLAYER_THREE_STREAK_BY_GAME,
+      gameId,
+      playerId
+    )
+    const fgStreak = getStreakValue(PLAYER_FG_STREAK_BY_GAME, gameId, playerId)
+    if (
+      playerName &&
+      !used &&
+      event.type === EventType.MADE_3 &&
+      threeStreak >= 2 &&
+      profile?.isThreeCandidate
+    ) {
+      templates.push(
+        buildPlayerStreakTemplate({
+          id: 'PERIOD_PLAYER_THREE_STREAK',
+          text: `${playerName} has hit ${threeStreak} 3s in a row. Will they hit their next 3?`,
+          statType: 'THREES',
+          expectedEventType: 'MADE_3',
+          playerId,
+          playerName,
+          teamTricode,
+          streak: threeStreak,
+        })
+      )
+    }
+    if (
+      playerName &&
+      !used &&
+      event.type === EventType.MADE_FG &&
+      fgStreak >= 4 &&
+      profile?.isScoringCandidate
+    ) {
+      templates.push(
+        buildPlayerStreakTemplate({
+          id: 'PERIOD_PLAYER_FG_STREAK',
+          text: `${playerName} has hit ${fgStreak} shots in a row. Will they hit their next shot?`,
+          statType: 'POINTS',
+          expectedEventType: 'MADE_FG',
+          playerId,
+          playerName,
+          teamTricode,
+          streak: fgStreak,
+        })
+      )
+    }
+  }
+
+  if (teamTricode && event.type === EventType.MADE_3) {
+    const teamStreak = getStreakValue(
+      TEAM_THREE_STREAK_BY_GAME,
+      gameId,
+      teamTricode
+    )
+    if (teamStreak >= 2) {
+      templates.push(
+        buildTeamThreeStreakTemplate({
+          teamTricode,
+          streak: teamStreak,
+        })
+      )
+    }
+  }
+
+  return templates
+}
+
+const buildPlayerCompareTemplate = (
+  template: QuestionTemplate,
+  boxScore: Record<string, any> | null,
+  excludeIds?: Set<number>,
+  seasonProfiles?: {
+    playersById: Map<string, PlayerSeasonProfile>
+  },
+  period?: number
+): QuestionTemplate => {
+  const statType = template.resolutionContext?.statType ?? 'POINTS'
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const players: any[] = []
+  const homePlayers = homeTeam?.players
+  const awayPlayers = awayTeam?.players
+  if (Array.isArray(homePlayers)) players.push(...homePlayers)
+  if (Array.isArray(awayPlayers)) players.push(...awayPlayers)
+  const active = players.filter(
+    (player) =>
+      player?.isOnCourt === true ||
+      String(player?.oncourt || '') === '1' ||
+      String(player?.status || '').toUpperCase() === 'ACTIVE'
+  )
+  const pool = active.length ? active : players
+  const filteredPool = excludeIds
+    ? pool.filter((player) => {
+        const id = getPlayerId(player)
+        return id === null ? true : !excludeIds.has(id)
+      })
+    : pool
+  const currentPeriod =
+    period ??
+    boxScore?.period ??
+    boxScore?.game?.period ??
+    boxScore?.gamePeriod ??
+    1
+  const candidatePool = seasonProfiles?.playersById
+    ? filterPlayersBySeasonCandidate(
+        filteredPool,
+        seasonProfiles.playersById,
+        statType
+      )
+    : filteredPool
+  const byStat = new Map<number, any[]>()
+  for (const player of candidatePool) {
+    const stat = getPlayerCurrentStat(player, currentPeriod, statType)
+    if (!Number.isFinite(stat)) continue
+    const key = Number(stat)
+    const list = byStat.get(key) ?? []
+    list.push(player)
+    byStat.set(key, list)
+  }
+  const tiedGroups = Array.from(byStat.entries())
+    .filter(([, list]) => list.length >= 2)
+    .map(([value, list]) => ({ value, list }))
+  if (!tiedGroups.length) {
+    return {
+      ...template,
+      resolutionContext: {
+        ...(template.resolutionContext ?? {}),
+        invalid: true,
+      },
+    }
+  }
+  const group = tiedGroups[Math.floor(Math.random() * tiedGroups.length)]
+  const shuffled = [...group.list].sort(() => Math.random() - 0.5)
+  const picked = shuffled.slice(0, 4)
+  if (picked.length < 2) {
+    return {
+      ...template,
+      resolutionContext: {
+        ...(template.resolutionContext ?? {}),
+        invalid: true,
+      },
+    }
+  }
+  const choices = picked
+    .map((player) => {
+      const id = getPlayerId(player)
+      const name =
+        typeof player?.name === 'string'
+          ? player.name
+          : typeof player?.firstName === 'string' &&
+              typeof player?.lastName === 'string'
+            ? `${player.firstName} ${player.lastName}`
+            : null
+      if (!id || !name) return null
+      return { id: String(id), value: name }
+    })
+    .filter(Boolean) as { id: string; value: string }[]
+  if (choices.length < 2) {
+    return {
+      ...template,
+      resolutionContext: {
+        ...(template.resolutionContext ?? {}),
+        invalid: true,
+      },
+    }
+  }
+  const playerIds = choices.map((choice) => Number(choice.id))
+  return {
+    ...template,
+    resolutionContext: {
+      ...(template.resolutionContext ?? {}),
+      playerIds,
+      choices,
+      tiedStatValue: group.value,
+    },
+  }
+}
+
 const MULTI_CHOICE_TEMPLATE_IDS = new Set([
   'GAME_WINNER',
   'JUMP_BALL_WINNER',
   'PERIOD_LEADER',
+  'PERIOD_LEADER_END',
+  'PERIOD_TEAM_COMPARE_THREES',
+  'PERIOD_TEAM_COMPARE_POINTS',
+  'PERIOD_TEAM_COMPARE_ASSISTS',
+  'PERIOD_TEAM_COMPARE_REBOUNDS',
+  'PERIOD_TEAM_COMPARE_STEALS',
+  'PERIOD_PLAYER_COMPARE_POINTS',
+  'PERIOD_PLAYER_COMPARE_ASSISTS',
+  'PERIOD_PLAYER_COMPARE_REBOUNDS',
+  'PERIOD_PLAYER_COMPARE_STEALS',
+  'PERIOD_PLAYER_COMPARE_BLOCKS',
+  'PERIOD_PLAYER_COMPARE_THREES',
+  'NEXT_N_PLAYER_COMPARE_POINTS',
+  'NEXT_N_PLAYER_COMPARE_ASSISTS',
+  'NEXT_N_PLAYER_COMPARE_REBOUNDS',
+  'NEXT_N_PLAYER_COMPARE_STEALS',
+  'NEXT_N_PLAYER_COMPARE_BLOCKS',
+  'NEXT_N_PLAYER_COMPARE_THREES',
 ])
 
 const buildSignedQuestionPayload = (payload: Record<string, any>) => {
@@ -120,9 +726,19 @@ const buildSignedQuestionPayload = (payload: Record<string, any>) => {
   return { payloadString, signature }
 }
 
+const buildTeamTitle = (question: EngineQuestionPayload): string => {
+  const home = question.resolutionContext?.homeTricode
+  const away = question.resolutionContext?.awayTricode
+  if (home && away) return `${home} vs ${away}`
+  return 'New Question'
+}
+
 const buildQuestionChoices = (
   question: EngineQuestionPayload
 ): { id: string; value: string }[] => {
+  if (Array.isArray(question.resolutionContext?.choices)) {
+    return question.resolutionContext.choices as { id: string; value: string }[]
+  }
   if (MULTI_CHOICE_TEMPLATE_IDS.has(question.templateId)) {
     const home = question.resolutionContext?.homeTricode ?? 'HOME'
     const away = question.resolutionContext?.awayTricode ?? 'AWAY'
@@ -159,6 +775,7 @@ const createAndSendEngineQuestion = async (
     windowType: question.windowType,
     resolutionWindowMs: question.resolutionWindowMs ?? null,
     resolutionContext: question.resolutionContext ?? null,
+    selectionReason: question.selectionReason ?? null,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -187,6 +804,7 @@ const createAndSendEngineQuestion = async (
 
   const topic = `game_${gameId}`
   const collapseId = topic
+  const title = buildTeamTitle(question)
   const message = {
     topic,
     data: {
@@ -194,6 +812,7 @@ const createAndSendEngineQuestion = async (
       gameId,
       questionId: qRef.id,
       question: question.question,
+      title,
       sentAt: now.toString(),
       engineTag: question.templateId,
       collapseId,
@@ -211,7 +830,7 @@ const createAndSendEngineQuestion = async (
       payload: {
         aps: {
           alert: {
-            title: 'New Question',
+            title,
             body: question.question,
           },
           category: 'question',
@@ -244,6 +863,7 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
   PERIOD_TEAM_POINTS: { name: 'TEAM_POINTS', scope: 'PERIOD' },
   PERIOD_ANY_3: { name: 'THREE_COUNT', scope: 'PERIOD' },
   PERIOD_LEADER: { name: 'PERIOD_LEADER', scope: 'PERIOD' },
+  PERIOD_LEADER_END: { name: 'PERIOD_LEADER', scope: 'PERIOD' },
   TIMEOUT_TEAM_SCORE_AFTER: { name: 'TIMEOUT_TEAM_SCORE', scope: 'PERIOD' },
   TIMEOUT_FIRST_PLAY: { name: 'TIMEOUT_FIRST_PLAY', scope: 'PERIOD' },
   FOUL_TEAM_SCORE_AFTER_FT: { name: 'FOUL_TEAM_SCORE', scope: 'PERIOD' },
@@ -251,6 +871,77 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
   PERIOD_TEAM_REBOUNDS: { name: 'TEAM_REBOUNDS', scope: 'PERIOD' },
   PERIOD_TEAM_ASSISTS: { name: 'TEAM_ASSISTS', scope: 'PERIOD' },
   PERIOD_TEAM_STEALS: { name: 'TEAM_STEALS', scope: 'PERIOD' },
+  PERIOD_TEAM_THREES: { name: 'TEAM_THREES', scope: 'PERIOD' },
+  PERIOD_TEAM_COMPARE_THREES: { name: 'TEAM_THREES_COMPARE', scope: 'PERIOD' },
+  PERIOD_TEAM_COMPARE_POINTS: { name: 'TEAM_POINTS_COMPARE', scope: 'PERIOD' },
+  PERIOD_TEAM_COMPARE_ASSISTS: {
+    name: 'TEAM_ASSISTS_COMPARE',
+    scope: 'PERIOD',
+  },
+  PERIOD_TEAM_COMPARE_REBOUNDS: {
+    name: 'TEAM_REBOUNDS_COMPARE',
+    scope: 'PERIOD',
+  },
+  PERIOD_TEAM_COMPARE_STEALS: { name: 'TEAM_STEALS_COMPARE', scope: 'PERIOD' },
+  PERIOD_PLAYER_MILESTONE: { name: 'PLAYER_POINTS', scope: 'PERIOD' },
+  PERIOD_PLAYER_ASSISTS: { name: 'PLAYER_ASSISTS', scope: 'PERIOD' },
+  PERIOD_PLAYER_REBOUNDS: { name: 'PLAYER_REBOUNDS', scope: 'PERIOD' },
+  PERIOD_PLAYER_STEALS: { name: 'PLAYER_STEALS', scope: 'PERIOD' },
+  PERIOD_PLAYER_ANOTHER_THREE: { name: 'PLAYER_THREES', scope: 'PERIOD' },
+  PERIOD_PLAYER_ANOTHER_STEAL: { name: 'PLAYER_STEALS', scope: 'PERIOD' },
+  PERIOD_BEHIND_TEAM_TAKES_LEAD: { name: 'PERIOD_LEADER', scope: 'PERIOD' },
+  PERIOD_LEADER_RETAINS: { name: 'PERIOD_LEADER', scope: 'PERIOD' },
+  PERIOD_PLAYER_COMPARE_POINTS: {
+    name: 'PLAYER_COMPARE_POINTS',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_COMPARE_ASSISTS: {
+    name: 'PLAYER_COMPARE_ASSISTS',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_COMPARE_REBOUNDS: {
+    name: 'PLAYER_COMPARE_REBOUNDS',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_COMPARE_STEALS: {
+    name: 'PLAYER_COMPARE_STEALS',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_COMPARE_BLOCKS: {
+    name: 'PLAYER_COMPARE_BLOCKS',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_COMPARE_THREES: {
+    name: 'PLAYER_COMPARE_THREES',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_POINTS: {
+    name: 'PLAYER_COMPARE_POINTS',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_ASSISTS: {
+    name: 'PLAYER_COMPARE_ASSISTS',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_REBOUNDS: {
+    name: 'PLAYER_COMPARE_REBOUNDS',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_STEALS: {
+    name: 'PLAYER_COMPARE_STEALS',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_BLOCKS: {
+    name: 'PLAYER_COMPARE_BLOCKS',
+    scope: 'PERIOD',
+  },
+  NEXT_N_PLAYER_COMPARE_THREES: {
+    name: 'PLAYER_COMPARE_THREES',
+    scope: 'PERIOD',
+  },
+  PERIOD_PLAYER_THREE_STREAK: { name: 'PLAYER_THREE_STREAK', scope: 'PERIOD' },
+  PERIOD_PLAYER_FG_STREAK: { name: 'PLAYER_FG_STREAK', scope: 'PERIOD' },
+  PERIOD_TEAM_THREE_STREAK: { name: 'TEAM_THREE_STREAK', scope: 'PERIOD' },
 }
 
 const getHalf = (period: number): number => (period <= 2 ? 1 : 2)
@@ -312,29 +1003,28 @@ const markGroup = (
   periodGroups.add(group.name)
 }
 
-const getPeriodPlayerSet = (gameId: string, period: number): Set<number> => {
-  const gamePeriods = PLAYER_IDS_BY_GAME.get(gameId)
-  const periodPlayers = gamePeriods?.get(period)
-  return periodPlayers ?? new Set()
+const getUsedPlayerIds = (gameId: string): Set<number> => {
+  const players = PLAYER_USAGE_BY_GAME.get(gameId)
+  return players ? new Set(players.keys()) : new Set()
 }
 
 const markPlayerAsked = (
   gameId: string,
   period: number,
+  clockMs: number,
   playerId: number | null
 ): void => {
   if (!playerId) return
-  let gamePeriods = PLAYER_IDS_BY_GAME.get(gameId)
-  if (!gamePeriods) {
-    gamePeriods = new Map()
-    PLAYER_IDS_BY_GAME.set(gameId, gamePeriods)
+  let players = PLAYER_USAGE_BY_GAME.get(gameId)
+  if (!players) {
+    players = new Map()
+    PLAYER_USAGE_BY_GAME.set(gameId, players)
   }
-  let periodPlayers = gamePeriods.get(period)
-  if (!periodPlayers) {
-    periodPlayers = new Set()
-    gamePeriods.set(period, periodPlayers)
-  }
-  periodPlayers.add(playerId)
+  players.set(playerId, {
+    period,
+    clockMs,
+    askedAt: Date.now(),
+  })
 }
 
 const TIMEOUT_TEMPLATES: QuestionTemplate[] = [
@@ -405,6 +1095,14 @@ const PERIOD_START_TEMPLATES: QuestionTemplate[] = [
     resolutionContext: { type: 'LEADER_END_OF_PERIOD' },
   },
   {
+    id: 'PERIOD_LEADER_END',
+    text: 'Who will be leading at the end of this period?',
+    weight: 1,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'LEADER_END_OF_PERIOD' },
+  },
+  {
     id: 'PERIOD_TEAM_REBOUNDS',
     text: 'Will the home team record 12+ rebounds this quarter?',
     weight: 3,
@@ -442,6 +1140,82 @@ const PERIOD_START_TEMPLATES: QuestionTemplate[] = [
       team: 'HOME',
       statType: 'STEALS',
     },
+  },
+  {
+    id: 'PERIOD_TEAM_THREES',
+    text: 'Will the home team record 4+ 3-pointers this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: {
+      type: 'TEAM_STAT_THIS_PERIOD',
+      target: 4,
+      team: 'HOME',
+      statType: 'THREES',
+    },
+  },
+  {
+    id: 'PERIOD_TEAM_COMPARE_THREES',
+    text: 'Which team will score more 3s this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'TEAM_COMPARE_PERIOD', statType: 'THREES' },
+  },
+  {
+    id: 'PERIOD_TEAM_COMPARE_POINTS',
+    text: 'Which team will score more points this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'TEAM_COMPARE_PERIOD', statType: 'POINTS' },
+  },
+  {
+    id: 'PERIOD_TEAM_COMPARE_ASSISTS',
+    text: 'Which team will record more assists this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'TEAM_COMPARE_PERIOD', statType: 'ASSISTS' },
+  },
+  {
+    id: 'PERIOD_TEAM_COMPARE_REBOUNDS',
+    text: 'Which team will record more rebounds this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'TEAM_COMPARE_PERIOD', statType: 'REBOUNDS' },
+  },
+  {
+    id: 'PERIOD_TEAM_COMPARE_STEALS',
+    text: 'Which team will record more steals this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'TEAM_COMPARE_PERIOD', statType: 'STEALS' },
+  },
+]
+
+const PERIOD_START_TEAM_TEMPLATES = PERIOD_START_TEMPLATES.filter((template) =>
+  template.id.startsWith('PERIOD_TEAM_')
+)
+
+const PERIOD_START_CLOSE_MARGIN_TEMPLATES: QuestionTemplate[] = [
+  {
+    id: 'PERIOD_BEHIND_TEAM_TAKES_LEAD',
+    text: 'Will team behind take the lead this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'LEADER_END_OF_PERIOD', requiresTrailing: true },
+  },
+  {
+    id: 'PERIOD_LEADER_RETAINS',
+    text: 'Will leading team retain the lead this quarter?',
+    weight: 2,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'LEADER_END_OF_PERIOD', requiresLeading: true },
   },
 ]
 
@@ -493,6 +1267,87 @@ const PLAYER_TEMPLATES: QuestionTemplate[] = [
       target: 2,
       statType: 'STEALS',
     },
+  },
+]
+
+const LATE_PERIOD_PLAYER_TEMPLATES: QuestionTemplate[] = [
+  {
+    id: 'PERIOD_PLAYER_ANOTHER_THREE',
+    text: 'Will a player hit another 3-pointer this quarter?',
+    weight: 6,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: {
+      type: 'PLAYER_MILESTONE_PERIOD',
+      statType: 'THREES',
+      increment: 1,
+      requiresCurrent: true,
+    },
+  },
+  {
+    id: 'PERIOD_PLAYER_ANOTHER_STEAL',
+    text: 'Will a player get another steal this quarter?',
+    weight: 5,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: {
+      type: 'PLAYER_MILESTONE_PERIOD',
+      statType: 'STEALS',
+      increment: 1,
+      requiresCurrent: true,
+    },
+  },
+  // Intentionally omit free throw questions (too low-signal).
+]
+
+const PLAYER_COMPARE_PERIOD_TEMPLATES: QuestionTemplate[] = [
+  {
+    id: 'PERIOD_PLAYER_COMPARE_POINTS',
+    text: 'Who will score the most points this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'POINTS' },
+  },
+  {
+    id: 'PERIOD_PLAYER_COMPARE_ASSISTS',
+    text: 'Who will record the most assists this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'ASSISTS' },
+  },
+  {
+    id: 'PERIOD_PLAYER_COMPARE_REBOUNDS',
+    text: 'Who will record the most rebounds this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'REBOUNDS' },
+  },
+  {
+    id: 'PERIOD_PLAYER_COMPARE_STEALS',
+    text: 'Who will record the most steals this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'STEALS' },
+  },
+  {
+    id: 'PERIOD_PLAYER_COMPARE_BLOCKS',
+    text: 'Who will record the most blocks this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'BLOCKS' },
+  },
+  {
+    id: 'PERIOD_PLAYER_COMPARE_THREES',
+    text: 'Who will hit the most 3-pointers this quarter?',
+    weight: 3,
+    windowType: 'PERIOD',
+    resolutionWindowMs: null,
+    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'THREES' },
   },
 ]
 
@@ -565,22 +1420,47 @@ const getBoxScoreTeams = (boxScore: Record<string, any> | null) => {
 }
 
 const buildTeamStatTemplate = (
-  template: QuestionTemplate
+  template: QuestionTemplate,
+  boxScore: Record<string, any> | null,
+  seasonProfiles?: {
+    teamsById: Map<string, TeamSeasonProfile>
+  }
 ): QuestionTemplate => {
   const statType = template.resolutionContext?.statType ?? 'REBOUNDS'
   const team = pickFrom(['HOME', 'AWAY'] as const)
-  const target =
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const teamId =
+    team === 'HOME' ? (homeTeam?.teamId ?? null) : (awayTeam?.teamId ?? null)
+  const profile = teamId
+    ? seasonProfiles?.teamsById.get(String(teamId))
+    : undefined
+  const avg =
+    statType === 'ASSISTS'
+      ? (profile?.apg ?? null)
+      : statType === 'STEALS'
+        ? (profile?.spg ?? null)
+        : statType === 'THREES'
+          ? (profile?.fg3m ?? null)
+          : (profile?.rpg ?? null)
+  const perQuarterTarget =
+    typeof avg === 'number' && avg > 0 ? Math.max(1, Math.ceil(avg / 4)) : null
+  const fallbackTarget =
     statType === 'ASSISTS'
       ? pickFrom([6, 8, 10])
       : statType === 'STEALS'
         ? pickFrom([3, 4, 5])
-        : pickFrom([10, 12, 14])
+        : statType === 'THREES'
+          ? pickFrom([3, 4, 5])
+          : pickFrom([10, 12, 14])
+  const target = perQuarterTarget ?? fallbackTarget
   const label =
     statType === 'ASSISTS'
       ? 'assists'
       : statType === 'STEALS'
         ? 'steals'
-        : 'rebounds'
+        : statType === 'THREES'
+          ? '3-pointers'
+          : 'rebounds'
   return {
     ...template,
     text: `Will the ${team === 'HOME' ? 'home team' : 'away team'} record ${target}+ ${label} this quarter?`,
@@ -592,13 +1472,44 @@ const buildTeamStatTemplate = (
   }
 }
 
+const buildTeamPointsTemplate = (
+  template: QuestionTemplate,
+  boxScore: Record<string, any> | null,
+  seasonProfiles?: {
+    teamsById: Map<string, TeamSeasonProfile>
+  }
+): QuestionTemplate => {
+  const team = template.resolutionContext?.team ?? 'HOME'
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const teamId =
+    team === 'HOME' ? (homeTeam?.teamId ?? null) : (awayTeam?.teamId ?? null)
+  const profile = teamId
+    ? seasonProfiles?.teamsById.get(String(teamId))
+    : undefined
+  const avg = profile?.ppg ?? null
+  const target =
+    typeof avg === 'number' && avg > 0
+      ? Math.max(1, Math.ceil(avg / 4))
+      : (template.resolutionContext?.target ?? 25)
+  return {
+    ...template,
+    text: `Will the ${team === 'HOME' ? 'home team' : 'away team'} score ${target}+ this quarter?`,
+    resolutionContext: {
+      ...(template.resolutionContext ?? {}),
+      target,
+    },
+  }
+}
+
 const buildPlayerMilestoneTemplate = (
   template: QuestionTemplate,
   boxScore: Record<string, any> | null,
   excludeIds?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
-  }
+  },
+  period?: number,
+  clockMs?: number | null
 ): QuestionTemplate => {
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
   const players: any[] = []
@@ -614,10 +1525,39 @@ const buildPlayerMilestoneTemplate = (
   )
   const pool = active.length ? active : players
   const filteredPool = excludeIds
-    ? pool.filter((player) => !excludeIds.has(player?.personId))
+    ? pool.filter((player) => {
+        const id = getPlayerId(player)
+        return id === null ? true : !excludeIds.has(id)
+      })
     : pool
-  const pickPool = filteredPool.length ? filteredPool : excludeIds ? [] : pool
   const statType = template.resolutionContext?.statType ?? 'POINTS'
+  const currentPeriod =
+    period ??
+    boxScore?.period ??
+    boxScore?.game?.period ??
+    boxScore?.gamePeriod ??
+    1
+  const increment = Number(template.resolutionContext?.increment ?? 0)
+  const requiresCurrent = template.resolutionContext?.requiresCurrent === true
+  const pickPool = filteredPool.filter((player) => {
+    const id = getPlayerId(player)
+    if (!id) return true
+    const periodStat = getPlayerPeriodStat(player, currentPeriod, statType)
+    if (periodStat === null) return !requiresCurrent
+    if (requiresCurrent && periodStat < Math.max(1, increment)) return false
+    if (increment > 0) return true
+    const profile = seasonProfiles?.playersById.get(String(id))
+    const targetInfo = getPlayerTargetInfo(
+      profile,
+      statType,
+      currentPeriod,
+      clockMs ?? null,
+      periodStat
+    )
+    const target = targetInfo.target
+    if (!target) return true
+    return periodStat < Math.max(1, target - 1)
+  })
   const candidatePool = seasonProfiles?.playersById
     ? filterPlayersBySeasonCandidate(
         pickPool,
@@ -652,17 +1592,79 @@ const buildPlayerMilestoneTemplate = (
           : choice?.teamId === awayTeam?.teamId
             ? (awayTeam?.teamTricode ?? null)
             : null
-  const target = template.resolutionContext?.target ?? 10
+  const isActiveChoice = !!choice
+    ? active.some((player) => {
+        const id = getPlayerId(player)
+        return id !== null && id === playerId
+      })
+    : false
+  const profile = playerId
+    ? seasonProfiles?.playersById.get(String(playerId))
+    : undefined
+  const currentStat = playerId
+    ? getPlayerPeriodStat(choice, currentPeriod, statType)
+    : null
+  const targetInfo = getPlayerTargetInfo(
+    profile,
+    statType,
+    currentPeriod,
+    clockMs ?? null,
+    currentStat
+  )
+  const perQuarterTarget = targetInfo.target
+  const isCandidate =
+    statType === 'POINTS'
+      ? !!profile?.isScoringCandidate
+      : statType === 'REBOUNDS'
+        ? !!profile?.isReboundCandidate
+        : statType === 'ASSISTS'
+          ? !!profile?.isAssistCandidate
+          : statType === 'STEALS'
+            ? !!profile?.isStealsCandidate
+            : statType === 'BLOCKS'
+              ? !!profile?.isBlocksCandidate
+              : false
+  const selectionReason: SelectionReason[] = []
+  if (isActiveChoice) selectionReason.push({ code: 'active_player' })
+  if (isCandidate) {
+    selectionReason.push({
+      code: 'season_candidate',
+      detail: `statType=${statType}`,
+    })
+  }
+  const target =
+    Number.isFinite(currentStat) && increment > 0
+      ? Math.max(1, Number(currentStat) + increment)
+      : (perQuarterTarget ?? template.resolutionContext?.target ?? 10)
+  if (playerId) {
+    const periodStat = currentStat
+    if (periodStat !== null && Number.isFinite(target)) {
+      selectionReason.push({
+        code: 'period_stat',
+        detail: `current=${periodStat} target=${target} timeLeft=${targetInfo.timeLeftRatio ?? 'n/a'}`,
+      })
+    }
+  }
   const baseLabel =
     statType === 'ASSISTS'
       ? 'assists'
       : statType === 'REBOUNDS'
         ? 'rebounds'
         : statType === 'STEALS'
-          ? 'steals'
-          : 'points'
+          ? increment > 0
+            ? 'another steal'
+            : 'steals'
+          : statType === 'THREES'
+            ? increment > 0
+              ? 'another 3-pointer'
+              : '3-pointers'
+            : statType === 'FTM'
+              ? 'a free throw'
+              : 'points'
   const questionText = playerName
-    ? `Will ${playerName} record ${target}+ ${baseLabel} this quarter?`
+    ? increment > 0
+      ? `Will ${playerName} record ${baseLabel} this quarter?`
+      : `Will ${playerName} record ${target}+ ${baseLabel} this quarter?`
     : template.text
   return {
     ...template,
@@ -674,6 +1676,7 @@ const buildPlayerMilestoneTemplate = (
       teamTricode,
       statType,
       target,
+      selectionReason,
     },
   }
 }
@@ -703,7 +1706,10 @@ const resolveTemplate = (
   playerExclude?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
-  }
+    teamsById: Map<string, TeamSeasonProfile>
+  },
+  period?: number,
+  clockMs?: number | null
 ): QuestionTemplate => {
   let resolvedTemplate = template
   if (PLAYER_TEMPLATE_IDS.has(template.id)) {
@@ -711,14 +1717,39 @@ const resolveTemplate = (
       template,
       boxScore,
       playerExclude,
-      seasonProfiles
+      seasonProfiles,
+      period,
+      clockMs
+    )
+  }
+  if (
+    template.resolutionContext?.type === 'PLAYER_COMPARE_PERIOD' ||
+    template.resolutionContext?.type === 'PLAYER_COMPARE_NEXT_N'
+  ) {
+    resolvedTemplate = buildPlayerCompareTemplate(
+      resolvedTemplate,
+      boxScore,
+      playerExclude,
+      seasonProfiles,
+      period
     )
   }
   if (template.id === 'PERIOD_ANY_3') {
     resolvedTemplate = buildPeriodThreeTemplate(resolvedTemplate)
   }
+  if (template.resolutionContext?.type === 'TEAM_POINTS_THIS_PERIOD') {
+    resolvedTemplate = buildTeamPointsTemplate(
+      resolvedTemplate,
+      boxScore,
+      seasonProfiles
+    )
+  }
   if (template.resolutionContext?.type === 'TEAM_STAT_THIS_PERIOD') {
-    resolvedTemplate = buildTeamStatTemplate(resolvedTemplate)
+    resolvedTemplate = buildTeamStatTemplate(
+      resolvedTemplate,
+      boxScore,
+      seasonProfiles
+    )
   }
   resolvedTemplate = {
     ...resolvedTemplate,
@@ -735,13 +1766,16 @@ const buildQuestionPayload = (
   playerExclude?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
+    teamsById: Map<string, TeamSeasonProfile>
   }
 ): EngineQuestionPayload => {
   const resolvedTemplate = resolveTemplate(
     template,
     boxScore,
     playerExclude,
-    seasonProfiles
+    seasonProfiles,
+    event.gameState?.period ?? 0,
+    event.gameState?.clockMs ?? null
   )
   const resolutionWindowMs = computeResolutionWindowMs(resolvedTemplate, event)
   const resolutionContext = buildResolutionContext(
@@ -750,13 +1784,41 @@ const buildQuestionPayload = (
     boxScore,
     resolutionWindowMs
   )
+  let questionText = resolvedTemplate.text
+  if (
+    resolutionContext?.type === 'PLAYER_COMPARE_NEXT_N' &&
+    resolutionContext?.minutes
+  ) {
+    questionText = questionText.replace(
+      /\{minutes\}/gi,
+      String(resolutionContext.minutes)
+    )
+  }
+  if (
+    resolutionContext?.requiresTrailing &&
+    resolutionContext?.trailingTricode
+  ) {
+    questionText = questionText.replace(
+      /team behind/gi,
+      String(resolutionContext.trailingTricode)
+    )
+  }
+  if (resolutionContext?.requiresLeading && resolutionContext?.leadingTricode) {
+    questionText = questionText.replace(
+      /leading team/gi,
+      String(resolutionContext.leadingTricode)
+    )
+  }
   return {
     templateId: resolvedTemplate.id,
-    question: resolvedTemplate.text,
+    question: questionText,
     windowType: resolvedTemplate.windowType,
     timeoutMs: QUESTION_TIMEOUT_MS,
     resolutionWindowMs,
     resolutionContext,
+    selectionReason: Array.isArray(resolutionContext?.selectionReason)
+      ? resolutionContext.selectionReason
+      : undefined,
     trigger: triggerReason,
     period: event.gameState?.period ?? 0,
     clockMs: event.gameState?.clockMs ?? 0,
@@ -836,6 +1898,68 @@ export const triggerGameStartQuestions = (
   return emit()
 }
 
+export const scheduleGameStartQuestions = (
+  gameId: string,
+  gameState: EngineGameState,
+  boxScore: Record<string, any> | null,
+  opts?: TriggerOptions & {
+    winnerDelayMs?: { min: number; max: number }
+    jumpBallDelayMs?: { min: number; max: number }
+  }
+): void => {
+  if (GAME_START_ASKED_BY_GAME.has(gameId)) return
+  const templates: QuestionTemplate[] = [
+    {
+      id: 'GAME_WINNER',
+      text: 'Who will win the game?',
+      weight: 1,
+      windowType: 'GAME',
+    },
+    {
+      id: 'JUMP_BALL_WINNER',
+      text: 'Who will win the opening jump ball?',
+      weight: 1,
+      windowType: 'JUMP_BALL',
+    },
+  ]
+  const randDelay = (range: { min: number; max: number }) => {
+    const span = Math.max(0, range.max - range.min)
+    return range.min + Math.floor(Math.random() * (span + 1))
+  }
+  const winnerDelay = randDelay(
+    opts?.winnerDelayMs ?? { min: 10_000, max: 30_000 }
+  )
+  const jumpBallDelay = randDelay(
+    opts?.jumpBallDelayMs ?? { min: 60_000, max: 90_000 }
+  )
+
+  const emit = (template: QuestionTemplate) => {
+    const payload = buildQuestionPayload(
+      template,
+      buildSyntheticEvent(gameState),
+      boxScore,
+      'game_start',
+      undefined,
+      opts?.seasonProfiles
+    )
+    LAST_QUESTION_AT_BY_GAME.set(gameId, Date.now())
+    if (opts?.persistQuestions) {
+      void createAndSendEngineQuestion(gameId, payload)
+    }
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] trigger question game=${gameId} payload=${JSON.stringify(
+          payload
+        )}`
+      )
+    }
+  }
+
+  GAME_START_ASKED_BY_GAME.add(gameId)
+  setTimeout(() => emit(templates[0]), winnerDelay)
+  setTimeout(() => emit(templates[1]), winnerDelay + jumpBallDelay)
+}
+
 const coerceScore = (value: number | null | undefined): number | null => {
   if (value === null || value === undefined) return null
   return Number(value)
@@ -892,9 +2016,12 @@ const getTeamStat = (
   const stats = teamData?.statistics
   if (!stats) return null
   const key = String(statType || '').toUpperCase()
+  if (key === 'POINTS') return Number(stats.points ?? 0)
   if (key === 'ASSISTS') return Number(stats.assists ?? 0)
   if (key === 'REBOUNDS') return Number(stats.reboundsTotal ?? 0)
   if (key === 'STEALS') return Number(stats.steals ?? 0)
+  if (key === 'THREES' || key === 'FG3M')
+    return Number(stats.threePointersMade ?? 0)
   return null
 }
 
@@ -989,9 +2116,52 @@ const buildResolutionContext = (
       }
     }
     case 'LEADER_END_OF_PERIOD': {
+      if (template.resolutionContext?.requiresTrailing) {
+        const { leader, leaderTricode } = getLeader(event)
+        if (leader === 'TIE') return { ...base, invalid: true }
+        const trailingTricode =
+          leader === 'HOME' ? base.awayTricode : base.homeTricode
+        return {
+          ...base,
+          endPeriod: base.startPeriod,
+          trailingTeam: leader === 'HOME' ? 'AWAY' : 'HOME',
+          trailingTricode,
+          leaderTricode,
+        }
+      }
+      if (template.resolutionContext?.requiresLeading) {
+        const { leader, leaderTricode } = getLeader(event)
+        if (leader === 'TIE') return { ...base, invalid: true }
+        return {
+          ...base,
+          endPeriod: base.startPeriod,
+          leadingTeam: leader,
+          leadingTricode: leaderTricode,
+          leaderTricode,
+        }
+      }
       return {
         ...base,
         endPeriod: base.startPeriod,
+      }
+    }
+    case 'TEAM_COMPARE_PERIOD': {
+      return {
+        ...base,
+        endPeriod: base.startPeriod,
+        statType: template.resolutionContext?.statType ?? null,
+        minHomeStat:
+          getTeamStat(
+            boxScore,
+            'HOME',
+            template.resolutionContext?.statType ?? ''
+          ) ?? 0,
+        minAwayStat:
+          getTeamStat(
+            boxScore,
+            'AWAY',
+            template.resolutionContext?.statType ?? ''
+          ) ?? 0,
       }
     }
     case 'PLAYER_MILESTONE_PERIOD': {
@@ -1000,6 +2170,27 @@ const buildResolutionContext = (
         endPeriod: base.startPeriod,
         target: template.resolutionContext?.target ?? null,
         playerId: template.resolutionContext?.playerId ?? null,
+      }
+    }
+    case 'PLAYER_COMPARE_PERIOD': {
+      return {
+        ...base,
+        endPeriod: base.startPeriod,
+        statType: template.resolutionContext?.statType ?? null,
+        playerIds: template.resolutionContext?.playerIds ?? [],
+        choices: template.resolutionContext?.choices ?? [],
+        tiedStatValue: template.resolutionContext?.tiedStatValue ?? null,
+      }
+    }
+    case 'PLAYER_COMPARE_NEXT_N': {
+      return {
+        ...base,
+        statType: template.resolutionContext?.statType ?? null,
+        minutes: template.resolutionContext?.minutes ?? null,
+        windowMs: resolutionWindowMs,
+        playerIds: template.resolutionContext?.playerIds ?? [],
+        choices: template.resolutionContext?.choices ?? [],
+        tiedStatValue: template.resolutionContext?.tiedStatValue ?? null,
       }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT':
@@ -1080,6 +2271,80 @@ const getThresholdQuestionTemplates = (
     const minutes = pickFrom([3, 4, 5])
     const teamTarget = pickFrom([6, 8, 10])
     const windowMs = minutes * 60 * 1000
+    const playerCompareTemplates: QuestionTemplate[] = [
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_POINTS',
+        text: 'Who will score the most points in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'POINTS',
+        },
+      },
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_ASSISTS',
+        text: 'Who will record the most assists in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'ASSISTS',
+        },
+      },
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_REBOUNDS',
+        text: 'Who will record the most rebounds in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'REBOUNDS',
+        },
+      },
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_STEALS',
+        text: 'Who will record the most steals in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'STEALS',
+        },
+      },
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_BLOCKS',
+        text: 'Who will record the most blocks in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'BLOCKS',
+        },
+      },
+      {
+        id: 'NEXT_N_PLAYER_COMPARE_THREES',
+        text: 'Who will hit the most 3-pointers in the next {minutes} minutes?',
+        weight: 1,
+        windowType: 'NEXT_N_MIN',
+        resolutionWindowMs: windowMs,
+        resolutionContext: {
+          type: 'PLAYER_COMPARE_NEXT_N',
+          minutes,
+          statType: 'THREES',
+        },
+      },
+    ]
     templates.push(
       {
         id: 'NEXT_5_MIN_TOTAL_POINTS',
@@ -1117,7 +2382,8 @@ const getThresholdQuestionTemplates = (
           minutes,
           target: 2,
         },
-      }
+      },
+      ...playerCompareTemplates
     )
   }
 
@@ -1184,17 +2450,32 @@ export const triggerBasketballQuestion = async (
   opts?: TriggerOptions
 ): Promise<EngineQuestionPayload | null> => {
   const now = opts?.nowMs ?? Date.now()
-  const lastAskedAt = LAST_QUESTION_AT_BY_GAME.get(gameId)
-  if (
-    !opts?.bypassCooldown &&
-    lastAskedAt &&
-    now - lastAskedAt < MIN_QUESTION_INTERVAL_MS
-  )
-    return null
 
   const period = event.gameState?.period ?? null
   const clockMs = event.gameState?.clockMs ?? null
-  if (!period || clockMs === null) return null
+  if (!period || clockMs === null) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question game=${gameId} reason=missing_period_or_clock`
+      )
+    }
+    return null
+  }
+  if (period <= 3 && clockMs < 2 * 60 * 1000) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question game=${gameId} reason=under_two_minutes period=${period} clockMs=${clockMs}`
+      )
+    }
+    return null
+  }
+
+  const periodLengthMs = getPeriodLengthMs(period)
+  const inSecondHalf = clockMs <= periodLengthMs / 2
+  const gameElapsedMs = getElapsedSeconds(period, clockMs) * 1000
+
+  recordRecentEvent(gameId, event)
+  updateStreaksForEvent(gameId, event)
 
   const window = getPeriodWindow(clockMs)
   const isTimeout = event.type === EventType.TIMEOUT
@@ -1223,26 +2504,79 @@ export const triggerBasketballQuestion = async (
       : PERIOD_END_PROBABILITY
   }
 
-  const canAsk = shouldAskQuestion(triggerProbability)
+  const lastAskedAt = LAST_QUESTION_AT_BY_GAME.get(gameId)
+  const lastAskedGameElapsed = LAST_QUESTION_GAME_ELAPSED_BY_GAME.get(gameId)
+  if (
+    triggerReason !== 'period_start' &&
+    !opts?.bypassCooldown &&
+    ((lastAskedAt && now - lastAskedAt < MIN_QUESTION_INTERVAL_MS) ||
+      (lastAskedGameElapsed !== undefined &&
+        gameElapsedMs - lastAskedGameElapsed < MIN_QUESTION_INTERVAL_MS))
+  ) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} elapsedMs=${gameElapsedMs}`
+      )
+    }
+    return null
+  }
 
-  if (!canAsk) return null
+  const jitteredProbability = triggerProbability * (0.85 + Math.random() * 0.3)
+  const canAsk = shouldAskQuestion(jitteredProbability)
 
-  LAST_QUESTION_AT_BY_GAME.set(gameId, now)
+  if (!canAsk) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question game=${gameId} reason=probability trigger=${triggerReason}`
+      )
+    }
+    return null
+  }
+
   void window
 
   const thresholdTemplates = getThresholdQuestionTemplates(event, opts)
+  const streakTemplates = getStreakQuestionTemplates(
+    gameId,
+    event,
+    boxScore,
+    opts?.seasonProfiles
+  )
+  const playerCompareTemplates = PLAYER_COMPARE_PERIOD_TEMPLATES
   let candidates: QuestionTemplate[] = [
+    ...streakTemplates,
     ...QUESTION_TEMPLATES,
     ...thresholdTemplates,
     ...PLAYER_TEMPLATES,
+    ...playerCompareTemplates,
+    ...(inSecondHalf ? LATE_PERIOD_PLAYER_TEMPLATES : []),
   ]
 
   if (triggerReason === 'timeout') {
-    candidates = [...TIMEOUT_TEMPLATES, ...PLAYER_TEMPLATES]
+    candidates = [
+      ...streakTemplates,
+      ...TIMEOUT_TEMPLATES,
+      ...PLAYER_TEMPLATES,
+      ...playerCompareTemplates,
+      ...(inSecondHalf ? LATE_PERIOD_PLAYER_TEMPLATES : []),
+    ]
   } else if (triggerReason === 'foul') {
-    candidates = [...FOUL_TEMPLATES, ...PLAYER_TEMPLATES]
+    candidates = [
+      ...streakTemplates,
+      ...FOUL_TEMPLATES,
+      ...PLAYER_TEMPLATES,
+      ...playerCompareTemplates,
+      ...(inSecondHalf ? LATE_PERIOD_PLAYER_TEMPLATES : []),
+    ]
   } else if (triggerReason === 'period_start') {
-    candidates = [...PERIOD_START_TEMPLATES, ...candidates]
+    const margin = getScoreMargin(event) ?? 0
+    candidates =
+      margin > 0 && margin < 10
+        ? [
+            ...PERIOD_START_TEAM_TEMPLATES,
+            ...PERIOD_START_CLOSE_MARGIN_TEMPLATES,
+          ]
+        : [...PERIOD_START_TEAM_TEMPLATES]
   }
 
   candidates = candidates.filter((template) => {
@@ -1253,24 +2587,69 @@ export const triggerBasketballQuestion = async (
     const group = QUESTION_GROUPS[template.id]
     return !hasGroup(gameId, period, group)
   })
-  const template = weightedPick(candidates)
-  if (!template) return null
+  let questionPayload: EngineQuestionPayload | null = null
+  let template: QuestionTemplate | null = null
+  let remaining = [...candidates]
+  const maxAttempts = Math.min(5, remaining.length)
 
-  void boxScore
-  const questionPayload = buildQuestionPayload(
-    template,
-    event,
-    boxScore,
-    triggerReason,
-    getPeriodPlayerSet(gameId, period),
-    opts?.seasonProfiles
-  )
-  if (
-    PLAYER_TEMPLATE_IDS.has(template.id) &&
-    !questionPayload.resolutionContext?.playerId
-  ) {
-    return null
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    template = weightedPick(remaining)
+    if (!template) return null
+
+    const nextPayload = buildQuestionPayload(
+      template,
+      event,
+      boxScore,
+      triggerReason,
+      getUsedPlayerIds(gameId),
+      opts?.seasonProfiles
+    )
+    const invalidResolution = !!nextPayload.resolutionContext?.invalid
+    const missingPlayer =
+      PLAYER_TEMPLATE_IDS.has(template.id) &&
+      !nextPayload.resolutionContext?.playerId
+    const latencySkip = shouldSkipForLatency(gameId, event, nextPayload)
+    const invalid = invalidResolution || missingPlayer || latencySkip
+
+    if (invalid) {
+      if (!opts?.suppressLogs) {
+        console.log(
+          `[engine] skip question game=${gameId} template=${template.id} reason=${invalidResolution ? 'invalid' : missingPlayer ? 'missing_player' : 'latency'}`
+        )
+      }
+      remaining = remaining.filter((item) => item.id !== template?.id)
+      template = null
+      continue
+    }
+
+    if (
+      PLAYER_TEMPLATE_IDS.has(template.id) &&
+      nextPayload.resolutionContext?.playerId
+    ) {
+      const lastAsked = PLAYER_USAGE_BY_GAME.get(gameId)?.get(
+        nextPayload.resolutionContext.playerId
+      )
+      const selectionReason = nextPayload.selectionReason
+        ? [...nextPayload.selectionReason]
+        : []
+      selectionReason.push({
+        code: 'last_asked',
+        detail: lastAsked
+          ? `period=${lastAsked.period} clockMs=${lastAsked.clockMs} askedAt=${new Date(
+              lastAsked.askedAt
+            ).toISOString()}`
+          : 'never',
+      })
+      nextPayload.selectionReason = selectionReason
+    }
+
+    questionPayload = nextPayload
+    break
   }
+
+  if (!questionPayload || !template) return null
+  LAST_QUESTION_AT_BY_GAME.set(gameId, now)
+  LAST_QUESTION_GAME_ELAPSED_BY_GAME.set(gameId, gameElapsedMs)
   if (opts?.persistQuestions) {
     await createAndSendEngineQuestion(gameId, questionPayload)
   }
@@ -1282,7 +2661,29 @@ export const triggerBasketballQuestion = async (
     )
   }
   if (PLAYER_TEMPLATE_IDS.has(template.id)) {
-    markPlayerAsked(gameId, period, questionPayload.resolutionContext?.playerId)
+    markPlayerAsked(
+      gameId,
+      period,
+      event.gameState?.clockMs ?? 0,
+      questionPayload.resolutionContext?.playerId
+    )
+  }
+  if (
+    questionPayload.resolutionContext?.playerId &&
+    !PLAYER_TEMPLATE_IDS.has(template.id)
+  ) {
+    markPlayerAsked(
+      gameId,
+      period,
+      event.gameState?.clockMs ?? 0,
+      questionPayload.resolutionContext.playerId
+    )
+  }
+  if (Array.isArray(questionPayload.resolutionContext?.playerIds)) {
+    for (const id of questionPayload.resolutionContext.playerIds) {
+      if (typeof id !== 'number') continue
+      markPlayerAsked(gameId, period, event.gameState?.clockMs ?? 0, id)
+    }
   }
   markGroup(gameId, period, QUESTION_GROUPS[template.id])
   return questionPayload
