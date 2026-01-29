@@ -1,8 +1,12 @@
-import 'dotenv/config'
+import dotenv from 'dotenv'
 import packageJson from './package.json'
 
-const IS_DEV = process.env.EXPO_PUBLIC_APP_ENV === 'development'
-const IS_STAGING = process.env.EXPO_PUBLIC_APP_ENV === 'staging'
+const appEnv = process.env.EXPO_PUBLIC_APP_ENV || 'development'
+dotenv.config()
+dotenv.config({ path: `.env.${appEnv}`, override: true })
+
+const IS_DEV = appEnv === 'development'
+const IS_STAGING = appEnv === 'staging'
 
 const getAppName = () => {
   if (IS_DEV) return 'Whistle (Dev)'
@@ -157,6 +161,15 @@ export default {
       eas: {
         projectId: '00000000-0000-0000-0000-000000000000',
       },
+      appEnv,
+      domain: process.env.EXPO_PUBLIC_DOMAIN,
+      mixpanelToken: process.env.EXPO_PUBLIC_MIXPANEL_TOKEN,
+      sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+      resendApiKey: process.env.EXPO_PUBLIC_RESEND_API_KEY,
+      emailFrom: process.env.EMAIL_FROM,
+      googleWebClientIdAndroid:
+        process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
+      googleWebClientIdIos: process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID,
     },
   },
 }

@@ -1,4 +1,7 @@
-const appEnv = process.env.EXPO_PUBLIC_APP_ENV || 'development'
+import Constants from 'expo-constants'
+
+const extra = (Constants.expoConfig?.extra || {}) as Record<string, any>
+const appEnv = extra.appEnv || process.env.EXPO_PUBLIC_APP_ENV || 'development'
 
 export const isEnvironment = (environment: string): boolean =>
   appEnv === environment
@@ -8,18 +11,22 @@ export const isProduction = (): boolean => isEnvironment('production')
 
 console.log(
   'GOOGLE WEB CLIENT ID',
-  process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
-  process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID
+  extra.googleWebClientIdAndroid ??
+    process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
+  extra.googleWebClientIdIos ?? process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID
 )
 
 export const env = {
   APP_ENV: appEnv,
-  MIXPANEL_TOKEN: process.env.EXPO_PUBLIC_MIXPANEL_TOKEN,
-  SENTRY_DSN: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  RESEND_API_KEY: process.env.EXPO_PUBLIC_RESEND_API_KEY,
-  EMAIL_FROM: process.env.EMAIL_FROM,
-  DOMAIN: process.env.EXPO_PUBLIC_DOMAIN,
+  MIXPANEL_TOKEN: extra.mixpanelToken ?? process.env.EXPO_PUBLIC_MIXPANEL_TOKEN,
+  SENTRY_DSN: extra.sentryDsn ?? process.env.EXPO_PUBLIC_SENTRY_DSN,
+  RESEND_API_KEY: extra.resendApiKey ?? process.env.EXPO_PUBLIC_RESEND_API_KEY,
+  EMAIL_FROM: extra.emailFrom ?? process.env.EMAIL_FROM,
+  DOMAIN: extra.domain ?? process.env.EXPO_PUBLIC_DOMAIN,
   GOOGLE_WEB_CLIENT_ID_ANDROID:
+    extra.googleWebClientIdAndroid ??
     process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
-  GOOGLE_WEB_CLIENT_ID_IOS: process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID,
+  GOOGLE_WEB_CLIENT_ID_IOS:
+    extra.googleWebClientIdIos ??
+    process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID,
 }

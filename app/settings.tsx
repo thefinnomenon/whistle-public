@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
+import { env } from '@/lib/env'
 import { Ionicons } from '@expo/vector-icons'
 
 export default function SettingsScreen() {
@@ -24,6 +25,12 @@ export default function SettingsScreen() {
 
   const winnings = user?.winnings || 0
   const canWithdraw = winnings >= 10
+  const build =
+    Platform.OS === 'ios'
+      ? Constants.expoConfig?.ios?.buildNumber
+      : Constants.expoConfig?.android?.versionCode
+  const buildLabel =
+    build === undefined || build === null ? '' : ` (${String(build)})`
 
   const handleWithdraw = async () => {
     const subject = encodeURIComponent('Withdrawal Request - Whistle')
@@ -281,9 +288,13 @@ Thank you!`
         <View className="items-center gap-1">
           <Text className="text-xs text-muted-foreground">
             Whistle v{Constants.expoConfig?.version || '1.0.0'}
+            {buildLabel}
           </Text>
           <Text className="text-xs text-muted-foreground">
             Channel: {Updates.channel || 'none'}
+          </Text>
+          <Text className="text-xs text-muted-foreground">
+            Domain: {env.DOMAIN || 'unknown'}
           </Text>
         </View>
       </ScrollView>

@@ -168,32 +168,6 @@ const getPlayerFromBoxScore = (
   return match ?? null
 }
 
-const getPlayerPerQuarterTarget = (
-  profile: PlayerSeasonProfile | undefined,
-  statType: string
-): number | null => {
-  if (!profile) return null
-  const avg =
-    statType === 'POINTS'
-      ? profile.ppg
-      : statType === 'REBOUNDS'
-        ? profile.rpg
-        : statType === 'ASSISTS'
-          ? profile.apg
-          : statType === 'STEALS'
-            ? profile.spg
-            : statType === 'THREES'
-              ? profile.fg3m
-              : statType === 'FTM'
-                ? profile.ftm
-                : statType === 'BLOCKS'
-                  ? profile.bpg
-                  : 0
-  if (!Number.isFinite(avg) || avg <= 0) return null
-  const perQuarter = avg / 4
-  return Math.max(1, Math.ceil(perQuarter * 1.3))
-}
-
 const getPeriodLengthMs = (period: number): number =>
   period > 4 ? 5 * 60 * 1000 : 12 * 60 * 1000
 
@@ -774,7 +748,6 @@ const createAndSendEngineQuestion = async (
 ): Promise<void> => {
   const { admin, db } = await import('../firebase')
   const isDev = process.env.NODE_ENV !== 'production'
-  const questionText = isDev ? `[DEV] ${question.question}` : question.question
   const now = Date.now()
   const timeoutAt = now + question.timeoutMs
   const choices = buildQuestionChoices(question)
@@ -783,7 +756,7 @@ const createAndSendEngineQuestion = async (
     : 'YESNO'
 
   const questionPayload = {
-    question: questionText,
+    question: question.question,
     choices,
     type,
     state: 'open',
@@ -808,7 +781,7 @@ const createAndSendEngineQuestion = async (
     version: QUESTION_PAYLOAD_VERSION,
     gameId,
     questionId: qRef.id,
-    question: questionText,
+    question: question.question,
     choices,
     timeoutAt,
     engineTag: question.templateId,
@@ -829,7 +802,7 @@ const createAndSendEngineQuestion = async (
       type: 'question',
       gameId,
       questionId: qRef.id,
-      question: questionText,
+      question: question.question,
       title,
       sentAt: now.toString(),
       engineTag: question.templateId,
