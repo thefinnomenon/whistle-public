@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/node'
 import cors from 'cors'
 import express from 'express'
 import path from 'path'
+import fs from 'fs'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import authRouter from './routes/auth'
 import gameRouter, {
@@ -39,11 +40,17 @@ app.use((req, _res, next) => {
 })
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
+const resolveStaticHtml = (filename: string) => {
+  const distPath = path.join(__dirname, 'static', filename)
+  if (fs.existsSync(distPath)) return distPath
+  return path.join(process.cwd(), 'src', 'static', filename)
+}
+
 app.get('/privacy', (_req, res) =>
-  res.sendFile(path.join(__dirname, 'static', 'privacy.html'))
+  res.sendFile(resolveStaticHtml('privacy.html'))
 )
 app.get('/support', (_req, res) =>
-  res.sendFile(path.join(__dirname, 'static', 'support.html'))
+  res.sendFile(resolveStaticHtml('support.html'))
 )
 
 app.use('/api/games', gameRouter)
