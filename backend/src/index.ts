@@ -1,6 +1,8 @@
 import * as Sentry from '@sentry/node'
 import cors from 'cors'
 import express from 'express'
+import path from 'path'
+import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import authRouter from './routes/auth'
 import gameRouter, {
   closeExpiredQuestions,
@@ -8,7 +10,6 @@ import gameRouter, {
   updatePlayerCountsForActiveGames,
 } from './routes/game'
 import logsRouter from './routes/logs'
-import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import { startSeasonProfilesWorker } from './workers/seasonProfilesWorker'
 
 const LOG_BLACKLIST = ['/health', '/api/log']
@@ -38,6 +39,12 @@ app.use((req, _res, next) => {
 })
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
+app.get('/privacy', (_req, res) =>
+  res.sendFile(path.join(__dirname, 'static', 'privacy.html'))
+)
+app.get('/support', (_req, res) =>
+  res.sendFile(path.join(__dirname, 'static', 'support.html'))
+)
 
 app.use('/api/games', gameRouter)
 app.use('/api', authRouter)
