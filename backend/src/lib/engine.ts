@@ -2553,11 +2553,12 @@ export const triggerBasketballQuestion = async (
   ) {
     const remainingMs = cooldownMs - (now - lastAskedAt)
     if (!opts?.suppressLogs) {
+      const cooldownSeconds = Math.max(0, Math.round(remainingMs / 1000))
+      const cooldownMinutes = Math.floor(cooldownSeconds / 60)
+      const cooldownSecondsRemainder = cooldownSeconds % 60
+      const cooldownLabel = `${cooldownMinutes}:${String(cooldownSecondsRemainder).padStart(2, '0')}`
       console.log(
-        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemainingMs=${Math.max(
-          0,
-          Math.round(remainingMs)
-        )} elapsedMs=${gameElapsedMs} elapsed=${elapsedLabel} timeLeft=${timeLeftLabel}`
+        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemaining=${cooldownLabel} elapsed=${elapsedLabel} timeLeft=${timeLeftLabel}`
       )
     }
     return null
