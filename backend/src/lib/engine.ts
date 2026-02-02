@@ -2537,6 +2537,14 @@ export const triggerBasketballQuestion = async (
   const lastAskedAt = LAST_QUESTION_AT_BY_GAME.get(gameId)
   const cooldownMs =
     LAST_QUESTION_COOLDOWN_MS_BY_GAME.get(gameId) ?? MIN_QUESTION_INTERVAL_MS
+  const clockMinutes = Math.floor(clockMs / 60000)
+  const clockSeconds = Math.floor((clockMs % 60000) / 1000)
+  const timeLeftLabel = `${clockMinutes}:${String(clockSeconds).padStart(2, '0')}`
+  const elapsedSeconds = getElapsedSeconds(period, clockMs)
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60)
+  const elapsedSecondsRemainder = elapsedSeconds % 60
+  const elapsedLabel = `${elapsedMinutes}:${String(elapsedSecondsRemainder).padStart(2, '0')}`
+
   if (
     triggerReason !== 'period_start' &&
     !opts?.bypassCooldown &&
@@ -2549,7 +2557,7 @@ export const triggerBasketballQuestion = async (
         `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemainingMs=${Math.max(
           0,
           Math.round(remainingMs)
-        )} elapsedMs=${gameElapsedMs}`
+        )} elapsedMs=${gameElapsedMs} elapsed=${elapsedLabel} timeLeft=${timeLeftLabel}`
       )
     }
     return null
