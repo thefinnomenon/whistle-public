@@ -56,7 +56,7 @@ type TriggerOptions = {
 }
 
 const LAST_QUESTION_AT_BY_GAME = new Map<string, number>()
-const LAST_QUESTION_GAME_ELAPSED_BY_GAME = new Map<string, number>()
+const LAST_QUESTION_COOLDOWN_MS_BY_GAME = new Map<string, number>()
 const PLAYER_THREE_STREAK_BY_GAME = new Map<string, Map<number, number>>()
 const PLAYER_FG_STREAK_BY_GAME = new Map<string, Map<number, number>>()
 const TEAM_THREE_STREAK_BY_GAME = new Map<string, Map<string, number>>()
@@ -79,7 +79,8 @@ const PLAYER_USAGE_BY_GAME = new Map<
 >()
 const QUESTION_SIGNATURE_SECRET = process.env.WHISTLE_JWT_SECRET
 const QUESTION_PAYLOAD_VERSION = 1
-const MIN_QUESTION_INTERVAL_MS = 5 * 60 * 1000
+const MIN_QUESTION_INTERVAL_MS = 4 * 60 * 1000
+const MAX_QUESTION_INTERVAL_MS = 8 * 60 * 1000
 const QUESTION_TIMEOUT_MS = 30_000
 const MIN_RESOLUTION_WINDOW_MS = 30_000
 
@@ -2534,23 +2535,27 @@ export const triggerBasketballQuestion = async (
   }
 
   const lastAskedAt = LAST_QUESTION_AT_BY_GAME.get(gameId)
-  const lastAskedGameElapsed = LAST_QUESTION_GAME_ELAPSED_BY_GAME.get(gameId)
+  const cooldownMs =
+    LAST_QUESTION_COOLDOWN_MS_BY_GAME.get(gameId) ?? MIN_QUESTION_INTERVAL_MS
   if (
     triggerReason !== 'period_start' &&
     !opts?.bypassCooldown &&
-    ((lastAskedAt && now - lastAskedAt < MIN_QUESTION_INTERVAL_MS) ||
-      (lastAskedGameElapsed !== undefined &&
-        gameElapsedMs - lastAskedGameElapsed < MIN_QUESTION_INTERVAL_MS))
+    lastAskedAt &&
+    now - lastAskedAt < cooldownMs
   ) {
+    const remainingMs = cooldownMs - (now - lastAskedAt)
     if (!opts?.suppressLogs) {
       console.log(
-        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} elapsedMs=${gameElapsedMs}`
+        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemainingMs=${Math.max(
+          0,
+          Math.round(remainingMs)
+        )} elapsedMs=${gameElapsedMs}`
       )
     }
     return null
   }
 
-  const jitteredProbability = triggerProbability * (0.85 + Math.random() * 0.3)
+  const jitteredProbability = triggerProbability * (0.2 + Math.random() * 0.8)
   const canAsk = shouldAskQuestion(jitteredProbability)
 
   if (!canAsk) {
@@ -2678,7 +2683,12 @@ export const triggerBasketballQuestion = async (
 
   if (!questionPayload || !template) return null
   LAST_QUESTION_AT_BY_GAME.set(gameId, now)
-  LAST_QUESTION_GAME_ELAPSED_BY_GAME.set(gameId, gameElapsedMs)
+  const nextCooldownMs =
+    MIN_QUESTION_INTERVAL_MS +
+    Math.floor(
+      Math.random() * (MAX_QUESTION_INTERVAL_MS - MIN_QUESTION_INTERVAL_MS)
+    )
+  LAST_QUESTION_COOLDOWN_MS_BY_GAME.set(gameId, nextCooldownMs)
   if (opts?.persistQuestions) {
     await createAndSendEngineQuestion(gameId, questionPayload)
   }
