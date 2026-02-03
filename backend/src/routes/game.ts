@@ -2248,6 +2248,27 @@ export const endGameById = async (gameId: string, userId?: string) => {
   const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
   await sendNotificationsToGameUsers(gameId, message)
 
+  const openQuestionsSnap = await gameRef
+    .collection('questions')
+    .where('state', '==', 'open')
+    .get()
+  if (!openQuestionsSnap.empty) {
+    for (const doc of openQuestionsSnap.docs) {
+      await doc.ref.set(
+        {
+          state: 'cancelled',
+          closedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
+      console.log(
+        `[game] cancel open question game=${gameId} question=${doc.id} reason=game_end`
+      )
+    }
+  }
+
   trackEvent(
     'game_ended',
     {

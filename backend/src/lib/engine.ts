@@ -1,5 +1,12 @@
 import { createHmac } from 'crypto'
-import type { EngineEvent, EngineGameState } from '../types/engine'
+import type { Message } from 'firebase-admin/messaging'
+import type {
+  BoxScore,
+  BoxScorePlayer,
+  BoxScoreTeam,
+  EngineEvent,
+  EngineGameState,
+} from '../types/engine'
 import { EngineEventSource, EventType, NbaEventSubType } from '../types/engine'
 import type {
   PlayerSeasonProfile,
@@ -14,13 +21,32 @@ type QuestionWindowType =
   | 'GAME'
   | 'JUMP_BALL'
 
+type JsonPrimitive = string | number | boolean | null
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+export type ResolutionContextValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SelectionReason[]
+  | { id: string; value: string }[]
+  | string[]
+  | number[]
+  | Record<string, number>
+  | Record<string, string>
+  | Record<string, JsonValue>
+export type ResolutionContext = {
+  type?: string
+  [key: string]: ResolutionContextValue | undefined
+}
+
 type QuestionTemplate = {
   id: string
   text: string
   weight: number
   windowType: QuestionWindowType
   resolutionWindowMs?: number | null
-  resolutionContext?: Record<string, any>
+  resolutionContext?: ResolutionContext
 }
 
 type SelectionReason = {
@@ -34,12 +60,74 @@ export type EngineQuestionPayload = {
   windowType: QuestionWindowType
   timeoutMs: number
   resolutionWindowMs?: number | null
-  resolutionContext?: Record<string, any>
+  resolutionContext?: ResolutionContext
   selectionReason?: SelectionReason[]
   trigger: string
   period: number
   clockMs: number
 }
+
+type QuestionRecord = Partial<EngineQuestionPayload> & {
+  resolutionContext?: ResolutionContext
+  resolutionWindowMs?: number | null
+}
+
+const asString = (value: ResolutionContextValue | undefined): string | null =>
+  typeof value === 'string' ? value : null
+
+const asNumber = (value: ResolutionContextValue | undefined): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+
+const asBoolean = (
+  value: ResolutionContextValue | undefined
+): boolean | null => (typeof value === 'boolean' ? value : null)
+
+const asNumberArray = (
+  value: ResolutionContextValue | undefined
+): number[] | null =>
+  Array.isArray(value) && value.every((item) => typeof item === 'number')
+    ? value
+    : null
+
+const asChoiceArray = (
+  value: ResolutionContextValue | undefined
+): { id: string; value: string }[] | null =>
+  Array.isArray(value) &&
+  value.every(
+    (item) =>
+      typeof item === 'object' &&
+      item !== null &&
+      'id' in item &&
+      'value' in item &&
+      typeof (item as { id: string }).id === 'string' &&
+      typeof (item as { value: string }).value === 'string'
+  )
+    ? (value as { id: string; value: string }[])
+    : null
+
+const asSelectionReasons = (
+  value: ResolutionContextValue | undefined
+): SelectionReason[] | null =>
+  Array.isArray(value) &&
+  value.every(
+    (item) =>
+      typeof item === 'object' &&
+      item !== null &&
+      'code' in item &&
+      typeof (item as { code: string }).code === 'string'
+  )
+    ? (value as SelectionReason[])
+    : null
+
+const asRecordNumber = (
+  value: ResolutionContextValue | undefined
+): Record<string, number> | null =>
+  value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  Object.values(value).every((item) => typeof item === 'number')
+    ? (value as Record<string, number>)
+    : null
 
 type TriggerOptions = {
   nowMs?: number
@@ -104,7 +192,7 @@ const PLAYER_TEMPLATE_IDS = new Set([
 ])
 
 const filterPlayersBySeasonCandidate = (
-  players: any[],
+  players: BoxScorePlayer[],
   playersById: Map<string, PlayerSeasonProfile>,
   statType: string
 ) => {
@@ -129,7 +217,9 @@ const filterPlayersBySeasonCandidate = (
   return filtered.length ? filtered : players
 }
 
-const getPlayerId = (player: any): number | null =>
+const getPlayerId = (
+  player: BoxScorePlayer | null | undefined
+): number | null =>
   typeof player?.personId === 'number'
     ? player.personId
     : typeof player?.playerId === 'number'
@@ -137,12 +227,12 @@ const getPlayerId = (player: any): number | null =>
       : null
 
 const getPlayerNameFromBoxScore = (
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   playerId: number | null
 ): string | null => {
   if (!playerId) return null
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
-  const players: any[] = []
+  const players: BoxScorePlayer[] = []
   if (Array.isArray(homeTeam?.players)) players.push(...homeTeam.players)
   if (Array.isArray(awayTeam?.players)) players.push(...awayTeam.players)
   const match = players.find((player) => getPlayerId(player) === playerId)
@@ -157,16 +247,35 @@ const getPlayerNameFromBoxScore = (
 }
 
 const getPlayerFromBoxScore = (
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   playerId: number | null
-): any | null => {
+): BoxScorePlayer | null => {
   if (!playerId) return null
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
-  const players: any[] = []
+  const players: BoxScorePlayer[] = []
   if (Array.isArray(homeTeam?.players)) players.push(...homeTeam.players)
   if (Array.isArray(awayTeam?.players)) players.push(...awayTeam.players)
   const match = players.find((player) => getPlayerId(player) === playerId)
   return match ?? null
+}
+
+const getPlayerTeamTricodeFromBoxScore = (
+  playerId: number | null,
+  boxScore: BoxScore | null
+): string | null => {
+  if (!playerId) return null
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const homePlayers: BoxScorePlayer[] = Array.isArray(homeTeam?.players)
+    ? homeTeam.players
+    : []
+  const awayPlayers: BoxScorePlayer[] = Array.isArray(awayTeam?.players)
+    ? awayTeam.players
+    : []
+  if (homePlayers.some((player) => getPlayerId(player) === playerId))
+    return normalizeTricode(homeTeam?.teamTricode)
+  if (awayPlayers.some((player) => getPlayerId(player) === playerId))
+    return normalizeTricode(awayTeam?.teamTricode)
+  return null
 }
 
 const getPeriodLengthMs = (period: number): number =>
@@ -222,7 +331,7 @@ const getPlayerTargetInfo = (
 }
 
 const getPlayerPeriodStat = (
-  player: any,
+  player: BoxScorePlayer | null | undefined,
   period: number,
   statType: string
 ): number | null => {
@@ -232,7 +341,7 @@ const getPlayerPeriodStat = (
     player?.stats?.periods ||
     null
   if (!Array.isArray(periods)) return null
-  const entry = periods.find((p: any) => Number(p?.period) === period)
+  const entry = periods.find((p) => Number(p?.period) === period)
   if (!entry) return null
   const stats = entry.statistics || entry
   const key = String(statType || '').toUpperCase()
@@ -248,7 +357,10 @@ const getPlayerPeriodStat = (
   return null
 }
 
-const getPlayerGameStat = (player: any, statType: string): number | null => {
+const getPlayerGameStat = (
+  player: BoxScorePlayer | null | undefined,
+  statType: string
+): number | null => {
   const stats = player?.statistics
   if (!stats) return null
   const key = String(statType || '').toUpperCase()
@@ -264,7 +376,7 @@ const getPlayerGameStat = (player: any, statType: string): number | null => {
 }
 
 const getPlayerCurrentStat = (
-  player: any,
+  player: BoxScorePlayer | null | undefined,
   period: number,
   statType: string
 ): number | null => {
@@ -273,26 +385,26 @@ const getPlayerCurrentStat = (
   return getPlayerGameStat(player, statType)
 }
 
-const getStreakValue = (
-  map: Map<string, Map<number, number>> | Map<string, Map<string, number>>,
+const getStreakValue = <K extends number | string>(
+  map: Map<string, Map<K, number>>,
   gameId: string,
-  key: number | string
+  key: K
 ): number => {
   const gameMap = map.get(gameId)
   if (!gameMap) return 0
-  return (gameMap as Map<any, number>).get(key) ?? 0
+  return gameMap.get(key) ?? 0
 }
 
-const setStreakValue = (
-  map: Map<string, Map<number, number>> | Map<string, Map<string, number>>,
+const setStreakValue = <K extends number | string>(
+  map: Map<string, Map<K, number>>,
   gameId: string,
-  key: number | string,
+  key: K,
   value: number
 ) => {
-  let gameMap = map.get(gameId) as Map<any, number> | undefined
+  let gameMap = map.get(gameId)
   if (!gameMap) {
     gameMap = new Map()
-    map.set(gameId, gameMap as any)
+    map.set(gameId, gameMap)
   }
   gameMap.set(key, value)
 }
@@ -333,10 +445,7 @@ const updateStreaksForEvent = (gameId: string, event: EngineEvent) => {
 }
 
 const getEventTimeActualMs = (event: EngineEvent): number | null => {
-  const timeActual =
-    (event.context as any)?.raw?.timeActual ??
-    (event.context as any)?.timeActual ??
-    null
+  const timeActual = event.context?.raw?.timeActual ?? null
   if (typeof timeActual !== 'string') return null
   const parsed = Date.parse(timeActual)
   return Number.isFinite(parsed) ? parsed : null
@@ -378,19 +487,20 @@ const shouldSkipForLatency = (
   )
   if (!relevant.length) return false
   const context = questionPayload.resolutionContext ?? {}
-  const type = context.type
+  const type = asString(context.type) ?? ''
 
   const matchesEventType = (evt: EventType, expected: string) =>
     String(evt) === expected
 
   if (type === 'NEXT_EVENT') {
-    const expected = String(context.expectedEventType || '')
+    const expected = asString(context.expectedEventType) ?? ''
     if (!expected) return false
     return relevant.some((item) => {
       if (!matchesEventType(item.type, expected)) return false
-      if (context.playerId && item.playerId !== context.playerId) return false
-      if (context.teamTricode && item.teamTricode !== context.teamTricode)
-        return false
+      const playerId = asNumber(context.playerId)
+      if (playerId && item.playerId !== playerId) return false
+      const teamTricode = asString(context.teamTricode)
+      if (teamTricode && item.teamTricode !== teamTricode) return false
       return true
     })
   }
@@ -409,8 +519,7 @@ const shouldSkipForLatency = (
   }
 
   if (type === 'TEAM_POINTS_NEXT_N') {
-    const team =
-      context.team === 'HOME' ? context.homeTricode : context.awayTricode
+    const team = asString(context.teamTricode)
     return relevant.some((item) => {
       if (!isScoringEvent(item.type)) return false
       if (team && item.teamTricode !== team) return false
@@ -423,10 +532,12 @@ const shouldSkipForLatency = (
   }
 
   if (type === 'PLAYER_COMPARE_NEXT_N') {
-    const statType = String(context.statType || '').toUpperCase()
-    const playerIds = Array.isArray(context.playerIds) ? context.playerIds : []
+    const statType = (asString(context.statType) ?? '').toUpperCase()
+    const playerIds = asNumberArray(context.playerIds) ?? []
     const matchesPlayer = (item: (typeof relevant)[number]) =>
-      playerIds.length ? playerIds.includes(item.playerId) : true
+      playerIds.length
+        ? item.playerId !== null && playerIds.includes(item.playerId)
+        : true
     const eventMatchesStat = (evt: EventType) => {
       if (statType === 'POINTS') return isScoringEvent(evt)
       if (statType === 'THREES') return isMadeThree(evt)
@@ -490,7 +601,7 @@ const buildTeamThreeStreakTemplate = (opts: {
 const getStreakQuestionTemplates = (
   gameId: string,
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
   }
@@ -573,16 +684,16 @@ const getStreakQuestionTemplates = (
 
 const buildPlayerCompareTemplate = (
   template: QuestionTemplate,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   excludeIds?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
   },
   period?: number
 ): QuestionTemplate => {
-  const statType = template.resolutionContext?.statType ?? 'POINTS'
+  const statType = asString(template.resolutionContext?.statType) ?? 'POINTS'
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
-  const players: any[] = []
+  const players: BoxScorePlayer[] = []
   const homePlayers = homeTeam?.players
   const awayPlayers = awayTeam?.players
   if (Array.isArray(homePlayers)) players.push(...homePlayers)
@@ -613,7 +724,7 @@ const buildPlayerCompareTemplate = (
         statType
       )
     : filteredPool
-  const byStat = new Map<number, any[]>()
+  const byStat = new Map<number, BoxScorePlayer[]>()
   for (const player of candidatePool) {
     const stat = getPlayerCurrentStat(player, currentPeriod, statType)
     if (!Number.isFinite(stat)) continue
@@ -695,17 +806,50 @@ const MULTI_CHOICE_TEMPLATE_IDS = new Set([
   'PERIOD_PLAYER_COMPARE_ASSISTS',
   'PERIOD_PLAYER_COMPARE_REBOUNDS',
   'PERIOD_PLAYER_COMPARE_STEALS',
-  'PERIOD_PLAYER_COMPARE_BLOCKS',
   'PERIOD_PLAYER_COMPARE_THREES',
+  'TIMEOUT_NEXT_SCORE_TEAM',
+  'FOUL_NEXT_SCORE_TEAM',
   'NEXT_N_PLAYER_COMPARE_POINTS',
   'NEXT_N_PLAYER_COMPARE_ASSISTS',
   'NEXT_N_PLAYER_COMPARE_REBOUNDS',
-  'NEXT_N_PLAYER_COMPARE_STEALS',
   'NEXT_N_PLAYER_COMPARE_BLOCKS',
   'NEXT_N_PLAYER_COMPARE_THREES',
 ])
 
-const buildSignedQuestionPayload = (payload: Record<string, any>) => {
+const COMPARE_TEMPLATE_IDS = new Set([
+  'PERIOD_LEADER',
+  'PERIOD_LEADER_END',
+  'PERIOD_TEAM_COMPARE_THREES',
+  'PERIOD_TEAM_COMPARE_POINTS',
+  'PERIOD_TEAM_COMPARE_ASSISTS',
+  'PERIOD_TEAM_COMPARE_REBOUNDS',
+  'PERIOD_TEAM_COMPARE_STEALS',
+  'PERIOD_PLAYER_COMPARE_POINTS',
+  'PERIOD_PLAYER_COMPARE_ASSISTS',
+  'PERIOD_PLAYER_COMPARE_REBOUNDS',
+  'PERIOD_PLAYER_COMPARE_STEALS',
+  'PERIOD_PLAYER_COMPARE_THREES',
+  'NEXT_N_PLAYER_COMPARE_POINTS',
+  'NEXT_N_PLAYER_COMPARE_ASSISTS',
+  'NEXT_N_PLAYER_COMPARE_REBOUNDS',
+  'NEXT_N_PLAYER_COMPARE_BLOCKS',
+  'NEXT_N_PLAYER_COMPARE_THREES',
+])
+
+type SignedQuestionPayload = {
+  version: number
+  gameId: string
+  questionId: string
+  question: string
+  choices: { id: string; value: string }[]
+  timeoutAt: number
+  engineTag: string
+  windowType: QuestionWindowType
+  resolutionWindowMs: number | null
+  resolutionContext: ResolutionContext | null
+}
+
+const buildSignedQuestionPayload = (payload: SignedQuestionPayload) => {
   if (!QUESTION_SIGNATURE_SECRET) {
     throw new Error('Missing WHISTLE_JWT_SECRET')
   }
@@ -717,25 +861,29 @@ const buildSignedQuestionPayload = (payload: Record<string, any>) => {
 }
 
 const buildTeamTitle = (question: EngineQuestionPayload): string => {
-  const home = question.resolutionContext?.homeTricode
-  const away = question.resolutionContext?.awayTricode
+  const home = asString(question.resolutionContext?.homeTricode)
+  const away = asString(question.resolutionContext?.awayTricode)
   if (home && away) return `${home} vs ${away}`
   return 'New Question'
 }
 
-const buildQuestionChoices = (
+export const buildQuestionChoices = (
   question: EngineQuestionPayload
 ): { id: string; value: string }[] => {
-  if (Array.isArray(question.resolutionContext?.choices)) {
-    return question.resolutionContext.choices as { id: string; value: string }[]
+  const choices = asChoiceArray(question.resolutionContext?.choices)
+  const withTie = (entries: { id: string; value: string }[]) => {
+    if (!COMPARE_TEMPLATE_IDS.has(question.templateId)) return entries
+    if (entries.some((entry) => entry.id === 'tie')) return entries
+    return [...entries, { id: 'tie', value: 'Tie' }]
   }
+  if (choices) return withTie(choices)
   if (MULTI_CHOICE_TEMPLATE_IDS.has(question.templateId)) {
-    const home = question.resolutionContext?.homeTricode ?? 'HOME'
-    const away = question.resolutionContext?.awayTricode ?? 'AWAY'
-    return [
-      { id: 'home', value: String(home) },
-      { id: 'away', value: String(away) },
-    ]
+    const home = asString(question.resolutionContext?.homeTricode) ?? 'HOME'
+    const away = asString(question.resolutionContext?.awayTricode) ?? 'AWAY'
+    return withTie([
+      { id: String(home), value: String(home) },
+      { id: String(away), value: String(away) },
+    ])
   }
   return [
     { id: 'yes', value: 'Yes' },
@@ -839,7 +987,7 @@ const createAndSendEngineQuestion = async (
     },
   }
 
-  await admin.messaging().send(message as any)
+  await admin.messaging().send(message as Message)
 }
 
 type GroupScope = 'PERIOD' | 'HALF' | 'GAME'
@@ -899,10 +1047,6 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
     name: 'PLAYER_COMPARE_STEALS',
     scope: 'PERIOD',
   },
-  PERIOD_PLAYER_COMPARE_BLOCKS: {
-    name: 'PLAYER_COMPARE_BLOCKS',
-    scope: 'PERIOD',
-  },
   PERIOD_PLAYER_COMPARE_THREES: {
     name: 'PLAYER_COMPARE_THREES',
     scope: 'PERIOD',
@@ -919,10 +1063,6 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
     name: 'PLAYER_COMPARE_REBOUNDS',
     scope: 'PERIOD',
   },
-  NEXT_N_PLAYER_COMPARE_STEALS: {
-    name: 'PLAYER_COMPARE_STEALS',
-    scope: 'PERIOD',
-  },
   NEXT_N_PLAYER_COMPARE_BLOCKS: {
     name: 'PLAYER_COMPARE_BLOCKS',
     scope: 'PERIOD',
@@ -934,6 +1074,8 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
   PERIOD_PLAYER_THREE_STREAK: { name: 'PLAYER_THREE_STREAK', scope: 'PERIOD' },
   PERIOD_PLAYER_FG_STREAK: { name: 'PLAYER_FG_STREAK', scope: 'PERIOD' },
   PERIOD_TEAM_THREE_STREAK: { name: 'TEAM_THREE_STREAK', scope: 'PERIOD' },
+  TIMEOUT_NEXT_SCORE_TEAM: { name: 'NEXT_SCORE_TEAM', scope: 'PERIOD' },
+  FOUL_NEXT_SCORE_TEAM: { name: 'NEXT_SCORE_TEAM', scope: 'PERIOD' },
 }
 
 const getHalf = (period: number): number => (period <= 2 ? 1 : 2)
@@ -1019,43 +1161,9 @@ const markPlayerAsked = (
   })
 }
 
-const TIMEOUT_TEMPLATES: QuestionTemplate[] = [
-  {
-    id: 'TIMEOUT_TEAM_SCORE_AFTER',
-    text: 'After the timeout, will the home team score?',
-    weight: 2,
-    windowType: 'NEXT_N_MIN',
-    resolutionWindowMs: 90_000,
-    resolutionContext: { type: 'TEAM_SCORE_AFTER_TIMEOUT', team: 'HOME' },
-  },
-  {
-    id: 'TIMEOUT_FIRST_PLAY',
-    text: 'After the timeout, will the first play be a made field goal?',
-    weight: 2,
-    windowType: 'NEXT_EVENT',
-    resolutionWindowMs: null,
-    resolutionContext: { type: 'NEXT_EVENT', expectedEventType: 'MADE_FG' },
-  },
-]
+const TIMEOUT_TEMPLATES: QuestionTemplate[] = []
 
-const FOUL_TEMPLATES: QuestionTemplate[] = [
-  {
-    id: 'FOUL_TEAM_SCORE_AFTER_FT',
-    text: 'After the free throws, will the away team score on their next possession?',
-    weight: 2,
-    windowType: 'NEXT_EVENT',
-    resolutionWindowMs: null,
-    resolutionContext: { type: 'TEAM_SCORE_AFTER_FREETHROWS', team: 'AWAY' },
-  },
-  {
-    id: 'FOUL_FIRST_PLAY_AFTER_FT',
-    text: 'After the free throws, will the first play be a made field goal?',
-    weight: 2,
-    windowType: 'NEXT_EVENT',
-    resolutionWindowMs: null,
-    resolutionContext: { type: 'NEXT_EVENT', expectedEventType: 'MADE_FG' },
-  },
-]
+const FOUL_TEMPLATES: QuestionTemplate[] = []
 
 const PERIOD_START_TEMPLATES: QuestionTemplate[] = [
   {
@@ -1326,14 +1434,6 @@ const PLAYER_COMPARE_PERIOD_TEMPLATES: QuestionTemplate[] = [
     resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'STEALS' },
   },
   {
-    id: 'PERIOD_PLAYER_COMPARE_BLOCKS',
-    text: 'Who will record the most blocks this quarter?',
-    weight: 3,
-    windowType: 'PERIOD',
-    resolutionWindowMs: null,
-    resolutionContext: { type: 'PLAYER_COMPARE_PERIOD', statType: 'BLOCKS' },
-  },
-  {
     id: 'PERIOD_PLAYER_COMPARE_THREES',
     text: 'Who will hit the most 3-pointers this quarter?',
     weight: 3,
@@ -1358,13 +1458,349 @@ const weightedPick = <T extends { weight: number }>(items: T[]): T | null => {
 const shouldAskQuestion = (probability: number): boolean =>
   Math.random() < probability
 
+const SHOT_ATTEMPT_EVENT_TYPES = new Set([
+  EventType.MADE_FG,
+  EventType.MISSED_FG,
+  EventType.MADE_3,
+  EventType.MISSED_3,
+])
+const SCORING_EVENT_TYPES = new Set([
+  EventType.MADE_FG,
+  EventType.MADE_3,
+  EventType.MADE_FT,
+])
+
+const hasRecentTeamShotAttempt = (
+  gameId: string,
+  teamTricode: string | null,
+  nowMs: number
+): boolean => {
+  if (!teamTricode) return true
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      item.teamTricode &&
+      normalizeTricode(item.teamTricode) === normalizeTricode(teamTricode) &&
+      SHOT_ATTEMPT_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const hasRecentPlayerShotAttempt = (
+  gameId: string,
+  playerId: number,
+  nowMs: number
+): boolean => {
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      item.playerId === playerId &&
+      SHOT_ATTEMPT_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const hasRecentScore = (gameId: string, nowMs: number): boolean => {
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      SCORING_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const getFouledPlayerId = (event: EngineEvent): number | null => {
+  const secondary = event.context?.secondaryPlayerIds
+  if (Array.isArray(secondary) && secondary.length) return secondary[0] ?? null
+  return (
+    event.context?.shot?.shooterId ??
+    event.context?.freeThrow?.shooterId ??
+    event.context?.primaryPlayerId ??
+    null
+  )
+}
+
+const getPossessionTricode = (
+  event: EngineEvent,
+  boxScore: BoxScore | null
+): string | null => {
+  const possession = event.gameState?.possession
+  if (!possession) return normalizeTricode(getEventTeamTricode(event))
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  if (typeof possession === 'number') {
+    if (homeTeam?.teamId === possession)
+      return normalizeTricode(homeTeam?.teamTricode)
+    if (awayTeam?.teamId === possession)
+      return normalizeTricode(awayTeam?.teamTricode)
+  }
+  const asNumber = Number(possession)
+  if (Number.isFinite(asNumber)) {
+    if (homeTeam?.teamId === asNumber)
+      return normalizeTricode(homeTeam?.teamTricode)
+    if (awayTeam?.teamId === asNumber)
+      return normalizeTricode(awayTeam?.teamTricode)
+  }
+  if (typeof possession === 'string' && possession.length <= 4) {
+    return normalizeTricode(possession)
+  }
+  return normalizeTricode(getEventTeamTricode(event))
+}
+
+const getOpponentTricode = (
+  event: EngineEvent,
+  boxScore: BoxScore | null
+): string | null => {
+  const teamTricode = normalizeTricode(getEventTeamTricode(event))
+  if (!teamTricode) return null
+  const teamSide = resolveTeamSideByTricode(boxScore, teamTricode)
+  if (!teamSide) return null
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  return teamSide === 'HOME'
+    ? normalizeTricode(awayTeam?.teamTricode)
+    : normalizeTricode(homeTeam?.teamTricode)
+}
+
+const buildTimeoutTemplates = (
+  event: EngineEvent,
+  boxScore: BoxScore | null,
+  opts?: TriggerOptions,
+  gameId?: string
+): QuestionTemplate[] => {
+  const isLongTimeout = event.subType === NbaEventSubType.FULL
+  const timeActualMs = getEventTimeActualMs(event)
+  const canUseRecent = !!timeActualMs && !!gameId
+  if (isLongTimeout) {
+    const templates: QuestionTemplate[] = []
+    const possessionTricode = getPossessionTricode(event, boxScore)
+    if (possessionTricode) {
+      const canAskTeamScore = !canUseRecent
+        ? true
+        : !hasRecentTeamShotAttempt(gameId!, possessionTricode, timeActualMs!)
+      if (canAskTeamScore) {
+        templates.push({
+          id: 'TIMEOUT_POSSESSION_TEAM_SCORE',
+          text: `Will ${possessionTricode} score coming out of this timeout?`,
+          weight: 2,
+          windowType: 'NEXT_EVENT',
+          resolutionWindowMs: 90_000,
+          resolutionContext: {
+            type: 'TEAM_SCORE_AFTER_TIMEOUT',
+            teamTricode: possessionTricode,
+          },
+        })
+      }
+      if (canAskTeamScore) {
+        templates.push({
+          id: 'TIMEOUT_POSSESSION_TEAM_NEXT_THREE',
+          text: `Will ${possessionTricode} hit a 3 coming out of this timeout?`,
+          weight: 1,
+          windowType: 'NEXT_EVENT',
+          resolutionWindowMs: 90_000,
+          resolutionContext: {
+            type: 'NEXT_EVENT',
+            expectedEventType: 'MADE_3',
+            teamTricode: possessionTricode,
+          },
+        })
+      }
+    }
+    const canAskNextScore = !canUseRecent
+      ? true
+      : !hasRecentScore(gameId!, timeActualMs!)
+    if (canAskNextScore) {
+      templates.push({
+        id: 'TIMEOUT_NEXT_SCORE_TEAM',
+        text: 'Which team will score next?',
+        weight: 1,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_SCORE_TEAM',
+        },
+      })
+    }
+    if (canAskNextScore) {
+      templates.push({
+        id: 'TIMEOUT_NEXT_SHOT_THREE',
+        text: 'Will the next shot be a 3?',
+        weight: 1,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_EVENT',
+          expectedEventType: 'ATTEMPT_3',
+        },
+      })
+    }
+    return templates
+  }
+  const opponentTricode = getOpponentTricode(event, boxScore)
+  if (!opponentTricode) return []
+  const shouldAskAttempt = !canUseRecent
+    ? true
+    : !hasRecentTeamShotAttempt(gameId!, opponentTricode, timeActualMs!)
+  if (!shouldAskAttempt) return []
+  return [
+    {
+      id: 'TIMEOUT_OPP_TEAM_NEXT_ATTEMPT',
+      text: `Will ${opponentTricode} make their next shot?`,
+      weight: 2,
+      windowType: 'NEXT_EVENT',
+      resolutionWindowMs: 90_000,
+      resolutionContext: {
+        type: 'NEXT_EVENT',
+        expectedEventType: 'MADE_FG',
+        teamTricode: opponentTricode,
+      },
+    },
+  ]
+}
+
+const buildFoulTemplates = (
+  event: EngineEvent,
+  boxScore: BoxScore | null,
+  opts?: TriggerOptions,
+  gameId?: string
+): QuestionTemplate[] => {
+  const timeActualMs = getEventTimeActualMs(event)
+  if (!timeActualMs || !gameId) return []
+  const possessionTricode = getPossessionTricode(event, boxScore)
+  const opponentTricode = getOpponentTricode(event, boxScore)
+  const templates: QuestionTemplate[] = []
+  if (possessionTricode) {
+    if (!hasRecentTeamShotAttempt(gameId, possessionTricode, timeActualMs)) {
+      templates.push({
+        id: 'FOUL_TEAM_NEXT_SHOT',
+        text: `Will ${possessionTricode} make their next shot?`,
+        weight: 2,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_EVENT',
+          expectedEventType: 'MADE_FG',
+          teamTricode: possessionTricode,
+        },
+      })
+    }
+    if (!hasRecentTeamShotAttempt(gameId, possessionTricode, timeActualMs)) {
+      templates.push({
+        id: 'FOUL_TEAM_NEXT_THREE',
+        text: `Will ${possessionTricode} hit their next 3?`,
+        weight: 1,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_EVENT',
+          expectedEventType: 'MADE_3',
+          teamTricode: possessionTricode,
+        },
+      })
+    }
+  }
+  if (opponentTricode) {
+    if (!hasRecentTeamShotAttempt(gameId, opponentTricode, timeActualMs)) {
+      templates.push({
+        id: 'FOUL_OPP_TEAM_NEXT_SHOT',
+        text: `Will ${opponentTricode} make their next shot?`,
+        weight: 2,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_EVENT',
+          expectedEventType: 'MADE_FG',
+          teamTricode: opponentTricode,
+        },
+      })
+    }
+  }
+  const fouledPlayerId = getFouledPlayerId(event)
+  if (fouledPlayerId) {
+    const playersById = opts?.seasonProfiles?.playersById
+    const profile = playersById?.get(String(fouledPlayerId))
+    if (
+      profile?.isScoringCandidate &&
+      !hasRecentPlayerShotAttempt(gameId, fouledPlayerId, timeActualMs)
+    ) {
+      const playerName = getPlayerNameFromBoxScore(boxScore, fouledPlayerId)
+      const teamTricode = getPlayerTeamTricodeFromBoxScore(
+        fouledPlayerId,
+        boxScore
+      )
+      if (playerName && teamTricode) {
+        templates.push({
+          id: 'FOUL_PLAYER_NEXT_SHOT',
+          text: `Will ${playerName} hit their next shot?`,
+          weight: 1,
+          windowType: 'NEXT_EVENT',
+          resolutionWindowMs: 90_000,
+          resolutionContext: {
+            type: 'NEXT_EVENT',
+            expectedEventType: 'MADE_FG',
+            playerId: fouledPlayerId,
+            teamTricode,
+            cancelOnGameEnd: true,
+          },
+        })
+      }
+    }
+    if (
+      profile?.isThreeCandidate &&
+      !hasRecentPlayerShotAttempt(gameId, fouledPlayerId, timeActualMs)
+    ) {
+      const playerName = getPlayerNameFromBoxScore(boxScore, fouledPlayerId)
+      const teamTricode = getPlayerTeamTricodeFromBoxScore(
+        fouledPlayerId,
+        boxScore
+      )
+      if (playerName && teamTricode) {
+        templates.push({
+          id: 'FOUL_PLAYER_NEXT_THREE',
+          text: `Will ${playerName} hit their next 3?`,
+          weight: 1,
+          windowType: 'NEXT_EVENT',
+          resolutionWindowMs: 90_000,
+          resolutionContext: {
+            type: 'NEXT_EVENT',
+            expectedEventType: 'MADE_3',
+            playerId: fouledPlayerId,
+            teamTricode,
+            cancelOnGameEnd: true,
+          },
+        })
+      }
+    }
+  }
+  if (!hasRecentScore(gameId, timeActualMs)) {
+    templates.push({
+      id: 'FOUL_NEXT_SCORE_TEAM',
+      text: 'Which team will score next?',
+      weight: 1,
+      windowType: 'NEXT_EVENT',
+      resolutionWindowMs: 90_000,
+      resolutionContext: {
+        type: 'NEXT_SCORE_TEAM',
+      },
+    })
+  }
+  return templates
+}
+
 const isShootingFoulWithShots = (event: EngineEvent): boolean => {
   const desc = String(event.description || '').toLowerCase()
   const hasShots =
     desc.includes('2 shots') ||
     desc.includes('two shots') ||
     desc.includes('3 shots') ||
-    desc.includes('three shots')
+    desc.includes('three shots') ||
+    desc.includes('2 ft') ||
+    desc.includes('3 ft') ||
+    desc.includes('2 free throw') ||
+    desc.includes('3 free throw') ||
+    desc.includes('two free throw') ||
+    desc.includes('three free throw')
   const isShooting =
     event.subType === NbaEventSubType.SHOOTING || desc.includes('shooting')
   return isShooting && hasShots
@@ -1403,7 +1839,9 @@ const buildPeriodThreeTemplate = (
   }
 }
 
-const getBoxScoreTeams = (boxScore: Record<string, any> | null) => {
+const getBoxScoreTeams = (
+  boxScore: BoxScore | null
+): { homeTeam: BoxScoreTeam | null; awayTeam: BoxScoreTeam | null } => {
   const game = boxScore?.game
   return {
     homeTeam: game?.homeTeam ?? boxScore?.homeTeam ?? null,
@@ -1413,14 +1851,18 @@ const getBoxScoreTeams = (boxScore: Record<string, any> | null) => {
 
 const buildTeamStatTemplate = (
   template: QuestionTemplate,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   seasonProfiles?: {
     teamsById: Map<string, TeamSeasonProfile>
   }
 ): QuestionTemplate => {
-  const statType = template.resolutionContext?.statType ?? 'REBOUNDS'
+  const statType = asString(template.resolutionContext?.statType) ?? 'REBOUNDS'
   const team = pickFrom(['HOME', 'AWAY'] as const)
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const teamTricode =
+    team === 'HOME'
+      ? (homeTeam?.teamTricode ?? null)
+      : (awayTeam?.teamTricode ?? null)
   const teamId =
     team === 'HOME' ? (homeTeam?.teamId ?? null) : (awayTeam?.teamId ?? null)
   const profile = teamId
@@ -1453,12 +1895,14 @@ const buildTeamStatTemplate = (
         : statType === 'THREES'
           ? '3-pointers'
           : 'rebounds'
+  const resolutionContext = { ...(template.resolutionContext ?? {}) }
+  delete (resolutionContext as { team?: string }).team
   return {
     ...template,
     text: `Will the ${team === 'HOME' ? 'home team' : 'away team'} record ${target}+ ${label} this quarter?`,
     resolutionContext: {
-      ...(template.resolutionContext ?? {}),
-      team,
+      ...resolutionContext,
+      teamTricode: teamTricode ?? null,
       target,
     },
   }
@@ -1466,13 +1910,17 @@ const buildTeamStatTemplate = (
 
 const buildTeamPointsTemplate = (
   template: QuestionTemplate,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   seasonProfiles?: {
     teamsById: Map<string, TeamSeasonProfile>
   }
 ): QuestionTemplate => {
-  const team = template.resolutionContext?.team ?? 'HOME'
+  const team = asString(template.resolutionContext?.team) ?? 'HOME'
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const teamTricode =
+    team === 'HOME'
+      ? (homeTeam?.teamTricode ?? null)
+      : (awayTeam?.teamTricode ?? null)
   const teamId =
     team === 'HOME' ? (homeTeam?.teamId ?? null) : (awayTeam?.teamId ?? null)
   const profile = teamId
@@ -1482,20 +1930,23 @@ const buildTeamPointsTemplate = (
   const target =
     typeof avg === 'number' && avg > 0
       ? Math.max(1, Math.ceil(avg / 4))
-      : (template.resolutionContext?.target ?? 25)
+      : (asNumber(template.resolutionContext?.target) ?? 25)
+  const resolutionContext = { ...(template.resolutionContext ?? {}) }
+  delete (resolutionContext as { team?: string }).team
   return {
     ...template,
     text: `Will the ${team === 'HOME' ? 'home team' : 'away team'} score ${target}+ this quarter?`,
     resolutionContext: {
-      ...(template.resolutionContext ?? {}),
+      ...resolutionContext,
       target,
+      teamTricode: teamTricode ?? null,
     },
   }
 }
 
 const buildPlayerMilestoneTemplate = (
   template: QuestionTemplate,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   excludeIds?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
@@ -1504,7 +1955,7 @@ const buildPlayerMilestoneTemplate = (
   clockMs?: number | null
 ): QuestionTemplate => {
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
-  const players: any[] = []
+  const players: BoxScorePlayer[] = []
   const homePlayers = homeTeam?.players
   const awayPlayers = awayTeam?.players
   if (Array.isArray(homePlayers)) players.push(...homePlayers)
@@ -1522,15 +1973,16 @@ const buildPlayerMilestoneTemplate = (
         return id === null ? true : !excludeIds.has(id)
       })
     : pool
-  const statType = template.resolutionContext?.statType ?? 'POINTS'
+  const statType = asString(template.resolutionContext?.statType) ?? 'POINTS'
   const currentPeriod =
     period ??
     boxScore?.period ??
     boxScore?.game?.period ??
     boxScore?.gamePeriod ??
     1
-  const increment = Number(template.resolutionContext?.increment ?? 0)
-  const requiresCurrent = template.resolutionContext?.requiresCurrent === true
+  const increment = asNumber(template.resolutionContext?.increment) ?? 0
+  const requiresCurrent =
+    asBoolean(template.resolutionContext?.requiresCurrent) === true
   const pickPool = filteredPool.filter((player) => {
     const id = getPlayerId(player)
     if (!id) return true
@@ -1574,16 +2026,44 @@ const buildPlayerMilestoneTemplate = (
           typeof choice?.lastName === 'string'
         ? `${choice.firstName} ${choice.lastName}`
         : null
-  const teamTricode =
+  const rawTeamId =
+    typeof choice?.teamId === 'number'
+      ? choice.teamId
+      : typeof choice?.teamId === 'string'
+        ? Number(choice.teamId)
+        : null
+  const rawNestedTeamId =
+    typeof choice?.team?.teamId === 'number'
+      ? choice.team.teamId
+      : typeof choice?.team?.teamId === 'string'
+        ? Number(choice.team.teamId)
+        : null
+  const teamTricode = normalizeTricode(
     typeof choice?.teamTricode === 'string'
       ? choice.teamTricode
       : typeof choice?.teamAbbreviation === 'string'
         ? choice.teamAbbreviation
-        : choice?.teamId === homeTeam?.teamId
+        : rawTeamId !== null && rawTeamId === homeTeam?.teamId
           ? (homeTeam?.teamTricode ?? null)
-          : choice?.teamId === awayTeam?.teamId
+          : rawTeamId !== null && rawTeamId === awayTeam?.teamId
             ? (awayTeam?.teamTricode ?? null)
-            : null
+            : rawNestedTeamId !== null && rawNestedTeamId === homeTeam?.teamId
+              ? (homeTeam?.teamTricode ?? null)
+              : rawNestedTeamId !== null && rawNestedTeamId === awayTeam?.teamId
+                ? (awayTeam?.teamTricode ?? null)
+                : null
+  )
+  const resolvedTeamTricode =
+    teamTricode ??
+    (playerId &&
+    Array.isArray(homePlayers) &&
+    homePlayers.some((player) => getPlayerId(player) === playerId)
+      ? (homeTeam?.teamTricode ?? null)
+      : playerId &&
+          Array.isArray(awayPlayers) &&
+          awayPlayers.some((player) => getPlayerId(player) === playerId)
+        ? (awayTeam?.teamTricode ?? null)
+        : null)
   const isActiveChoice = !!choice
     ? active.some((player) => {
         const id = getPlayerId(player)
@@ -1627,7 +2107,7 @@ const buildPlayerMilestoneTemplate = (
   const target =
     Number.isFinite(currentStat) && increment > 0
       ? Math.max(1, Number(currentStat) + increment)
-      : (perQuarterTarget ?? template.resolutionContext?.target ?? 10)
+      : (perQuarterTarget ?? asNumber(template.resolutionContext?.target) ?? 10)
   if (playerId) {
     const periodStat = currentStat
     if (periodStat !== null && Number.isFinite(target)) {
@@ -1665,7 +2145,7 @@ const buildPlayerMilestoneTemplate = (
       ...(template.resolutionContext ?? {}),
       playerId,
       playerName,
-      teamTricode,
+      teamTricode: resolvedTeamTricode,
       statType,
       target,
       selectionReason,
@@ -1673,10 +2153,7 @@ const buildPlayerMilestoneTemplate = (
   }
 }
 
-const resolveTeamText = (
-  text: string,
-  boxScore: Record<string, any> | null
-): string => {
+const resolveTeamText = (text: string, boxScore: BoxScore | null): string => {
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
   const homeTricode = homeTeam?.teamTricode
   const awayTricode = awayTeam?.teamTricode
@@ -1694,7 +2171,7 @@ const resolveTeamText = (
 
 const resolveTemplate = (
   template: QuestionTemplate,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   playerExclude?: Set<number>,
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
@@ -1753,7 +2230,7 @@ const resolveTemplate = (
 const buildQuestionPayload = (
   template: QuestionTemplate,
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   triggerReason: string,
   playerExclude?: Set<number>,
   seasonProfiles?: {
@@ -1777,28 +2254,28 @@ const buildQuestionPayload = (
     resolutionWindowMs
   )
   let questionText = resolvedTemplate.text
-  if (
-    resolutionContext?.type === 'PLAYER_COMPARE_NEXT_N' &&
-    resolutionContext?.minutes
-  ) {
-    questionText = questionText.replace(
-      /\{minutes\}/gi,
-      String(resolutionContext.minutes)
-    )
+  if (resolutionContext?.type === 'PLAYER_COMPARE_NEXT_N') {
+    const minutes = asNumber(resolutionContext?.minutes)
+    if (minutes !== null) {
+      questionText = questionText.replace(/\{minutes\}/gi, String(minutes))
+    }
   }
   if (
-    resolutionContext?.requiresTrailing &&
-    resolutionContext?.trailingTricode
+    asBoolean(resolutionContext?.requiresTrailing) &&
+    asString(resolutionContext?.trailingTricode)
   ) {
     questionText = questionText.replace(
       /team behind/gi,
-      String(resolutionContext.trailingTricode)
+      String(asString(resolutionContext?.trailingTricode))
     )
   }
-  if (resolutionContext?.requiresLeading && resolutionContext?.leadingTricode) {
+  if (
+    asBoolean(resolutionContext?.requiresLeading) &&
+    asString(resolutionContext?.leadingTricode)
+  ) {
     questionText = questionText.replace(
       /leading team/gi,
-      String(resolutionContext.leadingTricode)
+      String(asString(resolutionContext?.leadingTricode))
     )
   }
   return {
@@ -1808,9 +2285,8 @@ const buildQuestionPayload = (
     timeoutMs: QUESTION_TIMEOUT_MS,
     resolutionWindowMs,
     resolutionContext,
-    selectionReason: Array.isArray(resolutionContext?.selectionReason)
-      ? resolutionContext.selectionReason
-      : undefined,
+    selectionReason:
+      asSelectionReasons(resolutionContext?.selectionReason) ?? undefined,
     trigger: triggerReason,
     period: event.gameState?.period ?? 0,
     clockMs: event.gameState?.clockMs ?? 0,
@@ -1832,7 +2308,7 @@ const buildSyntheticEvent = (gameState: EngineGameState): EngineEvent => ({
 export const triggerGameStartQuestions = (
   gameId: string,
   gameState: EngineGameState,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   opts?: TriggerOptions
 ): EngineQuestionPayload[] => {
   if (GAME_START_ASKED_BY_GAME.has(gameId)) return []
@@ -1895,7 +2371,7 @@ export const triggerGameStartQuestions = (
 export const scheduleGameStartQuestions = (
   gameId: string,
   gameState: EngineGameState,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   opts?: TriggerOptions & {
     winnerDelayMs?: { min: number; max: number }
     jumpBallDelayMs?: { min: number; max: number }
@@ -2003,7 +2479,7 @@ const getTeamScore = (
 }
 
 const getTeamStat = (
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   team: 'HOME' | 'AWAY',
   statType: string
 ): number | null => {
@@ -2021,12 +2497,32 @@ const getTeamStat = (
   return null
 }
 
+const normalizeTricode = (value: string | null | undefined): string | null => {
+  if (!value) return null
+  return value.trim().toUpperCase()
+}
+
+const resolveTeamSideByTricode = (
+  boxScore: BoxScore | null,
+  tricode: string | null | undefined
+): 'HOME' | 'AWAY' | null => {
+  const code = normalizeTricode(tricode)
+  if (!code) return null
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const homeCode = normalizeTricode(homeTeam?.teamTricode)
+  const awayCode = normalizeTricode(awayTeam?.teamTricode)
+  if (homeCode && code === homeCode) return 'HOME'
+  if (awayCode && code === awayCode) return 'AWAY'
+  return null
+}
+
 const buildResolutionContext = (
   template: QuestionTemplate,
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   resolutionWindowMs: number | null
-): Record<string, any> => {
+): ResolutionContext => {
+  const statBoxScore = event.gameState?.boxScore ?? null
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
   const homeTricode =
     homeTeam?.teamTricode ??
@@ -2036,6 +2532,9 @@ const buildResolutionContext = (
     awayTeam?.teamTricode ??
     event.gameState?.boxScore?.awayTeam?.teamTricode ??
     null
+  const templateTeamTricode = normalizeTricode(
+    asString(template.resolutionContext?.teamTricode)
+  )
   const base = {
     ...template.resolutionContext,
     startEventId: event.eventId,
@@ -2046,54 +2545,96 @@ const buildResolutionContext = (
     homeTricode,
     awayTricode,
   }
+  if ('team' in base) {
+    delete (base as { team?: string }).team
+  }
 
   switch (template.resolutionContext?.type) {
     case 'TOTAL_POINTS_NEXT_N': {
       const home = coerceScore(event.gameState?.scoreHome) ?? 0
       const away = coerceScore(event.gameState?.scoreAway) ?? 0
       const currentTotal = home + away
+      const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
         ...base,
-        minTotalScore: currentTotal + (template.resolutionContext?.target ?? 0),
+        startTotal: currentTotal,
+        minTotalScore: currentTotal + target,
       }
     }
     case 'TEAM_POINTS_NEXT_N':
     case 'TEAM_POINTS_REST_PERIOD':
     case 'TEAM_POINTS_THIS_PERIOD': {
-      const team = template.resolutionContext?.team ?? 'HOME'
-      const current = getTeamScore(event, team) ?? 0
+      const teamContext =
+        templateTeamTricode ??
+        asString(template.resolutionContext?.team) ??
+        'HOME'
+      const teamSide = templateTeamTricode
+        ? resolveTeamSideByTricode(boxScore, templateTeamTricode)
+        : teamContext === 'HOME' || teamContext === 'AWAY'
+          ? teamContext
+          : resolveTeamSideByTricode(boxScore, teamContext)
+      const teamTricode = templateTeamTricode
+        ? templateTeamTricode
+        : teamSide === 'HOME'
+          ? homeTricode
+          : teamSide === 'AWAY'
+            ? awayTricode
+            : normalizeTricode(teamContext)
+      const current = teamSide ? (getTeamScore(event, teamSide) ?? 0) : 0
+      const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
         ...base,
-        team,
-        minTeamScore: current + (template.resolutionContext?.target ?? 0),
+        teamTricode,
+        minTeamScore: current + target,
       }
     }
     case 'TEAM_STAT_THIS_PERIOD': {
-      const team = template.resolutionContext?.team ?? 'HOME'
-      const statType = template.resolutionContext?.statType ?? null
-      const current = getTeamStat(boxScore, team, statType) ?? 0
+      const teamContext =
+        templateTeamTricode ??
+        asString(template.resolutionContext?.team) ??
+        'HOME'
+      const teamSide = templateTeamTricode
+        ? resolveTeamSideByTricode(boxScore, templateTeamTricode)
+        : teamContext === 'HOME' || teamContext === 'AWAY'
+          ? teamContext
+          : resolveTeamSideByTricode(boxScore, teamContext)
+      const teamTricode = templateTeamTricode
+        ? templateTeamTricode
+        : teamSide === 'HOME'
+          ? homeTricode
+          : teamSide === 'AWAY'
+            ? awayTricode
+            : normalizeTricode(teamContext)
+      const statType = asString(template.resolutionContext?.statType)
+      const current =
+        teamSide && statType
+          ? (getTeamStat(statBoxScore, teamSide, statType) ?? 0)
+          : 0
+      const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
         ...base,
-        team,
+        teamTricode,
         statType,
-        minTeamStat: current + (template.resolutionContext?.target ?? 0),
+        startTeamStat: current,
+        minTeamStat: current + target,
       }
     }
     case 'BOTH_TEAMS_10_REST_PERIOD': {
       const home = getTeamScore(event, 'HOME') ?? 0
       const away = getTeamScore(event, 'AWAY') ?? 0
+      const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
         ...base,
-        minHomeScore: home + (template.resolutionContext?.target ?? 0),
-        minAwayScore: away + (template.resolutionContext?.target ?? 0),
+        minHomeScore: home + target,
+        minAwayScore: away + target,
       }
     }
     case 'MADE_3_COUNT_NEXT_N': {
-      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES') ?? null
-      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES') ?? null
+      const homeThrees = getTeamStat(statBoxScore, 'HOME', 'THREES') ?? null
+      const awayThrees = getTeamStat(statBoxScore, 'AWAY', 'THREES') ?? null
       return {
         ...base,
-        minMade3Count: template.resolutionContext?.target ?? 0,
+        minMade3Count: asNumber(template.resolutionContext?.target) ?? 0,
         windowMs: resolutionWindowMs,
         startHomeThrees: homeThrees,
         startAwayThrees: awayThrees,
@@ -2109,12 +2650,12 @@ const buildResolutionContext = (
     }
     case 'ANY_3_THIS_PERIOD':
     case 'THREE_COUNT_THIS_PERIOD': {
-      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES') ?? null
-      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES') ?? null
+      const homeThrees = getTeamStat(statBoxScore, 'HOME', 'THREES') ?? null
+      const awayThrees = getTeamStat(statBoxScore, 'AWAY', 'THREES') ?? null
       return {
         ...base,
         endPeriod: base.startPeriod,
-        minMade3Count: template.resolutionContext?.target ?? 0,
+        minMade3Count: asNumber(template.resolutionContext?.target) ?? 0,
         startHomeThrees: homeThrees,
         startAwayThrees: awayThrees,
       }
@@ -2128,7 +2669,6 @@ const buildResolutionContext = (
         return {
           ...base,
           endPeriod: base.startPeriod,
-          trailingTeam: leader === 'HOME' ? 'AWAY' : 'HOME',
           trailingTricode,
           leaderTricode,
         }
@@ -2139,7 +2679,6 @@ const buildResolutionContext = (
         return {
           ...base,
           endPeriod: base.startPeriod,
-          leadingTeam: leader,
           leadingTricode: leaderTricode,
           leaderTricode,
         }
@@ -2153,18 +2692,18 @@ const buildResolutionContext = (
       return {
         ...base,
         endPeriod: base.startPeriod,
-        statType: template.resolutionContext?.statType ?? null,
+        statType: asString(template.resolutionContext?.statType),
         minHomeStat:
           getTeamStat(
-            boxScore,
+            statBoxScore,
             'HOME',
-            template.resolutionContext?.statType ?? ''
+            asString(template.resolutionContext?.statType) ?? ''
           ) ?? 0,
         minAwayStat:
           getTeamStat(
-            boxScore,
+            statBoxScore,
             'AWAY',
-            template.resolutionContext?.statType ?? ''
+            asString(template.resolutionContext?.statType) ?? ''
           ) ?? 0,
       }
     }
@@ -2172,24 +2711,23 @@ const buildResolutionContext = (
       return {
         ...base,
         endPeriod: base.startPeriod,
-        target: template.resolutionContext?.target ?? null,
-        playerId: template.resolutionContext?.playerId ?? null,
+        target: asNumber(template.resolutionContext?.target),
+        playerId: asNumber(template.resolutionContext?.playerId),
       }
     }
     case 'PLAYER_COMPARE_PERIOD': {
       return {
         ...base,
         endPeriod: base.startPeriod,
-        statType: template.resolutionContext?.statType ?? null,
-        playerIds: template.resolutionContext?.playerIds ?? [],
-        choices: template.resolutionContext?.choices ?? [],
-        tiedStatValue: template.resolutionContext?.tiedStatValue ?? null,
+        statType: asString(template.resolutionContext?.statType),
+        playerIds: asNumberArray(template.resolutionContext?.playerIds) ?? [],
+        choices: asChoiceArray(template.resolutionContext?.choices) ?? [],
+        tiedStatValue: asNumber(template.resolutionContext?.tiedStatValue),
       }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
-      const playerIds = Array.isArray(template.resolutionContext?.playerIds)
-        ? template.resolutionContext?.playerIds
-        : []
+      const playerIds =
+        asNumberArray(template.resolutionContext?.playerIds) ?? []
       const startPlayerStats: Record<string, number> = {}
       if (playerIds.length) {
         for (const playerId of playerIds) {
@@ -2197,7 +2735,7 @@ const buildResolutionContext = (
           if (!player) continue
           const stat = getPlayerGameStat(
             player,
-            template.resolutionContext?.statType ?? ''
+            asString(template.resolutionContext?.statType) ?? ''
           )
           if (stat === null || Number.isNaN(stat)) continue
           startPlayerStats[String(playerId)] = stat
@@ -2205,23 +2743,38 @@ const buildResolutionContext = (
       }
       return {
         ...base,
-        statType: template.resolutionContext?.statType ?? null,
-        minutes: template.resolutionContext?.minutes ?? null,
+        statType: asString(template.resolutionContext?.statType),
+        minutes: asNumber(template.resolutionContext?.minutes),
         windowMs: resolutionWindowMs,
-        playerIds: template.resolutionContext?.playerIds ?? [],
-        choices: template.resolutionContext?.choices ?? [],
-        tiedStatValue: template.resolutionContext?.tiedStatValue ?? null,
+        playerIds,
+        choices: asChoiceArray(template.resolutionContext?.choices) ?? [],
+        tiedStatValue: asNumber(template.resolutionContext?.tiedStatValue),
         startPlayerStats:
           Object.keys(startPlayerStats).length > 0 ? startPlayerStats : null,
       }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT':
     case 'TEAM_SCORE_AFTER_FREETHROWS': {
-      const team = template.resolutionContext?.team ?? 'HOME'
-      const current = getTeamScore(event, team) ?? 0
+      const teamContext =
+        templateTeamTricode ??
+        asString(template.resolutionContext?.team) ??
+        'HOME'
+      const teamSide = templateTeamTricode
+        ? resolveTeamSideByTricode(boxScore, templateTeamTricode)
+        : teamContext === 'HOME' || teamContext === 'AWAY'
+          ? teamContext
+          : resolveTeamSideByTricode(boxScore, teamContext)
+      const teamTricode = templateTeamTricode
+        ? templateTeamTricode
+        : teamSide === 'HOME'
+          ? homeTricode
+          : teamSide === 'AWAY'
+            ? awayTricode
+            : normalizeTricode(teamContext)
+      const current = teamSide ? (getTeamScore(event, teamSide) ?? 0) : 0
       return {
         ...base,
-        team,
+        teamTricode,
         minTeamScore: current + 1,
         windowMs: resolutionWindowMs,
       }
@@ -2229,8 +2782,9 @@ const buildResolutionContext = (
     case 'NEXT_EVENT': {
       return {
         ...base,
-        expectedEventType:
-          template.resolutionContext?.expectedEventType ?? null,
+        expectedEventType: asString(
+          template.resolutionContext?.expectedEventType
+        ),
         windowMs: resolutionWindowMs,
       }
     }
@@ -2328,18 +2882,6 @@ const getThresholdQuestionTemplates = (
           type: 'PLAYER_COMPARE_NEXT_N',
           minutes,
           statType: 'REBOUNDS',
-        },
-      },
-      {
-        id: 'NEXT_N_PLAYER_COMPARE_STEALS',
-        text: 'Who will record the most steals in the next {minutes} minutes?',
-        weight: 1,
-        windowType: 'NEXT_N_MIN',
-        resolutionWindowMs: windowMs,
-        resolutionContext: {
-          type: 'PLAYER_COMPARE_NEXT_N',
-          minutes,
-          statType: 'STEALS',
         },
       },
       {
@@ -2468,7 +3010,7 @@ const getThresholdQuestionTemplates = (
 export const triggerBasketballQuestion = async (
   gameId: string,
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   opts?: TriggerOptions
 ): Promise<EngineQuestionPayload | null> => {
   const now = opts?.nowMs ?? Date.now()
@@ -2544,9 +3086,17 @@ export const triggerBasketballQuestion = async (
   const elapsedMinutes = Math.floor(elapsedSeconds / 60)
   const elapsedSecondsRemainder = elapsedSeconds % 60
   const elapsedLabel = `${elapsedMinutes}:${String(elapsedSecondsRemainder).padStart(2, '0')}`
+  const foulCooldownMs = 60_000
+  const timeoutCooldownMs = 60_000
+  const bypassCooldown =
+    (triggerReason === 'timeout' &&
+      (!lastAskedAt || now - lastAskedAt >= timeoutCooldownMs)) ||
+    (triggerReason === 'foul' &&
+      (!lastAskedAt || now - lastAskedAt >= foulCooldownMs))
 
   if (
     triggerReason !== 'period_start' &&
+    !bypassCooldown &&
     !opts?.bypassCooldown &&
     lastAskedAt &&
     now - lastAskedAt < cooldownMs
@@ -2564,7 +3114,9 @@ export const triggerBasketballQuestion = async (
     return null
   }
 
-  const jitteredProbability = triggerProbability * (0.2 + Math.random() * 0.8)
+  let jitteredProbability = triggerProbability * (0.2 + Math.random() * 0.8)
+  if (triggerReason === 'foul' && bypassCooldown) jitteredProbability = 1
+  if (triggerReason === 'timeout' && bypassCooldown) jitteredProbability = 1
   const canAsk = shouldAskQuestion(jitteredProbability)
 
   if (!canAsk) {
@@ -2596,21 +3148,16 @@ export const triggerBasketballQuestion = async (
   ]
 
   if (triggerReason === 'timeout') {
-    candidates = [
-      ...streakTemplates,
-      ...TIMEOUT_TEMPLATES,
-      ...PLAYER_TEMPLATES,
-      ...playerCompareTemplates,
-      ...(inSecondHalf ? LATE_PERIOD_PLAYER_TEMPLATES : []),
-    ]
+    const timeoutTemplates = buildTimeoutTemplates(
+      event,
+      boxScore,
+      opts,
+      gameId
+    )
+    candidates = [...timeoutTemplates]
   } else if (triggerReason === 'foul') {
-    candidates = [
-      ...streakTemplates,
-      ...FOUL_TEMPLATES,
-      ...PLAYER_TEMPLATES,
-      ...playerCompareTemplates,
-      ...(inSecondHalf ? LATE_PERIOD_PLAYER_TEMPLATES : []),
-    ]
+    const foulTemplates = buildFoulTemplates(event, boxScore, opts, gameId)
+    candidates = [...foulTemplates]
   } else if (triggerReason === 'period_start') {
     const margin = getScoreMargin(event) ?? 0
     candidates =
@@ -2647,10 +3194,11 @@ export const triggerBasketballQuestion = async (
       getUsedPlayerIds(gameId),
       opts?.seasonProfiles
     )
-    const invalidResolution = !!nextPayload.resolutionContext?.invalid
+    const invalidResolution =
+      asBoolean(nextPayload.resolutionContext?.invalid) === true
     const missingPlayer =
       PLAYER_TEMPLATE_IDS.has(template.id) &&
-      !nextPayload.resolutionContext?.playerId
+      asNumber(nextPayload.resolutionContext?.playerId) === null
     const latencySkip = shouldSkipForLatency(gameId, event, nextPayload)
     const invalid = invalidResolution || missingPlayer || latencySkip
 
@@ -2665,13 +3213,13 @@ export const triggerBasketballQuestion = async (
       continue
     }
 
-    if (
-      PLAYER_TEMPLATE_IDS.has(template.id) &&
-      nextPayload.resolutionContext?.playerId
-    ) {
-      const lastAsked = PLAYER_USAGE_BY_GAME.get(gameId)?.get(
-        nextPayload.resolutionContext.playerId
-      )
+    if (PLAYER_TEMPLATE_IDS.has(template.id)) {
+      const playerId = asNumber(nextPayload.resolutionContext?.playerId)
+      if (!playerId) {
+        questionPayload = nextPayload
+        break
+      }
+      const lastAsked = PLAYER_USAGE_BY_GAME.get(gameId)?.get(playerId)
       const selectionReason = nextPayload.selectionReason
         ? [...nextPayload.selectionReason]
         : []
@@ -2708,47 +3256,46 @@ export const triggerBasketballQuestion = async (
       )}`
     )
   }
+  const payloadPlayerId = asNumber(questionPayload.resolutionContext?.playerId)
   if (PLAYER_TEMPLATE_IDS.has(template.id)) {
     markPlayerAsked(
       gameId,
       period,
       event.gameState?.clockMs ?? 0,
-      questionPayload.resolutionContext?.playerId
+      payloadPlayerId
     )
   }
-  if (
-    questionPayload.resolutionContext?.playerId &&
-    !PLAYER_TEMPLATE_IDS.has(template.id)
-  ) {
+  if (payloadPlayerId && !PLAYER_TEMPLATE_IDS.has(template.id)) {
     markPlayerAsked(
       gameId,
       period,
       event.gameState?.clockMs ?? 0,
-      questionPayload.resolutionContext.playerId
+      payloadPlayerId
     )
   }
-  if (Array.isArray(questionPayload.resolutionContext?.playerIds)) {
-    for (const id of questionPayload.resolutionContext.playerIds) {
-      if (typeof id !== 'number') continue
+  const payloadPlayerIds = asNumberArray(
+    questionPayload.resolutionContext?.playerIds
+  )
+  if (payloadPlayerIds) {
+    for (const id of payloadPlayerIds) {
       markPlayerAsked(gameId, period, event.gameState?.clockMs ?? 0, id)
     }
   }
   markGroup(gameId, period, QUESTION_GROUPS[template.id])
   return questionPayload
 }
-
 type QuestionResolutionDecision = {
   state: 'resolved' | 'cancelled'
   answer: string | null
 }
 
-const getEventPlayerId = (event: EngineEvent): number | null =>
+export const getEventPlayerId = (event: EngineEvent): number | null =>
   event.context?.shot?.shooterId ??
   event.context?.freeThrow?.shooterId ??
   event.context?.primaryPlayerId ??
   null
 
-const getEventTeamTricode = (event: EngineEvent): string | null =>
+export const getEventTeamTricode = (event: EngineEvent): string | null =>
   event.context?.shot?.teamTricode ??
   event.context?.freeThrow?.teamTricode ??
   event.context?.teamTricode ??
@@ -2767,16 +3314,16 @@ const normalizeCode = (value: string | null | undefined): string | null => {
 
 const resolveTeamSide = (
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
-  context: Record<string, any>
+  boxScore: BoxScore | null,
+  context: ResolutionContext
 ): 'HOME' | 'AWAY' | null => {
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
   const homeTricode =
-    normalizeCode(context.homeTricode) ??
+    normalizeCode(asString(context.homeTricode)) ??
     normalizeCode(homeTeam?.teamTricode) ??
     normalizeCode(event.gameState?.boxScore?.homeTeam?.teamTricode)
   const awayTricode =
-    normalizeCode(context.awayTricode) ??
+    normalizeCode(asString(context.awayTricode)) ??
     normalizeCode(awayTeam?.teamTricode) ??
     normalizeCode(event.gameState?.boxScore?.awayTeam?.teamTricode)
   const eventTricode = normalizeCode(getEventTeamTricode(event))
@@ -2790,7 +3337,7 @@ const resolveTeamSide = (
 
 const getCurrentScore = (
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   team: 'HOME' | 'AWAY'
 ): number | null => {
   const stateScore =
@@ -2812,6 +3359,8 @@ const isScoringEvent = (type: EventType) =>
 const matchesExpectedEvent = (type: EventType, expected: string): boolean => {
   if (expected === 'MADE_FG')
     return type === EventType.MADE_FG || type === EventType.MADE_3
+  if (expected === 'ATTEMPT_3')
+    return type === EventType.MADE_3 || type === EventType.MISSED_3
   return String(type) === expected
 }
 
@@ -2820,10 +3369,12 @@ const isMissForExpected = (type: EventType, expected: string): boolean => {
     return type === EventType.MISSED_FG || type === EventType.MISSED_3
   if (expected === 'MADE_3') return type === EventType.MISSED_3
   if (expected === 'MADE_FT') return type === EventType.MISSED_FT
+  if (expected === 'ATTEMPT_3')
+    return type === EventType.MADE_FG || type === EventType.MISSED_FG
   return false
 }
 
-const isFinalStatus = (boxScore: Record<string, any> | null): boolean => {
+const isFinalStatus = (boxScore: BoxScore | null): boolean => {
   const status = boxScore?.gameStatus ?? boxScore?.game?.gameStatus
   const statusText = String(
     boxScore?.gameStatusText ?? boxScore?.game?.gameStatusText ?? ''
@@ -2836,28 +3387,25 @@ const isFinalStatus = (boxScore: Record<string, any> | null): boolean => {
 }
 
 export const resolveQuestionForEvent = (
-  question: any,
+  question: QuestionRecord,
   event: EngineEvent,
-  boxScore: Record<string, any> | null
+  boxScore: BoxScore | null
 ): QuestionResolutionDecision | null => {
   const context = question?.resolutionContext ?? {}
-  const type = String(context.type || '')
+  const type = asString(context.type) ?? ''
   if (!type) return null
 
-  const startEventId =
-    typeof context.startEventId === 'number' ? context.startEventId : null
+  const startEventId = asNumber(context.startEventId)
   if (startEventId !== null && event.eventId <= startEventId) return null
 
   const currentPeriod = event.gameState?.period ?? null
   const currentClockMs = event.gameState?.clockMs ?? null
-  const startPeriod = context.startPeriod ?? null
-  const startClockMs = context.startClockMs ?? null
+  const startPeriod = asNumber(context.startPeriod)
+  const startClockMs = asNumber(context.startClockMs)
   const windowMs =
     typeof question?.resolutionWindowMs === 'number'
       ? question.resolutionWindowMs
-      : typeof context.windowMs === 'number'
-        ? context.windowMs
-        : null
+      : asNumber(context.windowMs)
 
   const periodEnded =
     !!startPeriod &&
@@ -2880,6 +3428,7 @@ export const resolveQuestionForEvent = (
     (isFinalStatus(boxScore) &&
       event.type === EventType.PERIOD_END &&
       (event.gameState?.period ?? 0) >= 4)
+  const periodFinished = periodEnded || gameEnded
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
   const awayScore = getCurrentScore(event, boxScore, 'AWAY')
@@ -2887,10 +3436,8 @@ export const resolveQuestionForEvent = (
   switch (type) {
     case 'TOTAL_POINTS_NEXT_N': {
       const currentTotal = (homeScore ?? 0) + (awayScore ?? 0)
-      if (
-        typeof context.minTotalScore === 'number' &&
-        currentTotal >= context.minTotalScore
-      )
+      const minTotalScore = asNumber(context.minTotalScore)
+      if (minTotalScore !== null && currentTotal >= minTotalScore)
         return { state: 'resolved', answer: 'yes' }
       if (windowExpired) return { state: 'resolved', answer: 'no' }
       return null
@@ -2898,65 +3445,65 @@ export const resolveQuestionForEvent = (
     case 'TEAM_POINTS_NEXT_N':
     case 'TEAM_POINTS_REST_PERIOD':
     case 'TEAM_POINTS_THIS_PERIOD': {
-      const team = context.team === 'AWAY' ? 'AWAY' : 'HOME'
-      const current = getCurrentScore(event, boxScore, team)
-      if (
-        typeof context.minTeamScore === 'number' &&
-        current !== null &&
-        current >= context.minTeamScore
+      const teamSide = resolveTeamSideByTricode(
+        boxScore,
+        asString(context.teamTricode)
       )
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      const current = getCurrentScore(event, boxScore, teamSide)
+      const minTeamScore = asNumber(context.minTeamScore)
+      if (minTeamScore !== null && current !== null && current >= minTeamScore)
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded || windowExpired)
+      if (periodFinished || windowExpired)
         return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'TEAM_STAT_THIS_PERIOD': {
-      const team = context.team === 'AWAY' ? 'AWAY' : 'HOME'
-      const statType = String(context.statType || '')
-      const current = getTeamStat(boxScore, team, statType)
-      if (
-        typeof context.minTeamStat === 'number' &&
-        current !== null &&
-        current >= context.minTeamStat
+      const teamSide = resolveTeamSideByTricode(
+        boxScore,
+        asString(context.teamTricode)
       )
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      const statType = asString(context.statType) ?? ''
+      const current = getTeamStat(boxScore, teamSide, statType)
+      const minTeamStat = asNumber(context.minTeamStat)
+      if (minTeamStat !== null && current !== null && current >= minTeamStat)
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      if (periodFinished) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'BOTH_TEAMS_10_REST_PERIOD': {
+      const minHomeScore = asNumber(context.minHomeScore)
+      const minAwayScore = asNumber(context.minAwayScore)
       if (
-        typeof context.minHomeScore === 'number' &&
-        typeof context.minAwayScore === 'number' &&
+        minHomeScore !== null &&
+        minAwayScore !== null &&
         homeScore !== null &&
         awayScore !== null &&
-        homeScore >= context.minHomeScore &&
-        awayScore >= context.minAwayScore
+        homeScore >= minHomeScore &&
+        awayScore >= minAwayScore
       )
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      if (periodFinished) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'MADE_3_COUNT_NEXT_N': {
       const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
       const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      const startHomeThrees = asNumber(context.startHomeThrees)
+      const startAwayThrees = asNumber(context.startAwayThrees)
       if (
         homeThrees === null ||
         awayThrees === null ||
-        typeof context.startHomeThrees !== 'number' ||
-        typeof context.startAwayThrees !== 'number'
+        startHomeThrees === null ||
+        startAwayThrees === null
       ) {
         if (windowExpired) return { state: 'cancelled', answer: null }
         return null
       }
-      const delta =
-        homeThrees +
-        awayThrees -
-        context.startHomeThrees -
-        context.startAwayThrees
-      if (
-        typeof context.minMade3Count === 'number' &&
-        delta >= context.minMade3Count
-      )
+      const delta = homeThrees + awayThrees - startHomeThrees - startAwayThrees
+      const minMade3Count = asNumber(context.minMade3Count)
+      if (minMade3Count !== null && delta >= minMade3Count)
         return { state: 'resolved', answer: 'yes' }
       if (windowExpired) return { state: 'resolved', answer: 'no' }
       return null
@@ -2972,37 +3519,33 @@ export const resolveQuestionForEvent = (
             : 'MADE_FG'
       if (matchesExpectedEvent(event.type, expected))
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      if (periodFinished) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'ANY_3_THIS_PERIOD':
     case 'THREE_COUNT_THIS_PERIOD': {
       const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
       const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      const startHomeThrees = asNumber(context.startHomeThrees)
+      const startAwayThrees = asNumber(context.startAwayThrees)
       if (
         homeThrees === null ||
         awayThrees === null ||
-        typeof context.startHomeThrees !== 'number' ||
-        typeof context.startAwayThrees !== 'number'
+        startHomeThrees === null ||
+        startAwayThrees === null
       ) {
         if (periodEnded) return { state: 'cancelled', answer: null }
         return null
       }
-      const delta =
-        homeThrees +
-        awayThrees -
-        context.startHomeThrees -
-        context.startAwayThrees
-      if (
-        typeof context.minMade3Count === 'number' &&
-        delta >= context.minMade3Count
-      )
+      const delta = homeThrees + awayThrees - startHomeThrees - startAwayThrees
+      const minMade3Count = asNumber(context.minMade3Count)
+      if (minMade3Count !== null && delta >= minMade3Count)
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded) return { state: 'resolved', answer: 'no' }
+      if (periodFinished) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'LEADER_END_OF_PERIOD': {
-      if (!periodEnded) return null
+      if (!periodFinished) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
       const leader =
@@ -3011,74 +3554,94 @@ export const resolveQuestionForEvent = (
           : homeScore > awayScore
             ? 'HOME'
             : 'AWAY'
-      if (context.requiresTrailing) {
+      const leaderTricode =
+        leader === 'HOME'
+          ? normalizeTricode(asString(context.homeTricode))
+          : leader === 'AWAY'
+            ? normalizeTricode(asString(context.awayTricode))
+            : null
+      if (asBoolean(context.requiresTrailing)) {
         if (leader === 'TIE') return { state: 'resolved', answer: 'no' }
         return {
           state: 'resolved',
-          answer: leader === context.trailingTeam ? 'yes' : 'no',
+          answer:
+            leaderTricode && leaderTricode === asString(context.trailingTricode)
+              ? 'yes'
+              : 'no',
         }
       }
-      if (context.requiresLeading) {
+      if (asBoolean(context.requiresLeading)) {
         if (leader === 'TIE') return { state: 'resolved', answer: 'no' }
         return {
           state: 'resolved',
-          answer: leader === context.leadingTeam ? 'yes' : 'no',
+          answer:
+            leaderTricode && leaderTricode === asString(context.leadingTricode)
+              ? 'yes'
+              : 'no',
         }
       }
-      if (leader === 'TIE') return { state: 'cancelled', answer: null }
+      if (leader === 'TIE') return { state: 'resolved', answer: 'tie' }
       return {
         state: 'resolved',
-        answer: leader === 'HOME' ? 'home' : 'away',
+        answer: leaderTricode ?? null,
       }
     }
     case 'TEAM_COMPARE_PERIOD': {
-      if (!periodEnded) return null
-      const statType = String(context.statType || '')
+      if (!periodFinished) return null
+      const statType = asString(context.statType) ?? ''
       const homeStat = getTeamStat(boxScore, 'HOME', statType)
       const awayStat = getTeamStat(boxScore, 'AWAY', statType)
+      const minHomeStat = asNumber(context.minHomeStat)
+      const minAwayStat = asNumber(context.minAwayStat)
       if (
         homeStat === null ||
         awayStat === null ||
-        typeof context.minHomeStat !== 'number' ||
-        typeof context.minAwayStat !== 'number'
+        minHomeStat === null ||
+        minAwayStat === null
       )
         return { state: 'cancelled', answer: null }
-      const homeDelta = homeStat - context.minHomeStat
-      const awayDelta = awayStat - context.minAwayStat
-      if (homeDelta === awayDelta) return { state: 'cancelled', answer: null }
+      const homeDelta = homeStat - minHomeStat
+      const awayDelta = awayStat - minAwayStat
+      if (homeDelta === awayDelta) return { state: 'resolved', answer: 'tie' }
+      const homeTricode =
+        normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
+      const awayTricode =
+        normalizeTricode(asString(context.awayTricode)) ?? 'AWAY'
       return {
         state: 'resolved',
-        answer: homeDelta > awayDelta ? 'home' : 'away',
+        answer: homeDelta > awayDelta ? homeTricode : awayTricode,
       }
     }
     case 'PLAYER_MILESTONE_PERIOD': {
-      const playerId = Number(context.playerId ?? 0)
-      const period = context.endPeriod ?? startPeriod ?? currentPeriod
-      if (!playerId || !period) return null
+      const playerId = asNumber(context.playerId) ?? 0
+      const period = asNumber(context.endPeriod) ?? startPeriod ?? currentPeriod
+      const statType = asString(context.statType) ?? 'POINTS'
+      if (!playerId || !period) {
+        if (statType === 'THREES' && event.type === EventType.MADE_3)
+          return { state: 'resolved', answer: 'yes' }
+        if (statType === 'STEALS' && event.type === EventType.STEAL)
+          return { state: 'resolved', answer: 'yes' }
+        if (periodFinished) return { state: 'resolved', answer: 'no' }
+        return null
+      }
       const player = getPlayerFromBoxScore(boxScore, playerId)
-      const statType = String(context.statType || 'POINTS')
       const current =
         getPlayerPeriodStat(player, period, statType) ??
         getPlayerGameStat(player, statType)
-      if (
-        typeof context.target === 'number' &&
-        current !== null &&
-        current >= context.target
-      )
+      const target = asNumber(context.target)
+      if (target !== null && current !== null && current >= target)
         return { state: 'resolved', answer: 'yes' }
-      if (periodEnded) {
+      if (periodFinished) {
         if (current === null) return { state: 'cancelled', answer: null }
         return { state: 'resolved', answer: 'no' }
       }
       return null
     }
     case 'PLAYER_COMPARE_PERIOD': {
-      if (!periodEnded) return null
-      const statType = String(context.statType || '')
-      const playerIds = Array.isArray(context.playerIds)
-        ? context.playerIds
-        : []
-      const period = context.endPeriod ?? startPeriod ?? currentPeriod
+      if (!periodFinished) return null
+      const statType = asString(context.statType) ?? ''
+      const playerIds = asNumberArray(context.playerIds) ?? []
+      const period = asNumber(context.endPeriod) ?? startPeriod ?? currentPeriod
       if (!period || playerIds.length < 2)
         return { state: 'cancelled', answer: null }
       let bestId: string | null = null
@@ -3100,19 +3663,14 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'resolved', answer: 'tie' }
       return { state: 'resolved', answer: bestId }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
       if (!windowExpired) return null
-      const statType = String(context.statType || '')
-      const playerIds = Array.isArray(context.playerIds)
-        ? context.playerIds
-        : []
-      const startStats =
-        typeof context.startPlayerStats === 'object' && context.startPlayerStats
-          ? context.startPlayerStats
-          : null
+      const statType = asString(context.statType) ?? ''
+      const playerIds = asNumberArray(context.playerIds) ?? []
+      const startStats = asRecordNumber(context.startPlayerStats)
       if (playerIds.length < 2) return { state: 'cancelled', answer: null }
       let bestId: string | null = null
       let bestValue: number | null = null
@@ -3136,7 +3694,7 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'resolved', answer: 'tie' }
       return { state: 'resolved', answer: bestId }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT': {
@@ -3144,23 +3702,50 @@ export const resolveQuestionForEvent = (
       if (!isScoringEvent(event.type)) return null
       const teamSide = resolveTeamSide(event, boxScore, context)
       if (!teamSide) return null
-      if (teamSide !== context.team) return null
+      const expectedTeam = resolveTeamSideByTricode(
+        boxScore,
+        asString(context.teamTricode)
+      )
+      if (expectedTeam && teamSide !== expectedTeam) return null
       return { state: 'resolved', answer: 'yes' }
     }
     case 'TEAM_SCORE_AFTER_FREETHROWS': {
       if (!isScoringEvent(event.type)) return null
       const teamSide = resolveTeamSide(event, boxScore, context)
       if (!teamSide) return null
+      const expectedTeam = resolveTeamSideByTricode(
+        boxScore,
+        asString(context.teamTricode)
+      )
+      if (!expectedTeam) return null
       return {
         state: 'resolved',
-        answer: teamSide === context.team ? 'yes' : 'no',
+        answer: teamSide === expectedTeam ? 'yes' : 'no',
+      }
+    }
+    case 'NEXT_SCORE_TEAM': {
+      if (!isScoringEvent(event.type)) {
+        if (windowExpired) return { state: 'cancelled', answer: null }
+        return null
+      }
+      const teamSide = resolveTeamSide(event, boxScore, context)
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      const homeTricode =
+        normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
+      const awayTricode =
+        normalizeTricode(asString(context.awayTricode)) ?? 'AWAY'
+      return {
+        state: 'resolved',
+        answer: teamSide === 'HOME' ? homeTricode : awayTricode,
       }
     }
     case 'NEXT_EVENT': {
-      const expected = String(context.expectedEventType || '')
+      const expected = asString(context.expectedEventType) ?? ''
       if (!expected) return null
-      const playerId = context.playerId ? Number(context.playerId) : null
-      const teamTricode = context.teamTricode
+      if (gameEnded && asBoolean(context.cancelOnGameEnd))
+        return { state: 'cancelled', answer: null }
+      const playerId = asNumber(context.playerId)
+      const teamTricode = asString(context.teamTricode)
       if (playerId) {
         const evtPlayerId = getEventPlayerId(event)
         if (evtPlayerId !== playerId) return null
@@ -3177,7 +3762,7 @@ export const resolveQuestionForEvent = (
       return null
     }
     case 'LEAD_CHANGE_REST_GAME': {
-      const startLeader = context.leader
+      const startLeader = asString(context.leader)
       if (!startLeader || startLeader === 'TIE') {
         if (gameEnded) return { state: 'cancelled', answer: null }
         return null
@@ -3197,11 +3782,11 @@ export const resolveQuestionForEvent = (
     case 'GAME_POINTS_PACE': {
       if (!gameEnded) return null
       const currentTotal = (homeScore ?? 0) + (awayScore ?? 0)
-      if (typeof context.paceTotal !== 'number')
-        return { state: 'cancelled', answer: null }
+      const paceTotal = asNumber(context.paceTotal)
+      if (paceTotal === null) return { state: 'cancelled', answer: null }
       return {
         state: 'resolved',
-        answer: currentTotal >= context.paceTotal ? 'yes' : 'no',
+        answer: currentTotal >= paceTotal ? 'yes' : 'no',
       }
     }
     case 'OVERTIME': {
@@ -3222,21 +3807,31 @@ export const resolveQuestionForEvent = (
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
       if (homeScore === awayScore) return { state: 'cancelled', answer: null }
+      const homeTricode =
+        normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
+      const awayTricode =
+        normalizeTricode(asString(context.awayTricode)) ?? 'AWAY'
       return {
         state: 'resolved',
-        answer: homeScore > awayScore ? 'home' : 'away',
+        answer: homeScore > awayScore ? homeTricode : awayTricode,
       }
     }
     case 'JUMP_BALL_WINNER': {
       if (event.type !== EventType.JUMP_BALL) return null
       const teamSide = resolveTeamSide(event, boxScore, context)
       if (!teamSide) return { state: 'cancelled', answer: null }
+      const homeTricode =
+        normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
+      const awayTricode =
+        normalizeTricode(asString(context.awayTricode)) ?? 'AWAY'
       return {
         state: 'resolved',
-        answer: teamSide === 'HOME' ? 'home' : 'away',
+        answer: teamSide === 'HOME' ? homeTricode : awayTricode,
       }
     }
     default:
-      return null
+      break
   }
+  if (gameEnded) return { state: 'cancelled', answer: null }
+  return null
 }

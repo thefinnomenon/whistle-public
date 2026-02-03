@@ -6,6 +6,7 @@ import {
   EventType,
   NbaEventResult,
   NbaEventSubType,
+  type BoxScore,
   type EngineEvent,
   type EngineGameState,
   type NbaEventContext,
@@ -348,7 +349,7 @@ const resolveGameDoc = async (nbaGameId: string) => {
 const resolveOpenQuestionsForEvent = async (
   gameId: string,
   event: EngineEvent,
-  boxScore: Record<string, any> | null,
+  boxScore: BoxScore | null,
   windowTypes: string[]
 ): Promise<number> => {
   let query = db
@@ -562,7 +563,7 @@ export const syncNbaLiveEvents = async () => {
       ? nowMs - lastSyncMs > 2 * 60 * 1000
       : !!startScheduledMs && nowMs - startScheduledMs > 2 * 60 * 1000
     let payload
-    let boxScore: any = null
+    let boxScore: BoxScore | null = null
     try {
       const [pbp, box] = await Promise.all([
         fetchPlayByPlay(nbaGameId),

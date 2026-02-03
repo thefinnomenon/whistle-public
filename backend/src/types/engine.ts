@@ -21,6 +21,7 @@ export enum EventType {
   GAME_END = 'GAME_END',
   JUMP_BALL = 'JUMP_BALL',
   REVIEW = 'REVIEW',
+  ATTEMPT_3 = 'ATTEMPT_3',
   OTHER = 'OTHER',
 }
 
@@ -66,13 +67,123 @@ export enum NbaEventResult {
   UNKNOWN = 'UNKNOWN',
 }
 
+export type BoxScorePeriod = {
+  period?: number
+  periodType?: string
+  score?: number
+}
+
+export type BoxScoreTeamStats = {
+  points?: number
+  assists?: number
+  reboundsTotal?: number
+  rebounds?: number
+  steals?: number
+  blocks?: number
+  threePointersMade?: number
+  fg3m?: number
+}
+
+export type BoxScorePlayerPeriodStats = {
+  period?: number
+  statistics?: BoxScorePlayerPeriodStats
+  points?: number
+  reboundsTotal?: number
+  rebounds?: number
+  assists?: number
+  steals?: number
+  blocks?: number
+  threePointersMade?: number
+  fg3m?: number
+  freeThrowsMade?: number
+  ftm?: number
+}
+
+export type BoxScorePlayerStats = {
+  points?: number
+  reboundsTotal?: number
+  rebounds?: number
+  assists?: number
+  steals?: number
+  blocks?: number
+  threePointersMade?: number
+  fg3m?: number
+  freeThrowsMade?: number
+  ftm?: number
+  periods?: BoxScorePlayerPeriodStats[]
+}
+
+export type BoxScorePlayer = {
+  personId?: number
+  playerId?: number
+  teamId?: number | string
+  teamTricode?: string
+  teamAbbreviation?: string
+  team?: { teamId?: number | string }
+  name?: string
+  firstName?: string
+  lastName?: string
+  isOnCourt?: boolean
+  oncourt?: string | number
+  status?: string
+  statistics?: BoxScorePlayerStats
+  periods?: BoxScorePlayerPeriodStats[]
+  stats?: { periods?: BoxScorePlayerPeriodStats[] }
+}
+
+export type BoxScoreTeam = {
+  teamId?: number
+  teamName?: string
+  teamCity?: string
+  teamTricode?: string
+  score?: number
+  inBonus?: string | number
+  timeoutsRemaining?: number
+  statistics?: BoxScoreTeamStats
+  periods?: BoxScorePeriod[]
+  players?: BoxScorePlayer[]
+}
+
+export type BoxScoreGame = {
+  gameId?: string | number | null
+  gameStatus?: number | string | null
+  gameStatusText?: string | null
+  period?: number | null
+  gameClock?: string | null
+  homeTeam?: BoxScoreTeam | null
+  awayTeam?: BoxScoreTeam | null
+}
+
+export type BoxScore = {
+  gameId?: string | number | null
+  gameStatus?: number | string | null
+  gameStatusText?: string | null
+  period?: number | null
+  gamePeriod?: number | null
+  gameClock?: string | null
+  homeTeam?: BoxScoreTeam | null
+  awayTeam?: BoxScoreTeam | null
+  game?: BoxScoreGame | null
+}
+
+export type FirestoreTimestampLike = {
+  toDate?: () => Date
+}
+
+export type EngineIngestedAt =
+  | FirestoreTimestampLike
+  | object
+  | number
+  | string
+  | null
+
 export type EngineGameState = {
   period: number | null
   clockMs: number | null
   scoreHome: number | null
   scoreAway: number | null
-  possession: number | null
-  boxScore: Record<string, any> | null
+  possession: number | string | null
+  boxScore: BoxScore | null
 }
 
 export type NbaFreeThrowContext = {
@@ -99,7 +210,7 @@ export type NbaEventContext = {
   secondaryPlayerIds?: number[]
   teamId?: number | null
   teamTricode?: string | null
-  raw?: Record<string, any>
+  raw?: Record<string, string>
 }
 
 export type EngineEvent = {
@@ -111,5 +222,5 @@ export type EngineEvent = {
   description: string
   questionId: string | null
   gameState: EngineGameState
-  ingestedAt: unknown
+  ingestedAt: EngineIngestedAt
 }

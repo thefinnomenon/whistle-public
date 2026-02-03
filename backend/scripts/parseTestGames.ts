@@ -12,6 +12,7 @@ import {
   EventType,
   NbaEventResult,
   NbaEventSubType,
+  type BoxScore,
   type EngineEvent,
   type EngineGameState,
   type NbaEventContext,
@@ -20,9 +21,11 @@ import {
   triggerBasketballQuestion,
   triggerGameStartQuestions,
   resolveQuestionForEvent,
+  buildQuestionChoices,
   type EngineQuestionPayload,
 } from '../src/lib/engine'
 import { fetchSeasonProfilesOnce } from '../src/workers/seasonProfilesWorker'
+import { buildSimResult } from './simUtils'
 
 const toEnumValue = (value: any) => {
   if (value === null || value === undefined) return 'UNKNOWN'
@@ -231,8 +234,8 @@ const main = async () => {
     path.dirname(absolutePath),
     `playbyplay_${gameId}_season_profiles.json`
   )
-  const boxScore = fs.existsSync(boxScorePath)
-    ? JSON.parse(fs.readFileSync(boxScorePath, 'utf8'))
+  const boxScore: BoxScore | null = fs.existsSync(boxScorePath)
+    ? (JSON.parse(fs.readFileSync(boxScorePath, 'utf8')) as BoxScore)
     : null
 
   if (!gameId) {
@@ -263,9 +266,11 @@ const main = async () => {
   )
   type SimQuestion = EngineQuestionPayload & {
     id: string
+    choices: { id: string; value: string }[]
     state: 'open' | 'resolved' | 'cancelled'
     answer?: string | null
     resolvedAtEventId?: number
+    result?: any | null
   }
   const questions: SimQuestion[] = []
   const openQuestions: SimQuestion[] = []
@@ -286,6 +291,7 @@ const main = async () => {
     for (const payload of gameStartQuestions) {
       const question: SimQuestion = {
         ...payload,
+        choices: buildQuestionChoices(payload),
         id: `q_${questions.length + 1}`,
         state: 'open',
       }
@@ -304,15 +310,22 @@ const main = async () => {
     } else {
       lastElapsedMs += 30_000
     }
-    const question = await triggerBasketballQuestion(gameId, event, boxScore, {
-      nowMs: lastElapsedMs,
-      bypassMarginConditions: true,
-      suppressLogs: true,
-      seasonProfiles: { playersById, teamsById },
-    })
+    const eventBoxScore = event.gameState?.boxScore ?? null
+    const question = await triggerBasketballQuestion(
+      gameId,
+      event,
+      eventBoxScore,
+      {
+        nowMs: lastElapsedMs,
+        bypassMarginConditions: true,
+        suppressLogs: true,
+        seasonProfiles: { playersById, teamsById },
+      }
+    )
     if (question) {
       const simQuestion: SimQuestion = {
         ...question,
+        choices: buildQuestionChoices(question),
         id: `q_${questions.length + 1}`,
         state: 'open',
       }
@@ -323,11 +336,12 @@ const main = async () => {
     if (openQuestions.length) {
       for (let i = openQuestions.length - 1; i >= 0; i -= 1) {
         const open = openQuestions[i]
-        const decision = resolveQuestionForEvent(open, event, boxScore)
+        const decision = resolveQuestionForEvent(open, event, eventBoxScore)
         if (!decision) continue
         open.state = decision.state
         open.answer = decision.answer ?? null
         open.resolvedAtEventId = event.eventId
+        open.result = buildSimResult(open, event, eventBoxScore)
         openQuestions.splice(i, 1)
         if (decision.state === 'resolved') resolvedQuestions.push(open)
         else cancelledQuestions.push(open)
