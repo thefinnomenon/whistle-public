@@ -1,7 +1,6 @@
 'use client'
 
-import { db } from '@/lib/firebase'
-import { addDoc, collection, Timestamp } from 'firebase/firestore'
+import { apiRequest } from '@/lib/api'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useState } from 'react'
@@ -40,14 +39,15 @@ export default function NewQuestionPage() {
     setLoading(true)
 
     try {
-      await addDoc(collection(db, 'games', gameId, 'questions'), {
-        question: question.trim(),
-        type: 'YESNO',
-        choices: parsedChoices,
-        state: 'open',
-        timeoutAt: (Date.now() + 30 * 1000).toString(), // 30 seconds from now (ms string)
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+      const type = parsedChoices.length > 2 ? 'MULTIPLE_CHOICE' : 'YESNO'
+      await apiRequest(`/api/games/${gameId}/questions`, {
+        method: 'POST',
+        body: {
+          question: question.trim(),
+          type,
+          choices: parsedChoices,
+          timeoutAt: (Date.now() + 30 * 1000).toString(),
+        },
       })
 
       router.push(`/games/${gameId}`)

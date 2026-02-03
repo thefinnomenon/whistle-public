@@ -1,12 +1,12 @@
 import { createHash, createHmac } from 'crypto'
 import { Router } from 'express'
 import { admin, db } from '../firebase'
+import { scheduleGameStartQuestions } from '../lib/engine'
 import { trackEvent } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
-import { scheduleGameStartQuestions } from '../lib/engine'
-import type { EngineGameState } from '../types/engine'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
+import type { EngineGameState } from '../types/engine'
 
 // api/games/
 const router = Router()
@@ -690,6 +690,13 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'gameId and question are required' })
     }
 
+    const gameSnap = await db.collection('games').doc(gameId).get()
+    const game = gameSnap.exists ? (gameSnap.data() as any) : null
+    const homeTeam = game?.homeTeam ?? null
+    const awayTeam = game?.awayTeam ?? null
+    const title =
+      homeTeam && awayTeam ? `${homeTeam} vs ${awayTeam}` : 'New Question'
+
     const questionPayload = {
       question,
       choices,
@@ -731,6 +738,7 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       gameId,
       questionId: qRef.id,
       question,
+      title,
       sentAt: now.toString(),
       engineTag: engineTag || '',
       collapseId,
@@ -752,7 +760,7 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
         payload: {
           aps: {
             alert: {
-              title: '🏈 New Question!',
+              title,
               body: question,
             },
             category: 'question',
