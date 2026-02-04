@@ -155,6 +155,7 @@ const RECENT_EVENTS_BY_GAME = new Map<
     type: EventType
     playerId: number | null
     teamTricode: string | null
+    subType: string | null
   }[]
 >()
 const GAME_START_ASKED_BY_GAME = new Set<string>()
@@ -216,6 +217,8 @@ const filterPlayersBySeasonCandidate = (
   })
   return filtered.length ? filtered : players
 }
+
+const DUNK_RESOLUTION_WINDOW_MS = 3 * 60 * 1000
 
 const getPlayerId = (
   player: BoxScorePlayer | null | undefined
@@ -464,7 +467,8 @@ const recordRecentEvent = (gameId: string, event: EngineEvent) => {
     event.context?.freeThrow?.teamTricode ??
     event.context?.teamTricode ??
     null
-  const entry = { timeMs, type: event.type, playerId, teamTricode }
+  const subType = typeof event.subType === 'string' ? event.subType : null
+  const entry = { timeMs, type: event.type, playerId, teamTricode, subType }
   const list = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
   list.push(entry)
   const cutoff = timeMs - 60_000
@@ -495,14 +499,37 @@ const shouldSkipForLatency = (
   if (type === 'NEXT_EVENT') {
     const expected = asString(context.expectedEventType) ?? ''
     if (!expected) return false
+    const expectedSubType = asString(context.expectedSubType)
     return relevant.some((item) => {
       if (!matchesEventType(item.type, expected)) return false
+      if (expectedSubType && item.subType !== expectedSubType) return false
       const playerId = asNumber(context.playerId)
       if (playerId && item.playerId !== playerId) return false
       const teamTricode = asString(context.teamTricode)
       if (teamTricode && item.teamTricode !== teamTricode) return false
       return true
     })
+  }
+
+  if (type === 'NEXT_DUNK_TEAM') {
+    return relevant.some(
+      (item) =>
+        item.subType === NbaEventSubType.DUNK &&
+        (item.type === EventType.MADE_FG || item.type === EventType.MADE_3)
+    )
+  }
+
+  if (type === 'NEXT_DUNK_PLAYER') {
+    const playerIds = asNumberArray(context.playerIds) ?? []
+    if (!playerIds.length) return false
+    const playerSet = new Set(playerIds)
+    return relevant.some(
+      (item) =>
+        item.subType === NbaEventSubType.DUNK &&
+        (item.type === EventType.MADE_FG || item.type === EventType.MADE_3) &&
+        item.playerId !== null &&
+        playerSet.has(item.playerId)
+    )
   }
 
   const isScoringEvent = (evt: EventType) =>
@@ -808,7 +835,8 @@ const MULTI_CHOICE_TEMPLATE_IDS = new Set([
   'PERIOD_PLAYER_COMPARE_STEALS',
   'PERIOD_PLAYER_COMPARE_THREES',
   'TIMEOUT_NEXT_SCORE_TEAM',
-  'FOUL_NEXT_SCORE_TEAM',
+  'NEXT_DUNK_TEAM',
+  'NEXT_DUNK_PLAYER',
   'NEXT_N_PLAYER_COMPARE_POINTS',
   'NEXT_N_PLAYER_COMPARE_ASSISTS',
   'NEXT_N_PLAYER_COMPARE_REBOUNDS',
@@ -1075,7 +1103,8 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
   PERIOD_PLAYER_FG_STREAK: { name: 'PLAYER_FG_STREAK', scope: 'PERIOD' },
   PERIOD_TEAM_THREE_STREAK: { name: 'TEAM_THREE_STREAK', scope: 'PERIOD' },
   TIMEOUT_NEXT_SCORE_TEAM: { name: 'NEXT_SCORE_TEAM', scope: 'PERIOD' },
-  FOUL_NEXT_SCORE_TEAM: { name: 'NEXT_SCORE_TEAM', scope: 'PERIOD' },
+  NEXT_DUNK_TEAM: { name: 'NEXT_DUNK', scope: 'PERIOD' },
+  NEXT_DUNK_PLAYER: { name: 'NEXT_DUNK', scope: 'PERIOD' },
 }
 
 const getHalf = (period: number): number => (period <= 2 ? 1 : 2)
@@ -1464,6 +1493,10 @@ const SHOT_ATTEMPT_EVENT_TYPES = new Set([
   EventType.MADE_3,
   EventType.MISSED_3,
 ])
+const THREE_ATTEMPT_EVENT_TYPES = new Set([
+  EventType.MADE_3,
+  EventType.MISSED_3,
+])
 const SCORING_EVENT_TYPES = new Set([
   EventType.MADE_FG,
   EventType.MADE_3,
@@ -1502,11 +1535,63 @@ const hasRecentPlayerShotAttempt = (
   )
 }
 
+const hasRecentTeamThreeAttempt = (
+  gameId: string,
+  teamTricode: string | null,
+  nowMs: number
+): boolean => {
+  if (!teamTricode) return true
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      item.teamTricode &&
+      normalizeTricode(item.teamTricode) === normalizeTricode(teamTricode) &&
+      THREE_ATTEMPT_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const hasRecentPlayerThreeAttempt = (
+  gameId: string,
+  playerId: number,
+  nowMs: number
+): boolean => {
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      item.playerId === playerId &&
+      THREE_ATTEMPT_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
 const hasRecentScore = (gameId: string, nowMs: number): boolean => {
   const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
   return recent.some(
     (item) =>
       SCORING_EVENT_TYPES.has(item.type) &&
+      nowMs - item.timeMs <= 60_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const hasRecentTransition = (gameId: string, nowMs: number): boolean => {
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      (item.type === EventType.STEAL || item.type === EventType.TURNOVER) &&
+      nowMs - item.timeMs <= 30_000 &&
+      nowMs >= item.timeMs
+  )
+}
+
+const hasRecentDunk = (gameId: string, nowMs: number): boolean => {
+  const recent = RECENT_EVENTS_BY_GAME.get(gameId) ?? []
+  return recent.some(
+    (item) =>
+      item.subType === NbaEventSubType.DUNK &&
       nowMs - item.timeMs <= 60_000 &&
       nowMs >= item.timeMs
   )
@@ -1667,39 +1752,8 @@ const buildFoulTemplates = (
 ): QuestionTemplate[] => {
   const timeActualMs = getEventTimeActualMs(event)
   if (!timeActualMs || !gameId) return []
-  const possessionTricode = getPossessionTricode(event, boxScore)
   const opponentTricode = getOpponentTricode(event, boxScore)
   const templates: QuestionTemplate[] = []
-  if (possessionTricode) {
-    if (!hasRecentTeamShotAttempt(gameId, possessionTricode, timeActualMs)) {
-      templates.push({
-        id: 'FOUL_TEAM_NEXT_SHOT',
-        text: `Will ${possessionTricode} make their next shot?`,
-        weight: 2,
-        windowType: 'NEXT_EVENT',
-        resolutionWindowMs: 90_000,
-        resolutionContext: {
-          type: 'NEXT_EVENT',
-          expectedEventType: 'MADE_FG',
-          teamTricode: possessionTricode,
-        },
-      })
-    }
-    if (!hasRecentTeamShotAttempt(gameId, possessionTricode, timeActualMs)) {
-      templates.push({
-        id: 'FOUL_TEAM_NEXT_THREE',
-        text: `Will ${possessionTricode} hit their next 3?`,
-        weight: 1,
-        windowType: 'NEXT_EVENT',
-        resolutionWindowMs: 90_000,
-        resolutionContext: {
-          type: 'NEXT_EVENT',
-          expectedEventType: 'MADE_3',
-          teamTricode: possessionTricode,
-        },
-      })
-    }
-  }
   if (opponentTricode) {
     if (!hasRecentTeamShotAttempt(gameId, opponentTricode, timeActualMs)) {
       templates.push({
@@ -1715,23 +1769,63 @@ const buildFoulTemplates = (
         },
       })
     }
+    if (!hasRecentTeamThreeAttempt(gameId, opponentTricode, timeActualMs)) {
+      templates.push({
+        id: 'FOUL_OPP_TEAM_NEXT_THREE',
+        text: `Will ${opponentTricode} hit their next 3?`,
+        weight: 1,
+        windowType: 'NEXT_EVENT',
+        resolutionWindowMs: 90_000,
+        resolutionContext: {
+          type: 'NEXT_EVENT',
+          expectedEventType: 'MADE_3',
+          teamTricode: opponentTricode,
+        },
+      })
+    }
   }
-  const fouledPlayerId = getFouledPlayerId(event)
-  if (fouledPlayerId) {
+  if (opponentTricode) {
+    const opponentPlayers = getTeamPlayersByTricode(boxScore, opponentTricode)
+    const activeOpponents = opponentPlayers.filter(
+      (player) =>
+        player?.isOnCourt === true ||
+        String(player?.oncourt || '') === '1' ||
+        String(player?.status || '').toUpperCase() === 'ACTIVE'
+    )
+    const pool = activeOpponents.length ? activeOpponents : opponentPlayers
     const playersById = opts?.seasonProfiles?.playersById
-    const profile = playersById?.get(String(fouledPlayerId))
+    const scoringCandidates = playersById
+      ? pool.filter((player) => {
+          const id = getPlayerId(player)
+          if (id === null) return false
+          const profile = playersById.get(String(id))
+          return !!profile?.isScoringCandidate
+        })
+      : pool
+    const threeCandidates = playersById
+      ? pool.filter((player) => {
+          const id = getPlayerId(player)
+          if (id === null) return false
+          const profile = playersById.get(String(id))
+          return !!profile?.isThreeCandidate
+        })
+      : pool
+    const pickCandidate = (candidates: BoxScorePlayer[]) =>
+      candidates.length
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : null
+    const scoringChoice = pickCandidate(scoringCandidates)
+    const threeChoice = pickCandidate(threeCandidates)
+    const scoringId = getPlayerId(scoringChoice)
+    const threeId = getPlayerId(threeChoice)
     if (
-      profile?.isScoringCandidate &&
-      !hasRecentPlayerShotAttempt(gameId, fouledPlayerId, timeActualMs)
+      scoringId !== null &&
+      !hasRecentPlayerShotAttempt(gameId, scoringId, timeActualMs)
     ) {
-      const playerName = getPlayerNameFromBoxScore(boxScore, fouledPlayerId)
-      const teamTricode = getPlayerTeamTricodeFromBoxScore(
-        fouledPlayerId,
-        boxScore
-      )
-      if (playerName && teamTricode) {
+      const playerName = getPlayerNameFromBoxScore(boxScore, scoringId)
+      if (playerName) {
         templates.push({
-          id: 'FOUL_PLAYER_NEXT_SHOT',
+          id: 'FOUL_OPP_PLAYER_NEXT_SHOT',
           text: `Will ${playerName} hit their next shot?`,
           weight: 1,
           windowType: 'NEXT_EVENT',
@@ -1739,25 +1833,21 @@ const buildFoulTemplates = (
           resolutionContext: {
             type: 'NEXT_EVENT',
             expectedEventType: 'MADE_FG',
-            playerId: fouledPlayerId,
-            teamTricode,
+            playerId: scoringId,
+            teamTricode: opponentTricode,
             cancelOnGameEnd: true,
           },
         })
       }
     }
     if (
-      profile?.isThreeCandidate &&
-      !hasRecentPlayerShotAttempt(gameId, fouledPlayerId, timeActualMs)
+      threeId !== null &&
+      !hasRecentPlayerThreeAttempt(gameId, threeId, timeActualMs)
     ) {
-      const playerName = getPlayerNameFromBoxScore(boxScore, fouledPlayerId)
-      const teamTricode = getPlayerTeamTricodeFromBoxScore(
-        fouledPlayerId,
-        boxScore
-      )
-      if (playerName && teamTricode) {
+      const playerName = getPlayerNameFromBoxScore(boxScore, threeId)
+      if (playerName) {
         templates.push({
-          id: 'FOUL_PLAYER_NEXT_THREE',
+          id: 'FOUL_OPP_PLAYER_NEXT_THREE',
           text: `Will ${playerName} hit their next 3?`,
           weight: 1,
           windowType: 'NEXT_EVENT',
@@ -1765,26 +1855,91 @@ const buildFoulTemplates = (
           resolutionContext: {
             type: 'NEXT_EVENT',
             expectedEventType: 'MADE_3',
-            playerId: fouledPlayerId,
-            teamTricode,
+            playerId: threeId,
+            teamTricode: opponentTricode,
             cancelOnGameEnd: true,
           },
         })
       }
     }
   }
-  if (!hasRecentScore(gameId, timeActualMs)) {
-    templates.push({
-      id: 'FOUL_NEXT_SCORE_TEAM',
-      text: 'Which team will score next?',
+  return templates
+}
+
+const buildDunkTemplates = (
+  gameId: string,
+  event: EngineEvent,
+  boxScore: BoxScore | null,
+  opts?: TriggerOptions
+): QuestionTemplate[] => {
+  const clockMs = event.gameState?.clockMs ?? 0
+  if (clockMs > 9 * 60 * 1000 || clockMs < 3 * 60 * 1000) return []
+  const timeActualMs = getEventTimeActualMs(event)
+  if (!timeActualMs) return []
+  if (hasRecentDunk(gameId, timeActualMs)) return []
+  if (hasRecentTransition(gameId, timeActualMs)) return []
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  if (!homeTeam?.teamTricode || !awayTeam?.teamTricode) return []
+  const templates: QuestionTemplate[] = [
+    {
+      id: 'NEXT_DUNK_TEAM',
+      text: 'Which team will have the next dunk?',
       weight: 1,
       windowType: 'NEXT_EVENT',
-      resolutionWindowMs: 90_000,
+      resolutionWindowMs: DUNK_RESOLUTION_WINDOW_MS,
       resolutionContext: {
-        type: 'NEXT_SCORE_TEAM',
+        type: 'NEXT_DUNK_TEAM',
       },
+    },
+  ]
+  const players: BoxScorePlayer[] = []
+  if (Array.isArray(homeTeam.players)) players.push(...homeTeam.players)
+  if (Array.isArray(awayTeam.players)) players.push(...awayTeam.players)
+  if (!players.length) return templates
+  const active = players.filter(
+    (player) =>
+      player?.isOnCourt === true ||
+      String(player?.oncourt || '') === '1' ||
+      String(player?.status || '').toUpperCase() === 'ACTIVE'
+  )
+  const pool = active.length ? active : players
+  const candidatePool = opts?.seasonProfiles?.playersById
+    ? pool.filter((player) => {
+        const id = getPlayerId(player)
+        if (id === null) return false
+        const profile = opts.seasonProfiles?.playersById.get(String(id))
+        return !!profile?.isDunkCandidate
+      })
+    : pool
+  const shuffled = [...candidatePool].sort(() => Math.random() - 0.5)
+  const picked = shuffled.slice(0, 4)
+  const choices = picked
+    .map((player) => {
+      const id = getPlayerId(player)
+      const name =
+        typeof player?.name === 'string'
+          ? player.name
+          : typeof player?.firstName === 'string' &&
+              typeof player?.lastName === 'string'
+            ? `${player.firstName} ${player.lastName}`
+            : null
+      if (!id || !name) return null
+      return { id: String(id), value: name }
     })
-  }
+    .filter(Boolean) as { id: string; value: string }[]
+  if (choices.length < 2) return templates
+  templates.push({
+    id: 'NEXT_DUNK_PLAYER',
+    text: 'Who will have the next dunk?',
+    weight: 1,
+    windowType: 'NEXT_EVENT',
+    resolutionWindowMs: DUNK_RESOLUTION_WINDOW_MS,
+    resolutionContext: {
+      type: 'NEXT_DUNK_PLAYER',
+      playerIds: choices.map((choice) => Number(choice.id)),
+      choices,
+    },
+  })
   return templates
 }
 
@@ -2542,6 +2697,23 @@ const getTeamStat = (
   return null
 }
 
+const getTeamPlayersByTricode = (
+  boxScore: BoxScore | null,
+  teamTricode: string | null
+): BoxScorePlayer[] => {
+  if (!teamTricode) return []
+  const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+  const normalized = normalizeTricode(teamTricode)
+  if (!normalized) return []
+  if (normalizeTricode(homeTeam?.teamTricode) === normalized) {
+    return Array.isArray(homeTeam?.players) ? homeTeam.players : []
+  }
+  if (normalizeTricode(awayTeam?.teamTricode) === normalized) {
+    return Array.isArray(awayTeam?.players) ? awayTeam.players : []
+  }
+  return []
+}
+
 const normalizeTricode = (value: string | null | undefined): string | null => {
   if (!value) return null
   return value.trim().toUpperCase()
@@ -2861,6 +3033,14 @@ const buildResolutionContext = (
         expectedEventType: asString(
           template.resolutionContext?.expectedEventType
         ),
+        expectedSubType: asString(template.resolutionContext?.expectedSubType),
+        windowMs: resolutionWindowMs,
+      }
+    }
+    case 'NEXT_DUNK_TEAM':
+    case 'NEXT_DUNK_PLAYER': {
+      return {
+        ...base,
         windowMs: resolutionWindowMs,
       }
     }
@@ -3219,6 +3399,7 @@ export const triggerBasketballQuestion = async (
   void window
 
   const thresholdTemplates = getThresholdQuestionTemplates(event, opts)
+  const dunkTemplates = buildDunkTemplates(gameId, event, boxScore, opts)
   const streakTemplates = getStreakQuestionTemplates(
     gameId,
     event,
@@ -3228,6 +3409,7 @@ export const triggerBasketballQuestion = async (
   const playerCompareTemplates = PLAYER_COMPARE_PERIOD_TEMPLATES
   let candidates: QuestionTemplate[] = [
     ...streakTemplates,
+    ...dunkTemplates,
     ...QUESTION_TEMPLATES,
     ...thresholdTemplates,
     ...PLAYER_TEMPLATES,
@@ -3819,6 +4001,12 @@ export const resolveQuestionForEvent = (
         if (windowExpired) return { state: 'cancelled', answer: null }
         return null
       }
+      if (
+        asBoolean(context.ignoreFreeThrows) &&
+        event.type === EventType.MADE_FT
+      ) {
+        return null
+      }
       const teamSide = resolveTeamSide(event, boxScore, context)
       if (!teamSide) return { state: 'cancelled', answer: null }
       const homeTricode =
@@ -3830,11 +4018,48 @@ export const resolveQuestionForEvent = (
         answer: teamSide === 'HOME' ? homeTricode : awayTricode,
       }
     }
+    case 'NEXT_DUNK_TEAM': {
+      if (gameEnded) return { state: 'cancelled', answer: null }
+      if (windowExpired) return { state: 'cancelled', answer: null }
+      if (event.type !== EventType.MADE_FG && event.type !== EventType.MADE_3) {
+        return null
+      }
+      if (event.subType !== NbaEventSubType.DUNK) return null
+      const teamSide = resolveTeamSide(event, boxScore, context)
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      const homeTricode =
+        normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
+      const awayTricode =
+        normalizeTricode(asString(context.awayTricode)) ?? 'AWAY'
+      return {
+        state: 'resolved',
+        answer: teamSide === 'HOME' ? homeTricode : awayTricode,
+      }
+    }
+    case 'NEXT_DUNK_PLAYER': {
+      if (gameEnded) return { state: 'cancelled', answer: null }
+      if (windowExpired) return { state: 'cancelled', answer: null }
+      if (event.type !== EventType.MADE_FG && event.type !== EventType.MADE_3) {
+        return null
+      }
+      if (event.subType !== NbaEventSubType.DUNK) return null
+      const playerId = getEventPlayerId(event)
+      if (!playerId) return null
+      const choices = asChoiceArray(context.choices)
+      if (choices && !choices.some((choice) => Number(choice.id) === playerId))
+        return null
+      return { state: 'resolved', answer: String(playerId) }
+    }
     case 'NEXT_EVENT': {
       const expected = asString(context.expectedEventType) ?? ''
       if (!expected) return null
       if (gameEnded && asBoolean(context.cancelOnGameEnd))
         return { state: 'cancelled', answer: null }
+      const expectedSubType = asString(context.expectedSubType)
+      const eventSubType =
+        typeof event.subType === 'string' ? event.subType : null
+      const subTypeMatches =
+        !expectedSubType || expectedSubType === eventSubType
       const playerId = asNumber(context.playerId)
       const teamTricode = asString(context.teamTricode)
       if (playerId) {
@@ -3845,8 +4070,10 @@ export const resolveQuestionForEvent = (
         const evtTeamTricode = normalizeCode(getEventTeamTricode(event))
         if (normalizeCode(teamTricode) !== evtTeamTricode) return null
       }
-      if (matchesExpectedEvent(event.type, expected))
+      if (matchesExpectedEvent(event.type, expected)) {
+        if (!subTypeMatches) return { state: 'resolved', answer: 'no' }
         return { state: 'resolved', answer: 'yes' }
+      }
       if (isMissForExpected(event.type, expected))
         return { state: 'resolved', answer: 'no' }
       if (windowExpired) return { state: 'resolved', answer: 'no' }

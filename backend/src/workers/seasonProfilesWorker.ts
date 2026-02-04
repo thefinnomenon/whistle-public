@@ -37,6 +37,7 @@ export type PlayerSeasonProfile = {
   isThreeCandidate: boolean
   isFreeThrowCandidate: boolean
   isFoulCandidate: boolean
+  isDunkCandidate: boolean
 }
 
 export type TeamSeasonProfile = {
@@ -248,6 +249,8 @@ const parsePlayerProfiles = (payload: any): PlayerSeasonProfile[] => {
     const fg3a = toNumber(getValue(row, 'FG3A'))
     const ftm = toNumber(getValue(row, 'FTM'))
     const fta = toNumber(getValue(row, 'FTA'))
+    const isDunkCandidate =
+      mpg >= 18 && ppg >= 8 && fg3a <= 4 && (fta >= 3 || rpg >= 6)
 
     return {
       playerId: String(getValue(row, 'PLAYER_ID') ?? ''),
@@ -285,6 +288,7 @@ const parsePlayerProfiles = (payload: any): PlayerSeasonProfile[] => {
       isThreeCandidate: fg3a >= 3 && mpg >= 18,
       isFreeThrowCandidate: fta >= 2 && mpg >= 18,
       isFoulCandidate: pf >= 2.5 && mpg >= 18,
+      isDunkCandidate,
     }
   })
 }
