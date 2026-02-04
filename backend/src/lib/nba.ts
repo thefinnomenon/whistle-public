@@ -352,20 +352,27 @@ const resolveOpenQuestionsForEvent = async (
   boxScore: BoxScore | null,
   windowTypes: string[]
 ): Promise<number> => {
-  let query = db
-    .collection('games')
-    .doc(gameId)
-    .collection('questions')
-    .where('state', '==', 'open')
-  if (windowTypes.length) {
-    query = query.where('windowType', 'in', windowTypes)
+  const states: ('open' | 'closed')[] = ['open', 'closed']
+  const docs: FirebaseFirestore.QueryDocumentSnapshot[] = []
+  for (const state of states) {
+    let query = db
+      .collection('games')
+      .doc(gameId)
+      .collection('questions')
+      .where('state', '==', state)
+    if (windowTypes.length) {
+      query = query.where('windowType', 'in', windowTypes)
+    }
+    const snap = await query.get()
+    if (!snap.empty) {
+      docs.push(...snap.docs)
+    }
   }
-  const questionsSnap = await query.get()
 
-  if (questionsSnap.empty) return 0
+  if (!docs.length) return 0
 
   let resolvedCount = 0
-  for (const doc of questionsSnap.docs) {
+  for (const doc of docs) {
     const data = doc.data() as any
     const decision = resolveQuestionForEvent(data, event, boxScore)
     if (!decision) continue

@@ -2250,7 +2250,7 @@ export const endGameById = async (gameId: string, userId?: string) => {
 
   const openQuestionsSnap = await gameRef
     .collection('questions')
-    .where('state', '==', 'open')
+    .where('state', 'in', ['open', 'closed'])
     .get()
   if (!openQuestionsSnap.empty) {
     for (const doc of openQuestionsSnap.docs) {
