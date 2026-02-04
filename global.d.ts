@@ -74,6 +74,7 @@ type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
 type UserQuestionState = QuestionState | 'correct' | 'incorrect'
 type QuestionType = 'YESNO'
 type QuestionWindowType = 'PERIOD' | 'NEXT_N_MIN' | 'GAME' | 'JUMP_BALL'
+type QuestionCancelReason = 'MANUAL' | 'VOID' | 'RESOLVED_WHILE_OPEN'
 
 type Choice = { id: string; value: string }
 
@@ -87,6 +88,7 @@ type Question = {
   engineTag?: string
   timeoutAt: string
   windowType?: QuestionWindowType
+  cancelReason?: QuestionCancelReason
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt: FirestoreTimestamp

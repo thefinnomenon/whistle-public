@@ -351,11 +351,15 @@ export const buildSimResult = (
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
       const statType = String(asString(context.statType) || 'POINTS')
-      const value =
-        getPlayerPeriodStat(player, period, statType) ??
-        getPlayerGameStat(player, statType)
-      if (value === null || Number.isNaN(value)) return null
-      return { playerId, value }
+      const currentTotal = getPlayerGameStat(player, statType)
+      const initialValue = asNumber(context.initialValue)
+      if (
+        currentTotal === null ||
+        Number.isNaN(currentTotal) ||
+        initialValue === null
+      )
+        return null
+      return { playerId, value: currentTotal - initialValue }
     }
     case 'PLAYER_COMPARE_PERIOD': {
       const period =

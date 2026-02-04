@@ -41,15 +41,32 @@ if (
 
 type DayOption = { label: string; date: Date; dayNum: number }
 
-const buildDayOptions = (): DayOption[] => {
-  const today = new Date()
-  const start = new Date(today)
-  start.setHours(0, 0, 0, 0)
+const DISPLAY_WINDOW_MS = 5 * 60 * 60 * 1000
 
+const buildDayOptions = (games: Game[]): DayOption[] => {
+  const now = new Date()
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  const cutoffMs = now.getTime() - DISPLAY_WINDOW_MS
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  const includeYesterday = games.some((game) => {
+    const start =
+      (game.startTime as any)?.toDate?.() ??
+      new Date((game.startTime as unknown as number) || Date.now())
+    return (
+      start instanceof Date &&
+      sameDay(start, yesterday) &&
+      start.getTime() >= cutoffMs
+    )
+  })
+
+  const start = includeYesterday ? yesterday : today
+  const dayCount = includeYesterday ? 8 : 7
   const days: DayOption[] = []
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < dayCount; i++) {
     const d = new Date(start)
-    d.setDate(start.getDate() + i) // today + next 6 days
+    d.setDate(start.getDate() + i) // yesterday/today + next days
     const dayNum = d.getDate()
     days.push({
       label: d.toLocaleDateString(undefined, { weekday: 'short' }),
@@ -128,9 +145,11 @@ export default function GamesScreen() {
     }).start()
   }, [selectedDay, fadeAnim])
 
-  const dayOptions = useMemo(buildDayOptions, [])
+  const dayOptions = useMemo(() => buildDayOptions(games), [games])
 
   const gamesForDay = useMemo(() => {
+    const now = new Date()
+    const cutoffMs = now.getTime() - DISPLAY_WINDOW_MS
     return games
       .map((g) => {
         const start =
@@ -138,9 +157,11 @@ export default function GamesScreen() {
           new Date((g.startTime as unknown as number) || Date.now())
         return { ...g, start }
       })
-      .filter(
-        (g) => g.start instanceof Date && sameDay(g.start as Date, selectedDay)
-      )
+      .filter((g) => {
+        if (!(g.start instanceof Date)) return false
+        if (!sameDay(g.start as Date, selectedDay)) return false
+        return (g.start as Date).getTime() >= cutoffMs
+      })
       .sort((a, b) => (a.start as Date).getTime() - (b.start as Date).getTime())
   }, [games, selectedDay])
 
@@ -188,10 +209,6 @@ export default function GamesScreen() {
             : g
         )
       )
-      if (game.state === 'open') {
-        router.push({ pathname: '/game', params: { gameId: game.id } })
-        return
-      }
       toast.success(
         `Joined ${game.awayTeam} vs ${game.homeTeam}!\nEnter when live at ${kickoffTime || ''}.`
       )
@@ -269,6 +286,9 @@ export default function GamesScreen() {
         hour: '2-digit',
         minute: '2-digit',
       })
+    const showJoin =
+      !joined && item.state !== 'resolved' && item.state !== 'cancelled'
+    const showFinished = !joined && item.state === 'resolved'
     const isCashPrize =
       item.prizeType === 'USD' ||
       (item as any)?.prizeType === 'USD' ||
@@ -390,7 +410,7 @@ export default function GamesScreen() {
                   </Button>
                 )}
               </View>
-            ) : (
+            ) : showJoin ? (
               <Button
                 onPress={() => handleJoin(item)}
                 disabled={joiningGameId === item.id}
@@ -404,7 +424,13 @@ export default function GamesScreen() {
                   </Text>
                 )}
               </Button>
-            )}
+            ) : showFinished ? (
+              <Button disabled className="px-4 py-3 rounded-lg bg-slate-200">
+                <Text className="text-slate-500 font-semibold text-center leading-none">
+                  Finished
+                </Text>
+              </Button>
+            ) : null}
           </View>
         </View>
       </View>

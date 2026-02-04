@@ -65,6 +65,7 @@ export type LeaderboardItem = {
 export type QuestionType = 'YESNO' | 'MULTIPLE_CHOICE'
 export type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
 export type QuestionWindowType = 'PERIOD' | 'NEXT_N_MIN' | 'GAME' | 'JUMP_BALL'
+export type QuestionCancelReason = 'MANUAL' | 'VOID' | 'RESOLVED_WHILE_OPEN'
 
 export type Choice = {
   id: string
@@ -115,6 +116,7 @@ export type Question = {
   answer?: string
   timeoutAt: string
   windowType?: QuestionWindowType
+  cancelReason?: QuestionCancelReason
   triggeredAt: FirestoreTimestamp
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp

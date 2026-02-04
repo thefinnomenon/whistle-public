@@ -29,13 +29,26 @@ type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 type SimResult = Record<string, JsonValue> | null
 
+type SimResolvedEvent = {
+  eventId: number
+  type: string
+  description: string
+  period: number | null
+  clockMs: number | null
+  timeActual: string | null
+}
+
 type SimQuestion = EngineQuestionPayload & {
   id: string
   choices: { id: string; value: string }[]
-  state: 'open' | 'resolved' | 'cancelled'
+  state: 'open' | 'closed' | 'resolved' | 'cancelled'
   answer?: string | null
+  cancelReason?: string
   resolvedAtEventId?: number
+  resolvedEvent?: SimResolvedEvent
   result?: SimResult
+  createdAtMs?: number
+  timeoutAtMs?: number
 }
 
 type DateLike =
@@ -65,6 +78,20 @@ const formatDate = (value: DateLike) => {
   return 'unknown date'
 }
 
+const coerceDate = (value: DateLike): Date | null => {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  if (typeof value === 'object' && typeof value.toDate === 'function') {
+    const date = value.toDate()
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+  return null
+}
+
 const listResolvedGames = async () => {
   const snap = await db
     .collection('games')
@@ -86,6 +113,18 @@ const listResolvedGames = async () => {
     console.log(`- ${doc.id}: ${title} - ${date}`)
   }
 }
+
+const buildResolvedEvent = (event: EngineEvent): SimResolvedEvent => ({
+  eventId: event.eventId,
+  type: String(event.type || ''),
+  description: String(event.description || ''),
+  period: event.gameState?.period ?? null,
+  clockMs: event.gameState?.clockMs ?? null,
+  timeActual:
+    typeof event.context?.raw?.timeActual === 'string'
+      ? event.context.raw.timeActual
+      : null,
+})
 
 const loadSeasonProfiles = async () => {
   try {
@@ -123,6 +162,7 @@ type GameRecord = {
   nbaGameStatusText?: string | null
   homeTeam?: string | null
   awayTeam?: string | null
+  startTime?: DateLike
 }
 
 type GameSummary = GameRecord & {
@@ -200,12 +240,15 @@ const main = async () => {
       choices: buildQuestionChoices(payload),
       id: `q_${questions.length + 1}`,
       state: 'open',
+      createdAtMs: 0,
+      timeoutAtMs: payload.timeoutMs,
     }
     questions.push(question)
     openQuestions.push(question)
   }
 
-  let baseTimeMs: number | null = null
+  const gameStartDate = coerceDate(game.startTime)
+  let baseTimeMs: number | null = gameStartDate ? gameStartDate.getTime() : null
   let lastElapsedMs = 0
 
   for (const event of events) {
@@ -215,6 +258,9 @@ const main = async () => {
       typeof timeActual === 'string' ? Date.parse(timeActual) : NaN
     if (Number.isFinite(parsedTime)) {
       if (baseTimeMs === null) baseTimeMs = parsedTime
+      if (baseTimeMs !== null && parsedTime < baseTimeMs) {
+        baseTimeMs = parsedTime
+      }
       const elapsedMs = Math.max(0, parsedTime - baseTimeMs)
       lastElapsedMs = Math.max(lastElapsedMs, elapsedMs)
     } else {
@@ -232,11 +278,15 @@ const main = async () => {
       }
     )
     if (question) {
+      const createdAtMs = lastElapsedMs
+      const timeoutAtMs = createdAtMs + question.timeoutMs
       const simQuestion: SimQuestion = {
         ...question,
         choices: buildQuestionChoices(question),
         id: `q_${questions.length + 1}`,
         state: 'open',
+        createdAtMs,
+        timeoutAtMs,
       }
       questions.push(simQuestion)
       openQuestions.push(simQuestion)
@@ -245,14 +295,32 @@ const main = async () => {
     if (openQuestions.length) {
       for (let i = openQuestions.length - 1; i >= 0; i -= 1) {
         const open = openQuestions[i]
+        if (
+          open.state === 'open' &&
+          typeof open.timeoutAtMs === 'number' &&
+          lastElapsedMs >= open.timeoutAtMs
+        ) {
+          open.state = 'closed'
+        }
         const decision = resolveQuestionForEvent(open, event, eventBoxScore)
         if (!decision) continue
-        open.state = decision.state
-        open.answer = decision.answer ?? null
+        if (decision.state === 'resolved') {
+          if (open.state === 'open') {
+            open.state = 'cancelled'
+            open.cancelReason = 'RESOLVED_WHILE_OPEN'
+          } else {
+            open.state = 'resolved'
+            open.answer = decision.answer ?? null
+          }
+        } else {
+          open.state = 'cancelled'
+          open.cancelReason = 'VOID'
+        }
         open.resolvedAtEventId = event.eventId
+        open.resolvedEvent = buildResolvedEvent(event)
         open.result = buildSimResult(open, event, eventBoxScore)
         openQuestions.splice(i, 1)
-        if (decision.state === 'resolved') resolvedQuestions.push(open)
+        if (open.state === 'resolved') resolvedQuestions.push(open)
         else cancelledQuestions.push(open)
       }
     }
@@ -264,6 +332,7 @@ const main = async () => {
     for (const open of openQuestions) {
       open.state = 'cancelled'
       open.answer = null
+      open.cancelReason = 'VOID'
       if (lastEventId !== null) open.resolvedAtEventId = lastEventId
       cancelledQuestions.push(open)
     }

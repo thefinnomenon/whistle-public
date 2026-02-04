@@ -374,24 +374,38 @@ const resolveOpenQuestionsForEvent = async (
   let resolvedCount = 0
   for (const doc of docs) {
     const data = doc.data() as any
+    const currentState = String(data.state || '')
     const decision = resolveQuestionForEvent(data, event, boxScore)
     if (!decision) continue
 
     if (decision.state === 'resolved') {
-      await doc.ref.set(
-        {
-          state: 'resolved',
-          answer: decision.answer ?? null,
-          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      )
-      await calculateScores(gameId, doc.id)
+      if (currentState === 'open') {
+        await doc.ref.set(
+          {
+            state: 'cancelled',
+            cancelReason: 'RESOLVED_WHILE_OPEN',
+            closedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      } else {
+        await doc.ref.set(
+          {
+            state: 'resolved',
+            answer: decision.answer ?? null,
+            resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+        await calculateScores(gameId, doc.id)
+      }
     } else {
       await doc.ref.set(
         {
           state: 'cancelled',
+          cancelReason: 'VOID',
           closedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -400,7 +414,7 @@ const resolveOpenQuestionsForEvent = async (
     }
     await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
     console.log(
-      `[nba] question resolved game=${gameId} question=${doc.id} state=${decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`
+      `[nba] question resolved game=${gameId} question=${doc.id} state=${currentState === 'open' && decision.state === 'resolved' ? 'cancelled' : decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`
     )
     resolvedCount += 1
   }

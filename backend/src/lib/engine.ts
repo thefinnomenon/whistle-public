@@ -1322,7 +1322,7 @@ const PERIOD_START_CLOSE_MARGIN_TEMPLATES: QuestionTemplate[] = [
 const PLAYER_TEMPLATES: QuestionTemplate[] = [
   {
     id: 'PERIOD_PLAYER_MILESTONE',
-    text: 'Will a player reach 10+ points this quarter?',
+    text: 'Will a player reach 10+ points in the rest of this quarter?',
     weight: 8,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -1334,7 +1334,7 @@ const PLAYER_TEMPLATES: QuestionTemplate[] = [
   },
   {
     id: 'PERIOD_PLAYER_ASSISTS',
-    text: 'Will a player record 3+ assists this quarter?',
+    text: 'Will a player record 3+ assists in the rest of this quarter?',
     weight: 7,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -1346,7 +1346,7 @@ const PLAYER_TEMPLATES: QuestionTemplate[] = [
   },
   {
     id: 'PERIOD_PLAYER_REBOUNDS',
-    text: 'Will a player record 4+ rebounds this quarter?',
+    text: 'Will a player record 4+ rebounds in the rest of this quarter?',
     weight: 7,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -1358,7 +1358,7 @@ const PLAYER_TEMPLATES: QuestionTemplate[] = [
   },
   {
     id: 'PERIOD_PLAYER_STEALS',
-    text: 'Will a player record 2+ steals this quarter?',
+    text: 'Will a player record 2+ steals in the rest of this quarter?',
     weight: 6,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -1373,7 +1373,7 @@ const PLAYER_TEMPLATES: QuestionTemplate[] = [
 const LATE_PERIOD_PLAYER_TEMPLATES: QuestionTemplate[] = [
   {
     id: 'PERIOD_PLAYER_ANOTHER_THREE',
-    text: 'Will a player hit another 3-pointer this quarter?',
+    text: 'Will a player hit another 3-pointer in the rest of this quarter?',
     weight: 6,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -1386,7 +1386,7 @@ const LATE_PERIOD_PLAYER_TEMPLATES: QuestionTemplate[] = [
   },
   {
     id: 'PERIOD_PLAYER_ANOTHER_STEAL',
-    text: 'Will a player get another steal this quarter?',
+    text: 'Will a player get another steal in the rest of this quarter?',
     weight: 5,
     windowType: 'PERIOD',
     resolutionWindowMs: null,
@@ -2135,8 +2135,8 @@ const buildPlayerMilestoneTemplate = (
               : 'points'
   const questionText = playerName
     ? increment > 0
-      ? `Will ${playerName} record ${baseLabel} this quarter?`
-      : `Will ${playerName} record ${target}+ ${baseLabel} this quarter?`
+      ? `Will ${playerName} record ${baseLabel} in the rest of this quarter?`
+      : `Will ${playerName} record ${target}+ ${baseLabel} in the rest of this quarter?`
     : template.text
   return {
     ...template,
@@ -2238,13 +2238,14 @@ const buildQuestionPayload = (
     teamsById: Map<string, TeamSeasonProfile>
   }
 ): EngineQuestionPayload => {
+  const clockMs = event.gameState?.clockMs ?? null
   const resolvedTemplate = resolveTemplate(
     template,
     boxScore,
     playerExclude,
     seasonProfiles,
     event.gameState?.period ?? 0,
-    event.gameState?.clockMs ?? null
+    clockMs
   )
   const resolutionWindowMs = computeResolutionWindowMs(resolvedTemplate, event)
   const resolutionContext = buildResolutionContext(
@@ -2253,6 +2254,50 @@ const buildQuestionPayload = (
     boxScore,
     resolutionWindowMs
   )
+  if (
+    resolvedTemplate.windowType === 'PERIOD' &&
+    clockMs !== null &&
+    clockMs <= 30_000
+  ) {
+    resolutionContext.invalid = true
+  }
+  if (resolutionContext.type === 'PLAYER_MILESTONE_PERIOD') {
+    const increment = asNumber(resolutionContext.increment) ?? 0
+    const playerId = asNumber(resolutionContext.playerId)
+    const statType = asString(resolutionContext.statType) ?? 'POINTS'
+    const target = asNumber(resolutionContext.target)
+    if (increment === 0 && playerId && target !== null) {
+      const player = getPlayerFromBoxScore(boxScore, playerId)
+      const currentStat = getPlayerPeriodStat(
+        player,
+        event.gameState?.period ?? 0,
+        statType
+      )
+      if (
+        currentStat !== null &&
+        Number.isFinite(currentStat) &&
+        target - currentStat <=
+          (statType === 'POINTS'
+            ? 3
+            : statType === 'ASSISTS' ||
+                statType === 'STEALS' ||
+                statType === 'REBOUNDS' ||
+                statType === 'BLOCKS' ||
+                statType === 'THREES'
+              ? 2
+              : 1)
+      ) {
+        resolutionContext.invalid = true
+      }
+    }
+    if (
+      playerId !== null &&
+      Number.isFinite(playerId) &&
+      resolutionContext.initialValue === null
+    ) {
+      resolutionContext.invalid = true
+    }
+  }
   let questionText = resolvedTemplate.text
   if (resolutionContext?.type === 'PLAYER_COMPARE_NEXT_N') {
     const minutes = asNumber(resolutionContext?.minutes)
@@ -2559,6 +2604,7 @@ const buildResolutionContext = (
         ...base,
         startTotal: currentTotal,
         minTotalScore: currentTotal + target,
+        initialValue: currentTotal,
       }
     }
     case 'TEAM_POINTS_NEXT_N':
@@ -2586,6 +2632,7 @@ const buildResolutionContext = (
         ...base,
         teamTricode,
         minTeamScore: current + target,
+        initialValue: current,
       }
     }
     case 'TEAM_STAT_THIS_PERIOD': {
@@ -2617,6 +2664,7 @@ const buildResolutionContext = (
         statType,
         startTeamStat: current,
         minTeamStat: current + target,
+        initialValue: current,
       }
     }
     case 'BOTH_TEAMS_10_REST_PERIOD': {
@@ -2627,6 +2675,7 @@ const buildResolutionContext = (
         ...base,
         minHomeScore: home + target,
         minAwayScore: away + target,
+        initialValue: { home, away },
       }
     }
     case 'MADE_3_COUNT_NEXT_N': {
@@ -2638,6 +2687,7 @@ const buildResolutionContext = (
         windowMs: resolutionWindowMs,
         startHomeThrees: homeThrees,
         startAwayThrees: awayThrees,
+        initialValue: { home: homeThrees, away: awayThrees },
       }
     }
     case 'MADE_FG_BEFORE_PERIOD_END':
@@ -2658,6 +2708,7 @@ const buildResolutionContext = (
         minMade3Count: asNumber(template.resolutionContext?.target) ?? 0,
         startHomeThrees: homeThrees,
         startAwayThrees: awayThrees,
+        initialValue: { home: homeThrees, away: awayThrees },
       }
     }
     case 'LEADER_END_OF_PERIOD': {
@@ -2689,40 +2740,63 @@ const buildResolutionContext = (
       }
     }
     case 'TEAM_COMPARE_PERIOD': {
+      const statType = asString(template.resolutionContext?.statType) ?? ''
+      const homeStat = getTeamStat(statBoxScore, 'HOME', statType) ?? 0
+      const awayStat = getTeamStat(statBoxScore, 'AWAY', statType) ?? 0
       return {
         ...base,
         endPeriod: base.startPeriod,
-        statType: asString(template.resolutionContext?.statType),
-        minHomeStat:
-          getTeamStat(
-            statBoxScore,
-            'HOME',
-            asString(template.resolutionContext?.statType) ?? ''
-          ) ?? 0,
-        minAwayStat:
-          getTeamStat(
-            statBoxScore,
-            'AWAY',
-            asString(template.resolutionContext?.statType) ?? ''
-          ) ?? 0,
+        statType,
+        minHomeStat: homeStat,
+        minAwayStat: awayStat,
+        initialValue: { home: homeStat, away: awayStat },
       }
     }
     case 'PLAYER_MILESTONE_PERIOD': {
+      const playerId = asNumber(template.resolutionContext?.playerId)
+      const statType = asString(template.resolutionContext?.statType) ?? ''
+      const currentStat =
+        playerId !== null && Number.isFinite(playerId)
+          ? getPlayerGameStat(
+              getPlayerFromBoxScore(boxScore, playerId),
+              statType
+            )
+          : null
       return {
         ...base,
         endPeriod: base.startPeriod,
         target: asNumber(template.resolutionContext?.target),
-        playerId: asNumber(template.resolutionContext?.playerId),
+        playerId,
+        initialValue:
+          currentStat !== null && Number.isFinite(currentStat)
+            ? currentStat
+            : null,
       }
     }
     case 'PLAYER_COMPARE_PERIOD': {
+      const statType = asString(template.resolutionContext?.statType) ?? ''
+      const playerIds =
+        asNumberArray(template.resolutionContext?.playerIds) ?? []
+      const startStats: Record<string, number> = {}
+      for (const playerId of playerIds) {
+        const player = getPlayerFromBoxScore(boxScore, Number(playerId))
+        if (!player) continue
+        const stat = getPlayerPeriodStat(
+          player,
+          base.startPeriod ?? 0,
+          statType
+        )
+        if (stat === null || Number.isNaN(stat)) continue
+        startStats[String(playerId)] = stat
+      }
       return {
         ...base,
         endPeriod: base.startPeriod,
-        statType: asString(template.resolutionContext?.statType),
-        playerIds: asNumberArray(template.resolutionContext?.playerIds) ?? [],
+        statType,
+        playerIds,
         choices: asChoiceArray(template.resolutionContext?.choices) ?? [],
         tiedStatValue: asNumber(template.resolutionContext?.tiedStatValue),
+        initialValue: Object.keys(startStats).length ? startStats : null,
       }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
@@ -2750,6 +2824,8 @@ const buildResolutionContext = (
         choices: asChoiceArray(template.resolutionContext?.choices) ?? [],
         tiedStatValue: asNumber(template.resolutionContext?.tiedStatValue),
         startPlayerStats:
+          Object.keys(startPlayerStats).length > 0 ? startPlayerStats : null,
+        initialValue:
           Object.keys(startPlayerStats).length > 0 ? startPlayerStats : null,
       }
     }
@@ -3025,10 +3101,10 @@ export const triggerBasketballQuestion = async (
     }
     return null
   }
-  if (period <= 3 && clockMs < 2 * 60 * 1000) {
+  if (clockMs <= 10 * 1000) {
     if (!opts?.suppressLogs) {
       console.log(
-        `[engine] skip question game=${gameId} reason=under_two_minutes period=${period} clockMs=${clockMs}`
+        `[engine] skip question game=${gameId} reason=under_ten_seconds period=${period} clockMs=${clockMs}`
       )
     }
     return null
@@ -3074,6 +3150,18 @@ export const triggerBasketballQuestion = async (
     triggerProbability = isHalftime
       ? HALFTIME_PROBABILITY
       : PERIOD_END_PROBABILITY
+  }
+  if (
+    triggerReason !== 'timeout' &&
+    triggerReason !== 'foul' &&
+    clockMs < 2 * 60 * 1000
+  ) {
+    if (!opts?.suppressLogs) {
+      console.log(
+        `[engine] skip question game=${gameId} reason=under_two_minutes period=${period} clockMs=${clockMs}`
+      )
+    }
+    return null
   }
 
   const lastAskedAt = LAST_QUESTION_AT_BY_GAME.get(gameId)
@@ -3625,9 +3713,12 @@ export const resolveQuestionForEvent = (
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
+      const currentGame = getPlayerGameStat(player, statType)
+      const initialValue = asNumber(context.initialValue)
       const current =
-        getPlayerPeriodStat(player, period, statType) ??
-        getPlayerGameStat(player, statType)
+        currentGame !== null && initialValue !== null
+          ? currentGame - initialValue
+          : null
       const target = asNumber(context.target)
       if (target !== null && current !== null && current >= target)
         return { state: 'resolved', answer: 'yes' }

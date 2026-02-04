@@ -874,7 +874,7 @@ router.post(
           {
             state: 'cancelled',
             closedAt: admin.firestore.FieldValue.serverTimestamp(),
-            cancelReason: 'manual',
+            cancelReason: 'MANUAL',
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -2257,6 +2257,7 @@ export const endGameById = async (gameId: string, userId?: string) => {
       await doc.ref.set(
         {
           state: 'cancelled',
+          cancelReason: 'VOID',
           closedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
