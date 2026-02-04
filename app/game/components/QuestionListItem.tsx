@@ -32,6 +32,10 @@ export function QuestionListItem({
     prediction === undefined ? undefined : String(prediction)
   const answerValue =
     question.answer === undefined ? undefined : String(question.answer)
+  const resolvedLabel =
+    question.state === 'resolved' && answerValue !== undefined
+      ? resolveChoiceLabel(question, answerValue)
+      : null
   const timeoutAt =
     (question.timeoutAt as any)?.toMillis?.() ?? Number(question.timeoutAt)
   const timedOut = Number.isFinite(timeoutAt) && timeoutAt <= Date.now()
@@ -103,9 +107,29 @@ export function QuestionListItem({
       />
       <View className="flex-1 ml-4 bg-transparent">
         <Text className={`${questionStyling.text}`}>{question.question}</Text>
-        {prediction !== undefined && (
-          <Text className={`${questionStyling.text} text-md font-bold mt-2`}>
-            {resolveChoiceLabel(question, prediction)}
+        {(prediction !== undefined || resolvedLabel) && (
+          <Text className={`${questionStyling.text} text-md mt-2`}>
+            {prediction !== undefined ? (
+              questionState === 'correct' ? (
+                <Text className="font-bold">
+                  {resolveChoiceLabel(question, prediction)}
+                </Text>
+              ) : questionState === 'incorrect' ? (
+                <Text className="line-through">
+                  {resolveChoiceLabel(question, prediction)}
+                </Text>
+              ) : (
+                <Text className="font-bold">
+                  {resolveChoiceLabel(question, prediction)}
+                </Text>
+              )
+            ) : null}
+            {questionState === 'incorrect' && resolvedLabel ? '  ·  ' : null}
+            {questionState === 'incorrect' && resolvedLabel ? (
+              <Text className="font-bold">{resolvedLabel}</Text>
+            ) : prediction === undefined && resolvedLabel ? (
+              <Text className="font-bold">{resolvedLabel}</Text>
+            ) : null}
           </Text>
         )}
       </View>
