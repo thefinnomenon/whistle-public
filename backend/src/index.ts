@@ -45,7 +45,14 @@ const resolveStaticHtml = (filename: string) => {
   if (fs.existsSync(distPath)) return distPath
   return path.join(process.cwd(), 'src', 'static', filename)
 }
+const resolveStaticDir = () => {
+  const distPath = path.join(__dirname, 'static')
+  if (fs.existsSync(distPath)) return distPath
+  return path.join(process.cwd(), 'src', 'static')
+}
 
+app.use('/static', express.static(resolveStaticDir()))
+app.get('/', (_req, res) => res.sendFile(resolveStaticHtml('index.html')))
 app.get('/privacy', (_req, res) =>
   res.sendFile(resolveStaticHtml('privacy.html'))
 )

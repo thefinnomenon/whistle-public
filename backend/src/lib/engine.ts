@@ -580,6 +580,17 @@ const shouldSkipForLatency = (
     )
   }
 
+  if (type === 'BUZZER_BEATER_TIMEOUT') {
+    const teamTricode = normalizeTricode(asString(context.teamTricode))
+    return relevant.some((item) => {
+      const isMade =
+        item.type === EventType.MADE_FG || item.type === EventType.MADE_3
+      if (!isMade) return false
+      if (!teamTricode) return true
+      return normalizeTricode(item.teamTricode) === teamTricode
+    })
+  }
+
   return false
 }
 
@@ -835,6 +846,7 @@ const MULTI_CHOICE_TEMPLATE_IDS = new Set([
   'PERIOD_PLAYER_COMPARE_STEALS',
   'PERIOD_PLAYER_COMPARE_THREES',
   'TIMEOUT_NEXT_SCORE_TEAM',
+  'TIMEOUT_NAIL_BITER_WINNER',
   'NEXT_DUNK_TEAM',
   'NEXT_DUNK_PLAYER',
   'NEXT_N_PLAYER_COMPARE_POINTS',
@@ -1103,6 +1115,10 @@ const QUESTION_GROUPS: Record<string, { name: string; scope: GroupScope }> = {
   PERIOD_PLAYER_FG_STREAK: { name: 'PLAYER_FG_STREAK', scope: 'PERIOD' },
   PERIOD_TEAM_THREE_STREAK: { name: 'TEAM_THREE_STREAK', scope: 'PERIOD' },
   TIMEOUT_NEXT_SCORE_TEAM: { name: 'NEXT_SCORE_TEAM', scope: 'PERIOD' },
+  TIMEOUT_BUZZER_BEATER: { name: 'TIMEOUT_BUZZER', scope: 'PERIOD' },
+  TIMEOUT_NAIL_BITER_WINNER: { name: 'TIMEOUT_NAIL_BITER', scope: 'GAME' },
+  TIMEOUT_NAIL_BITER_RETAIN: { name: 'TIMEOUT_NAIL_BITER', scope: 'GAME' },
+  TIMEOUT_NAIL_BITER_TAKE: { name: 'TIMEOUT_NAIL_BITER', scope: 'GAME' },
   NEXT_DUNK_TEAM: { name: 'NEXT_DUNK', scope: 'PERIOD' },
   NEXT_DUNK_PLAYER: { name: 'NEXT_DUNK', scope: 'PERIOD' },
 }
@@ -1655,6 +1671,74 @@ const buildTimeoutTemplates = (
   gameId?: string
 ): QuestionTemplate[] => {
   const isLongTimeout = event.subType === NbaEventSubType.FULL
+  const clockMs = event.gameState?.clockMs ?? null
+  const timeoutTricode = normalizeTricode(getEventTeamTricode(event))
+  if (clockMs !== null && clockMs <= 5 * 1000 && timeoutTricode) {
+    return [
+      {
+        id: 'TIMEOUT_BUZZER_BEATER',
+        text: `Will ${timeoutTricode} hit a buzzer beater?`,
+        weight: 3,
+        windowType: 'PERIOD',
+        resolutionWindowMs: null,
+        resolutionContext: {
+          type: 'BUZZER_BEATER_TIMEOUT',
+          teamTricode: timeoutTricode,
+        },
+      },
+    ]
+  }
+  if (clockMs !== null && clockMs <= 30 * 1000) {
+    const margin = getScoreMargin(event)
+    const period = event.gameState?.period ?? 0
+    if (margin !== null && margin <= 3 && period >= 4) {
+      const { leader, leaderTricode } = getLeader(event)
+      const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
+      const homeTricode = normalizeTricode(homeTeam?.teamTricode)
+      const awayTricode = normalizeTricode(awayTeam?.teamTricode)
+      const trailingTricode =
+        leader === 'HOME' ? awayTricode : leader === 'AWAY' ? homeTricode : null
+      const templates: QuestionTemplate[] = [
+        {
+          id: 'TIMEOUT_NAIL_BITER_WINNER',
+          text: 'This is a nail biter! Which team will win?',
+          weight: 2,
+          windowType: 'GAME',
+          resolutionWindowMs: null,
+          resolutionContext: {
+            type: 'GAME_WINNER',
+          },
+        },
+      ]
+      if (leader !== 'TIE' && leaderTricode) {
+        templates.push({
+          id: 'TIMEOUT_NAIL_BITER_RETAIN',
+          text: `This is a nail biter! Will ${leaderTricode} retain the lead and win?`,
+          weight: 2,
+          windowType: 'GAME',
+          resolutionWindowMs: null,
+          resolutionContext: {
+            type: 'TEAM_WINS_GAME',
+            teamTricode: leaderTricode,
+          },
+        })
+      }
+      if (trailingTricode) {
+        templates.push({
+          id: 'TIMEOUT_NAIL_BITER_TAKE',
+          text: `This is a nail biter! Will ${trailingTricode} take the lead and win?`,
+          weight: 2,
+          windowType: 'GAME',
+          resolutionWindowMs: null,
+          resolutionContext: {
+            type: 'TEAM_WINS_GAME',
+            teamTricode: trailingTricode,
+          },
+        })
+      }
+      return templates
+    }
+  }
   const timeActualMs = getEventTimeActualMs(event)
   const canUseRecent = !!timeActualMs && !!gameId
   if (isLongTimeout) {
@@ -3037,6 +3121,12 @@ const buildResolutionContext = (
         windowMs: resolutionWindowMs,
       }
     }
+    case 'BUZZER_BEATER_TIMEOUT': {
+      return {
+        ...base,
+        endPeriod: base.startPeriod,
+      }
+    }
     case 'NEXT_DUNK_TEAM':
     case 'NEXT_DUNK_PLAYER': {
       return {
@@ -3281,7 +3371,8 @@ export const triggerBasketballQuestion = async (
     }
     return null
   }
-  if (clockMs <= 10 * 1000) {
+  const isTimeoutEvent = event.type === EventType.TIMEOUT
+  if (clockMs <= 10 * 1000 && !(isTimeoutEvent && clockMs <= 5 * 1000)) {
     if (!opts?.suppressLogs) {
       console.log(
         `[engine] skip question game=${gameId} reason=under_ten_seconds period=${period} clockMs=${clockMs}`
@@ -3306,7 +3397,7 @@ export const triggerBasketballQuestion = async (
   }
 
   const window = getPeriodWindow(clockMs)
-  const isTimeout = event.type === EventType.TIMEOUT
+  const isTimeout = isTimeoutEvent
   const isFoul = event.type === EventType.FOUL
   const isShootingFoul = isFoul && isShootingFoulWithShots(event)
   const isPeriodStart = event.type === EventType.PERIOD_START
@@ -4018,6 +4109,21 @@ export const resolveQuestionForEvent = (
         answer: teamSide === 'HOME' ? homeTricode : awayTricode,
       }
     }
+    case 'BUZZER_BEATER_TIMEOUT': {
+      if (periodFinished) return { state: 'resolved', answer: 'no' }
+      const teamSide = resolveTeamSideByTricode(
+        boxScore,
+        asString(context.teamTricode)
+      )
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      if (event.type !== EventType.MADE_FG && event.type !== EventType.MADE_3)
+        return null
+      const scoringSide = resolveTeamSide(event, boxScore, context)
+      if (!scoringSide) return null
+      return scoringSide === teamSide
+        ? { state: 'resolved', answer: 'yes' }
+        : null
+    }
     case 'NEXT_DUNK_TEAM': {
       if (gameEnded) return { state: 'cancelled', answer: null }
       if (windowExpired) return { state: 'cancelled', answer: null }
@@ -4133,6 +4239,18 @@ export const resolveQuestionForEvent = (
         state: 'resolved',
         answer: homeScore > awayScore ? homeTricode : awayTricode,
       }
+    }
+    case 'TEAM_WINS_GAME': {
+      if (!gameEnded) return null
+      if (homeScore === null || awayScore === null)
+        return { state: 'cancelled', answer: null }
+      if (homeScore === awayScore) return { state: 'cancelled', answer: null }
+      const teamTricode = normalizeTricode(asString(context.teamTricode))
+      if (!teamTricode) return { state: 'cancelled', answer: null }
+      const teamSide = resolveTeamSideByTricode(boxScore, teamTricode)
+      if (!teamSide) return { state: 'cancelled', answer: null }
+      const winner = homeScore > awayScore ? 'HOME' : 'AWAY'
+      return { state: 'resolved', answer: winner === teamSide ? 'yes' : 'no' }
     }
     case 'JUMP_BALL_WINNER': {
       if (event.type !== EventType.JUMP_BALL) return null

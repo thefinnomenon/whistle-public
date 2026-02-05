@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Whistle - Live sports questions in real time</title>
+    <meta
+      name="description"
+      content="Whistle is a real-time prediction app for live sports. Answer questions during the game and see results instantly."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0b1020;
+        --bg-2: #101a33;
+        --card: #131b32;
+        --ink: #f7f9ff;
+        --muted: #b8c0d9;
+        --accent: #2f6bff;
+        --accent-2: #ffb020;
+        --line: rgba(255, 255, 255, 0.08);
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+        --radius: 22px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "DM Sans", system-ui, sans-serif;
+        color: var(--ink);
+        background: radial-gradient(
+            1100px 600px at 20% -10%,
+            rgba(47, 107, 255, 0.35),
+            transparent 60%
+          ),
+          radial-gradient(
+            900px 500px at 100% 0%,
+            rgba(255, 176, 32, 0.25),
+            transparent 55%
+          ),
+          linear-gradient(180deg, var(--bg), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      .page {
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 28px clamp(20px, 6vw, 80px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        background: #ffffff;
+        border-radius: 12px;
+      }
+
+      .brand img {
+        width: 38px;
+        height: 38px;
+      }
+
+      .pill {
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 48px;
+        align-items: center;
+        padding: 30px clamp(20px, 6vw, 80px) 80px;
+      }
+
+      .hero h1 {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: clamp(36px, 5vw, 64px);
+        margin: 0 0 18px;
+        line-height: 1.05;
+      }
+
+      .hero p {
+        color: var(--muted);
+        font-size: clamp(16px, 2vw, 20px);
+        line-height: 1.6;
+        margin: 0 0 28px;
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 22px;
+        border-radius: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        color: var(--ink);
+        background: var(--accent);
+        box-shadow: var(--shadow);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .btn.secondary {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        box-shadow: none;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 22px 60px rgba(22, 48, 120, 0.35);
+      }
+
+      .screens {
+        position: relative;
+        display: grid;
+        place-items: center;
+        min-height: 520px;
+      }
+
+      .phone {
+        width: min(260px, 60vw);
+        border-radius: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: var(--shadow);
+        background: #0c1226;
+        padding: 12px;
+        position: absolute;
+        animation: float 6s ease-in-out infinite;
+      }
+
+      .phone img {
+        width: 100%;
+        border-radius: 20px;
+        display: block;
+      }
+
+      .phone.one {
+        transform: translate(-35%, -8%) rotate(-6deg);
+      }
+
+      .phone.two {
+        transform: translate(25%, 8%) rotate(4deg);
+        animation-delay: 1.6s;
+      }
+
+      .strip {
+        display: flex;
+        gap: 18px;
+        align-items: center;
+        margin-top: 24px;
+      }
+
+      .strip span {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .features {
+        display: grid;
+        gap: 24px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        padding: 0 clamp(20px, 6vw, 80px) 80px;
+      }
+
+      .feature {
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 22px;
+        min-height: 180px;
+        backdrop-filter: blur(6px);
+        animation: fadeUp 0.8s ease forwards;
+        opacity: 0;
+      }
+
+      .feature:nth-child(1) {
+        animation-delay: 0.1s;
+      }
+
+      .feature:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+
+      .feature:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+
+      .feature:nth-child(4) {
+        animation-delay: 0.4s;
+      }
+
+      .feature h3 {
+        font-family: "Space Grotesk", sans-serif;
+        margin: 0 0 10px;
+      }
+
+      .feature p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .callout {
+        margin: 60px clamp(20px, 6vw, 80px) 0;
+        background: linear-gradient(135deg, rgba(47, 107, 255, 0.2), rgba(255, 176, 32, 0.15));
+        border-radius: var(--radius);
+        padding: 28px 30px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .callout h2 {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+      }
+
+      .callout p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+
+      footer {
+        padding: 50px clamp(20px, 6vw, 80px);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        justify-content: space-between;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+        margin-top: 80px;
+      }
+
+      footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .fade-in {
+        animation: fadeUp 0.9s ease forwards;
+        opacity: 0;
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(16px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes float {
+        0%,
+        100% {
+          transform: translate(-35%, -8%) rotate(-6deg);
+        }
+        50% {
+          transform: translate(-35%, -14%) rotate(-6deg);
+        }
+      }
+
+      @media (max-width: 720px) {
+        header {
+          flex-direction: column;
+          gap: 14px;
+        }
+
+        .screens {
+          min-height: 440px;
+        }
+
+        .phone.one {
+          transform: translate(-10%, -2%) rotate(-4deg);
+        }
+
+        .phone.two {
+          transform: translate(10%, 8%) rotate(2deg);
+        }
+
+        @keyframes float {
+          0%,
+          100% {
+            transform: translate(-10%, -2%) rotate(-4deg);
+          }
+          50% {
+            transform: translate(-10%, -10%) rotate(-4deg);
+          }
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div class="brand">
+          <span class="brand-mark">
+            <img src="/static/images/whistle-icon.png" alt="Whistle logo" />
+          </span>
+          <span>Whistle</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="fade-in">
+          <h1>Predict live moments. Answer in seconds.</h1>
+          <p>
+            Whistle drops real-time questions during games. Tap your answer,
+            compete with friends, and watch results resolve instantly.
+          </p>
+          <div class="cta-row">
+            <a class="btn" href="#download">Get the app</a>
+            <a class="btn secondary" href="#features">How it works</a>
+          </div>
+          <div class="strip">
+            <span>Instant questions</span>
+            <span>Live scoring</span>
+            <span>Push alerts</span>
+          </div>
+        </div>
+
+        <div class="screens">
+          <div class="phone one">
+            <img
+              src="/static/images/screen-questions.png"
+              alt="Whistle live question screen"
+            />
+          </div>
+          <div class="phone two">
+            <img
+              src="/static/images/screen-lock.jpg"
+              alt="Whistle notification example"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="features">
+        <article class="feature">
+          <h3>Questions at the perfect moment</h3>
+          <p>
+            Whistle watches the game and delivers questions at live inflection
+            points, from big shots to key fouls.
+          </p>
+        </article>
+        <article class="feature">
+          <h3>Instant results</h3>
+          <p>
+            Your answer is locked in quickly, and outcomes resolve as the next
+            play happens.
+          </p>
+        </article>
+        <article class="feature">
+          <h3>Stay in the flow</h3>
+          <p>
+            Lightweight UI keeps the focus on the game, with fast actions and
+            a clean schedule view.
+          </p>
+        </article>
+        <article class="feature">
+          <h3>Play with friends</h3>
+          <p>
+            Join the same matchup, compare answers, and see who reads the game
+            best.
+          </p>
+        </article>
+      </section>
+
+      <section id="download" class="callout">
+        <div>
+          <h2>Ready for your next game?</h2>
+          <p>Download Whistle and get questions the moment the action heats up.</p>
+        </div>
+        <div class="cta-row">
+          <a class="btn secondary" href="#" aria-label="Download on the App Store">
+            <img
+              src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+              alt="Download on the App Store"
+              style="height: 44px"
+            />
+          </a>
+          <a class="btn secondary" href="#" aria-label="Get it on Google Play">
+            <img
+              src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
+              alt="Get it on Google Play"
+              style="height: 54px"
+            />
+          </a>
+        </div>
+      </section>
+
+      <footer>
+        <span>Whistle by Finnternet</span>
+        <div>
+          <a href="/privacy">Privacy</a>
+          <span> | </span>
+          <a href="/support">Support</a>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
