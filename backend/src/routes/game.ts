@@ -1603,7 +1603,8 @@ export const calculateScores = async (
   if (opts.revertIfResolved && question.state !== 'cancelled') return
 
   const correctUsers = await getCorrectUsers(gameId, questionId, question)
-  const delta = opts.revertIfResolved && question.state === 'cancelled' ? -1 : 1
+  const delta =
+    opts.revertIfResolved && question.state === 'cancelled' ? -10 : 10
 
   if (correctUsers.length > 0) {
     await updateScores(gameId, correctUsers, delta)

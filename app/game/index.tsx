@@ -124,7 +124,7 @@ export default function GameScreen() {
           answerValue !== undefined &&
           String(pred).toLowerCase() === answerValue.toLowerCase()
         ) {
-          return acc + 1
+          return acc + 10
         }
         return acc
       },
