@@ -154,20 +154,14 @@ export default function OnboardingScreen() {
   const handleSkip = async () => {
     setLoading(true)
     try {
-      // Request permission without showing practice round
-      const granted = await requestNotificationPermission()
-
-      if (granted) {
-        router.replace('/username')
-      } else {
-        // If denied, show the permission denied UI
-        setPermissionDenied(true)
-      }
+      // Attempt permission prompt if it hasn't been requested yet.
+      // Proceed regardless of user choice.
+      await requestNotificationPermission()
     } catch (error) {
-      console.error('Error during skip:', error)
-      toast.error('Failed to request permissions')
+      console.error('Error requesting permissions during skip:', error)
     } finally {
       setLoading(false)
+      router.replace('/username')
     }
   }
 
@@ -286,8 +280,9 @@ export default function OnboardingScreen() {
               <Card>
                 <CardContent>
                   <Text className="text-center text-muted-foreground">
-                    Push notifications are required to use this app. Please
-                    enable them in your device settings.
+                    We recommend enabling push notifications in order to have
+                    the best gameplay experience.
+                    {'\n\n'}If you do not want to enable it, please click Skip.
                   </Text>
                 </CardContent>
               </Card>

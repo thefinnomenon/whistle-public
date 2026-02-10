@@ -5,10 +5,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { analytics } from '@/lib/analytics'
 import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
-import {
-  checkNotificationPermission,
-  requestNotificationPermission,
-} from '@/lib/notifications'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
@@ -403,27 +399,19 @@ export default function GameScreen() {
           `[Game] Successfully subscribed to game ${targetGameId} (5 subscriptions)`
         )
 
-        // Check and request notification permissions, then subscribe to FCM topic
-        const permissionStatus = await checkNotificationPermission()
-        console.log('[Game] Notification permission status:', permissionStatus)
-
-        if (!permissionStatus.granted) {
-          console.log('[Game] Requesting notification permission')
-          const granted = await requestNotificationPermission()
-          if (!granted) {
-            console.warn('[Game] Notification permission denied')
-            Alert.alert(
-              'Notifications Disabled',
-              "You won't receive game notifications. You can enable them in Settings.",
-              [{ text: 'OK' }]
-            )
-          }
+        // Resubscribe to FCM topic for notifications if available.
+        // Users can still play without push permissions.
+        try {
+          await subscribeToGameTopic(targetGameId)
+          console.log(
+            `[Game] Resubscribed to FCM topic for game ${targetGameId}`
+          )
+        } catch (error) {
+          console.warn(
+            `[Game] Unable to subscribe to notifications for game ${targetGameId}:`,
+            error
+          )
         }
-
-        // Resubscribe to FCM topic for notifications
-        // This handles the case where user signed out and back in
-        await subscribeToGameTopic(targetGameId)
-        console.log(`[Game] Resubscribed to FCM topic for game ${targetGameId}`)
       }
 
       subscribe()
