@@ -279,7 +279,7 @@ export default function OnboardingScreen() {
             <>
               <Card>
                 <CardContent>
-                  <Text className="text-center text-muted-foreground">
+                  <Text className="text-muted-foreground">
                     We recommend enabling push notifications in order to have
                     the best gameplay experience.
                     {'\n\n'}If you do not want to enable it, please click Skip.
