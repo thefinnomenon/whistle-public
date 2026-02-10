@@ -96,10 +96,31 @@
 
       .hero {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 48px;
+        grid-template-columns: minmax(0, 1.8fr) minmax(220px, 1fr);
+        gap: 18px;
         align-items: center;
-        padding: 30px clamp(20px, 6vw, 80px) 80px;
+        padding: 24px clamp(20px, 6vw, 80px) 52px;
+      }
+
+      .hero-copy {
+        max-width: 980px;
+      }
+
+      .hero-media {
+        border-radius: var(--radius);
+        overflow: hidden;
+        background: #050912;
+        box-shadow: var(--shadow);
+        justify-self: center;
+        width: min(210px, 100%);
+        aspect-ratio: 1179 / 2556;
+      }
+
+      .hero-media video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
       }
 
       .hero h1 {
@@ -113,7 +134,7 @@
         color: var(--muted);
         font-size: clamp(16px, 2vw, 20px);
         line-height: 1.6;
-        margin: 0 0 28px;
+        margin: 0 0 24px;
       }
 
       .cta-row {
@@ -149,39 +170,6 @@
         box-shadow: 0 22px 60px rgba(22, 48, 120, 0.35);
       }
 
-      .screens {
-        position: relative;
-        display: grid;
-        place-items: center;
-        min-height: 520px;
-      }
-
-      .phone {
-        width: min(260px, 60vw);
-        border-radius: 28px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: var(--shadow);
-        background: #0c1226;
-        padding: 12px;
-        position: absolute;
-        animation: float 6s ease-in-out infinite;
-      }
-
-      .phone img {
-        width: 100%;
-        border-radius: 20px;
-        display: block;
-      }
-
-      .phone.one {
-        transform: translate(-35%, -8%) rotate(-6deg);
-      }
-
-      .phone.two {
-        transform: translate(25%, 8%) rotate(4deg);
-        animation-delay: 1.6s;
-      }
-
       .strip {
         display: flex;
         gap: 18px;
@@ -197,46 +185,45 @@
         color: var(--muted);
       }
 
-      .features {
+      .steps {
         display: grid;
-        gap: 24px;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 34px;
         padding: 0 clamp(20px, 6vw, 80px) 80px;
       }
 
-      .feature {
-        background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+      .steps-title {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+        font-size: clamp(30px, 4vw, 44px);
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: minmax(100px, 180px) 1fr;
+        gap: clamp(20px, 4vw, 52px);
+        align-items: center;
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        padding: 22px;
-        min-height: 180px;
-        backdrop-filter: blur(6px);
-        animation: fadeUp 0.8s ease forwards;
-        opacity: 0;
+        padding: clamp(16px, 2vw, 26px);
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
       }
 
-      .feature:nth-child(1) {
-        animation-delay: 0.1s;
+      .step.reverse {
+        grid-template-columns: 1fr minmax(100px, 180px);
       }
 
-      .feature:nth-child(2) {
-        animation-delay: 0.2s;
+      .step img {
+        width: 100%;
+        border-radius: 16px;
       }
 
-      .feature:nth-child(3) {
-        animation-delay: 0.3s;
-      }
-
-      .feature:nth-child(4) {
-        animation-delay: 0.4s;
-      }
-
-      .feature h3 {
+      .step h3 {
         font-family: "Space Grotesk", sans-serif;
-        margin: 0 0 10px;
+        margin: 0 0 8px;
+        font-size: clamp(26px, 3.5vw, 34px);
       }
 
-      .feature p {
+      .step p {
         margin: 0;
         color: var(--muted);
         line-height: 1.5;
@@ -297,42 +284,57 @@
         }
       }
 
-      @keyframes float {
-        0%,
-        100% {
-          transform: translate(-35%, -8%) rotate(-6deg);
-        }
-        50% {
-          transform: translate(-35%, -14%) rotate(-6deg);
-        }
-      }
-
       @media (max-width: 720px) {
         header {
           flex-direction: column;
           gap: 14px;
         }
 
-        .screens {
-          min-height: 440px;
+        .hero {
+          grid-template-columns: 1fr;
         }
 
-        .phone.one {
-          transform: translate(-10%, -2%) rotate(-4deg);
+        .hero-media {
+          order: 1;
         }
 
-        .phone.two {
-          transform: translate(10%, 8%) rotate(2deg);
+        .hero-copy {
+          order: 2;
         }
 
-        @keyframes float {
-          0%,
-          100% {
-            transform: translate(-10%, -2%) rotate(-4deg);
-          }
-          50% {
-            transform: translate(-10%, -10%) rotate(-4deg);
-          }
+        .step,
+        .step.reverse {
+          grid-template-columns: 1fr;
+        }
+
+        .step > div {
+          order: 1;
+        }
+
+        .step > img {
+          order: 2;
+          width: 180px;
+          justify-self: center;
+        }
+
+        .callout .cta-row {
+          width: 100%;
+          flex-wrap: nowrap;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .callout .cta-row .btn {
+          flex: 1;
+          min-width: 0;
+          padding: 6px;
+          justify-content: center;
+        }
+
+        .callout .cta-row .btn img {
+          width: 100%;
+          height: auto !important;
+          max-width: 150px;
         }
       }
     </style>
@@ -349,67 +351,80 @@
       </header>
 
       <section class="hero">
-        <div class="fade-in">
-          <h1>Predict live moments. Answer in seconds.</h1>
+        <div class="hero-copy fade-in">
+          <h1>Make live predictions & win big!</h1>
           <p>
-            Whistle drops real-time questions during games. Tap your answer,
-            compete with friends, and watch results resolve instantly.
+            Whistle drops real-time questions during games using push notifications. Join a game, answer questions as the action unfolds, and get the most right to win prizes.
           </p>
           <div class="cta-row">
-            <a class="btn" href="#download">Get the app</a>
-            <a class="btn secondary" href="#features">How it works</a>
-          </div>
-          <div class="strip">
-            <span>Instant questions</span>
-            <span>Live scoring</span>
-            <span>Push alerts</span>
+            <a class="btn secondary" href="#" aria-label="Download on the App Store">
+              <img
+                src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+                alt="Download on the App Store"
+                style="height: 44px"
+              />
+            </a>
+            <a class="btn secondary" href="#" aria-label="Get it on Google Play">
+              <img
+                src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
+                alt="Get it on Google Play"
+                style="height: 54px"
+              />
+            </a>
           </div>
         </div>
-
-        <div class="screens">
-          <div class="phone one">
-            <img
-              src="/static/images/screen-questions.png"
-              alt="Whistle live question screen"
-            />
-          </div>
-          <div class="phone two">
-            <img
-              src="/static/images/screen-lock.jpg"
-              alt="Whistle notification example"
-            />
-          </div>
+        <div class="hero-media fade-in">
+          <video
+            src="/static/video/promo.mp4"
+            controls
+            loop
+            playsinline
+            preload="metadata"
+            aria-label="Whistle promo video"
+          ></video>
         </div>
       </section>
 
-      <section id="features" class="features">
-        <article class="feature">
-          <h3>Questions at the perfect moment</h3>
-          <p>
-            Whistle watches the game and delivers questions at live inflection
-            points, from big shots to key fouls.
-          </p>
+      <section id="how-it-works" class="steps">
+        <h2 class="steps-title">How it Works</h2>
+        <article class="step fade-in">
+          <img
+            src="/static/images/ios_join.png"
+            alt="Join a live game from the Whistle question screen"
+          />
+          <div>
+            <h3>Join</h3>
+            <p>
+              Pick a live matchup and jump in before tipoff or kickoff. You are
+              in with one tap, and Whistle will notify you when the game starts.
+            </p>
+          </div>
         </article>
-        <article class="feature">
-          <h3>Instant results</h3>
-          <p>
-            Your answer is locked in quickly, and outcomes resolve as the next
-            play happens.
-          </p>
+        <article class="step reverse fade-in">
+          <div>
+            <h3>Play</h3>
+            <p>
+              Questions appear during key moments, and you answer fast, directly from the notification by long pressing it, while the
+              game is unfolding. Every pick is locked before the next play.
+            </p>
+          </div>
+          <img
+            src="/static/images/ios_play.gif"
+            alt="Play live by answering real-time questions"
+          />
         </article>
-        <article class="feature">
-          <h3>Stay in the flow</h3>
-          <p>
-            Lightweight UI keeps the focus on the game, with fast actions and
-            a clean schedule view.
-          </p>
-        </article>
-        <article class="feature">
-          <h3>Play with friends</h3>
-          <p>
-            Join the same matchup, compare answers, and see who reads the game
-            best.
-          </p>
+        <article class="step fade-in">
+          <img
+            src="/static/images/win.gif"
+            alt="Win by stacking correct answers in Whistle"
+          />
+          <div>
+            <h3>Win</h3>
+            <p>
+              Rack up points as outcomes resolve instantly, climb the leaderboard,
+              and finish on top by reading the biggest moments correctly.
+            </p>
+          </div>
         </article>
       </section>
 
@@ -437,7 +452,7 @@
       </section>
 
       <footer>
-        <span>Whistle by Finnternet</span>
+        <span>Whistle</span>
         <div>
           <a href="/privacy">Privacy</a>
           <span> | </span>
