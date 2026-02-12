@@ -100,6 +100,42 @@ const fetchJson = <T>(
 const normalizeTeamCode = (value: string) =>
   value.trim().replace(/\s+/g, '').toUpperCase()
 
+const NBA_TEAM_CODES = new Set<string>([
+  'ATL',
+  'BOS',
+  'BKN',
+  'CHA',
+  'CHI',
+  'CLE',
+  'DAL',
+  'DEN',
+  'DET',
+  'GSW',
+  'HOU',
+  'IND',
+  'LAC',
+  'LAL',
+  'MEM',
+  'MIA',
+  'MIL',
+  'MIN',
+  'NOP',
+  'NYK',
+  'OKC',
+  'ORL',
+  'PHI',
+  'PHX',
+  'POR',
+  'SAC',
+  'SAS',
+  'TOR',
+  'UTA',
+  'WAS',
+])
+
+const isRecognizedNbaTeamCode = (teamCode: string) =>
+  NBA_TEAM_CODES.has(teamCode)
+
 const resolveTeamCode = (team: any): string => {
   if (!team) return ''
   if (typeof team === 'string') return normalizeTeamCode(team)
@@ -322,6 +358,18 @@ const isFinalStatus = (status: any, statusText: any) => {
   return false
 }
 
+const isInProgressStatus = (status: any, statusText: any) => {
+  const numeric = typeof status === 'number' ? status : Number(status)
+  if (numeric === 2) return true
+  const text = String(statusText || '').toLowerCase()
+  if (text.includes('qtr')) return true
+  if (text.includes('quarter')) return true
+  if (text.includes('halftime')) return true
+  if (text.includes('ot')) return true
+  if (text.includes('overtime')) return true
+  return false
+}
+
 const isGameEndAction = (action: any) =>
   String(action?.description || '')
     .trim()
@@ -503,6 +551,18 @@ export const syncNbaSchedule = async (daysAhead: number) => {
       if (!nbaGameId || seenIds.has(nbaGameId)) continue
       seenIds.add(nbaGameId)
 
+      const homeTeam = resolveTeamCode(game?.homeTeam)
+      const awayTeam = resolveTeamCode(game?.awayTeam)
+      if (
+        !isRecognizedNbaTeamCode(homeTeam) ||
+        !isRecognizedNbaTeamCode(awayTeam)
+      ) {
+        console.error(
+          `[nba] schedule skip gameId=${nbaGameId} reason=unrecognized_team homeTeam=${homeTeam || 'missing'} awayTeam=${awayTeam || 'missing'}`
+        )
+        continue
+      }
+
       const startTime = parseGameStart(game)
       if (!startTime) continue
       if (startTime < startOfTodayUtc || startTime > horizon) continue
@@ -606,6 +666,37 @@ export const syncNbaLiveEvents = async () => {
       throw err
     }
     const actions = payload?.actions || []
+    const nbaGameStatus =
+      payload?.game?.gameStatus ?? boxScore?.gameStatus ?? game?.nbaGameStatus
+    const nbaGameStatusText =
+      payload?.game?.gameStatusText ??
+      boxScore?.gameStatusText ??
+      game?.nbaGameStatusText ??
+      ''
+    const isGameInProgress = isInProgressStatus(
+      nbaGameStatus,
+      nbaGameStatusText
+    )
+
+    if (isCatchup && !isGameInProgress) {
+      console.log(
+        `[nba] live sync skip game=${gameId} nbaGameId=${nbaGameId} reason=catchup_non_live status=${String(nbaGameStatus ?? '')} statusText=${String(nbaGameStatusText)}`
+      )
+      await doc.ref.set(
+        {
+          nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+          nbaGameStatus: nbaGameStatus ?? null,
+          nbaGameStatusText,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+        console.log(`[nba] live sync game=${gameId} status=final auto-end`)
+        await endGameById(gameId)
+      }
+      continue
+    }
 
     const gameStartState: EngineGameState = {
       period: boxScore?.period ?? null,
@@ -664,17 +755,13 @@ export const syncNbaLiveEvents = async () => {
       await doc.ref.set(
         {
           nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
-          nbaGameStatus:
-            payload?.game?.gameStatus ?? game?.nbaGameStatus ?? null,
-          nbaGameStatusText:
-            payload?.game?.gameStatusText ?? game?.nbaGameStatusText ?? '',
+          nbaGameStatus: nbaGameStatus ?? null,
+          nbaGameStatusText,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       )
-      if (
-        isFinalStatus(payload?.game?.gameStatus, payload?.game?.gameStatusText)
-      ) {
+      if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
@@ -785,9 +872,8 @@ export const syncNbaLiveEvents = async () => {
       {
         lastNbaActionNumber: latestAction,
         nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
-        nbaGameStatus: payload?.game?.gameStatus ?? game?.nbaGameStatus ?? null,
-        nbaGameStatusText:
-          payload?.game?.gameStatusText ?? game?.nbaGameStatusText ?? '',
+        nbaGameStatus: nbaGameStatus ?? null,
+        nbaGameStatusText,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -803,9 +889,7 @@ export const syncNbaLiveEvents = async () => {
     if (latestActionObj && isGameEndAction(latestActionObj)) {
       console.log(`[nba] live sync game=${gameId} action=game_end auto-end`)
       await endGameById(gameId)
-    } else if (
-      isFinalStatus(payload?.game?.gameStatus, payload?.game?.gameStatusText)
-    ) {
+    } else if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
       console.log(`[nba] live sync game=${gameId} status=final auto-end`)
       await endGameById(gameId)
     }
