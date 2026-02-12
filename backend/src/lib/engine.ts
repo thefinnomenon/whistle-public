@@ -3986,12 +3986,7 @@ export const resolveQuestionForEvent = (
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
-      const currentGame = getPlayerGameStat(player, statType)
-      const initialValue = asNumber(context.initialValue)
-      const current =
-        currentGame !== null && initialValue !== null
-          ? currentGame - initialValue
-          : null
+      const current = getPlayerPeriodStat(player, period, statType)
       const target = asNumber(context.target)
       if (target !== null && current !== null && current >= target)
         return { state: 'resolved', answer: 'yes' }
