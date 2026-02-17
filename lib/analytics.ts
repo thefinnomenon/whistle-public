@@ -7,6 +7,13 @@ import { env, isProduction } from './env'
 
 let mixpanel: Mixpanel | null = null
 
+const normalizeEventName = (eventName: string) =>
+  eventName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
 const registerDeviceProperties = async () => {
   if (!mixpanel) return
 
@@ -75,8 +82,15 @@ const track = (eventName: string, properties?: Record<string, any>) => {
     )
     return
   }
-  console.log(`[Mixpanel] Tracking event: ${eventName}`, properties)
-  mixpanel.track(eventName, properties)
+  const normalizedEventName = normalizeEventName(eventName)
+  const enrichedProperties = {
+    ...properties,
+    event_name_original: eventName,
+    event_name_normalized: normalizedEventName,
+    event_schema_version: 1,
+  }
+  console.log(`[Mixpanel] Tracking event: ${eventName}`, enrichedProperties)
+  mixpanel.track(eventName, enrichedProperties)
 }
 
 const identify = (userId: string) => {

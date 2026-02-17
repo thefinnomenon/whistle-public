@@ -2,7 +2,11 @@ import { createHash, createHmac } from 'crypto'
 import { Router } from 'express'
 import { admin, db } from '../firebase'
 import { scheduleGameStartQuestions } from '../lib/engine'
-import { trackEvent } from '../lib/mixpanel'
+import {
+  identifyUser,
+  incrementUserProperty,
+  trackEvent,
+} from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
@@ -1284,6 +1288,11 @@ router.post(
           verifiedQuestionPayload.version ?? QUESTION_PAYLOAD_VERSION
 
       trackEvent('prediction_submitted', eventProps, userId)
+      incrementUserProperty(userId, 'predictions_submitted_count', 1)
+      identifyUser(userId, {
+        last_prediction_at: new Date().toISOString(),
+        last_prediction_game_id: gameId,
+      })
 
       return res.json({ ok: true })
     } catch (err) {
@@ -2216,11 +2225,22 @@ const sendNotificationsToGameUsers = async (
     }
 
     await admin.messaging().send(fcmMessage as any)
+    trackEvent('game_end_notification_sent', {
+      game_id: gameId,
+      topic,
+      source: 'backend',
+    })
   } catch (error) {
     console.error(
       `Failed to send game end notification to topic ${topic}:`,
       error
     )
+    trackEvent('game_end_notification_failed', {
+      game_id: gameId,
+      topic,
+      error_message: String(error),
+      source: 'backend',
+    })
   }
 }
 

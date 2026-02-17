@@ -2,6 +2,7 @@ type FeedbackSlackMessage = {
   feedbackId: string
   userId: string
   gameId?: string
+  submissionSource?: string
   funRating?: number
   questionVolume?: string
   questionTiming?: string
@@ -29,6 +30,7 @@ const buildFeedbackSlackMessage = ({
   feedbackId,
   userId,
   gameId,
+  submissionSource,
   funRating,
   questionVolume,
   questionTiming,
@@ -45,6 +47,7 @@ const buildFeedbackSlackMessage = ({
     `feedbackId=${feedbackId}`,
     `userId=${userId}`,
     `gameId=${gameId || 'none'}`,
+    `submissionSource=${submissionSource || 'unknown'}`,
     `funRating=${funRating ?? 'n/a'}`,
     `questionVolume=${questionVolume ?? 'n/a'}`,
     `questionTiming=${questionTiming ?? 'n/a'}`,
@@ -107,6 +110,7 @@ export const sendFeedbackToSlack = async (message: FeedbackSlackMessage) => {
       feedbackId: message.feedbackId,
       userId: message.userId,
       gameId: message.gameId,
+      submissionSource: message.submissionSource,
       funRating: message.funRating,
       questionVolume: message.questionVolume,
       questionTiming: message.questionTiming,

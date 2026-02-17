@@ -7,14 +7,26 @@ if (process.env.MIXPANEL_TOKEN && process.env.NODE_ENV === 'production') {
   console.log('[mixpanel] Initialized')
 }
 
+const normalizeEventName = (eventName: string) =>
+  eventName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
 export const trackEvent = (
   eventName: string,
   properties?: Record<string, any>,
   userId?: string
 ) => {
+  const normalizedEventName = normalizeEventName(eventName)
   const props = {
     ...properties,
-    distinct_id: userId || properties?.userId || 'anonymous',
+    distinct_id:
+      userId || properties?.user_id || properties?.userId || 'anonymous',
+    event_name_original: eventName,
+    event_name_normalized: normalizedEventName,
+    event_schema_version: 1,
     source: properties?.source || 'unknown',
     timestamp: new Date().toISOString(),
   }

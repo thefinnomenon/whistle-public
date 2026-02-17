@@ -21,6 +21,7 @@ import { StatusBar } from 'expo-status-bar'
 import './global.css'
 
 import { configureGoogleSignIn } from '@/lib/auth'
+import { analytics } from '@/lib/analytics'
 import { AuthProvider, useAuth } from '@/lib/contexts/AuthContext'
 import { ThemeProvider, useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
@@ -242,6 +243,23 @@ function ThemedApp() {
     useNativeWindColorScheme()
   const currentSegments = useSegments()
 
+  const trackGameEndNotificationOpened = (
+    openSource: 'foreground' | 'background' | 'initial',
+    gameId: string
+  ) => {
+    analytics.track('game_end_notification_opened', {
+      source: 'client',
+      open_source: openSource,
+      game_id: gameId,
+    })
+    analytics.track('feedback_opened_from_notification', {
+      source: 'client',
+      open_source: openSource,
+      game_id: gameId,
+      notification_type: 'game_end',
+    })
+  }
+
   useEffect(() => {
     // Force NativeWind to update by setting to undefined first if switching to system
     if (theme === 'system') {
@@ -326,7 +344,11 @@ function ThemedApp() {
       if (!gameId) return
 
       if (notificationType === 'game_end') {
-        router.push({ pathname: '/feedback', params: { gameId } })
+        trackGameEndNotificationOpened('foreground', gameId)
+        router.push({
+          pathname: '/feedback',
+          params: { gameId, source: 'game_end_notification' },
+        })
         return
       }
 
@@ -357,7 +379,11 @@ function ThemedApp() {
         console.log('[Notification] App opened from game_end notification', {
           gameId,
         })
-        router.push({ pathname: '/feedback', params: { gameId } })
+        trackGameEndNotificationOpened('initial', gameId)
+        router.push({
+          pathname: '/feedback',
+          params: { gameId, source: 'game_end_notification' },
+        })
         return
       }
 
@@ -387,12 +413,16 @@ function ThemedApp() {
         })
         if (gameId) {
           if (notificationType === 'game_end') {
+            trackGameEndNotificationOpened('background', gameId)
             const isOnFeedback =
               Array.isArray(currentSegments) &&
               currentSegments.length > 0 &&
               currentSegments[0] === 'feedback'
             if (!isOnFeedback) {
-              router.push({ pathname: '/feedback', params: { gameId } })
+              router.push({
+                pathname: '/feedback',
+                params: { gameId, source: 'game_end_notification' },
+              })
             }
             return
           }

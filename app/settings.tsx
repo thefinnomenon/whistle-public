@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useTheme } from '@/lib/contexts/ThemeContext'
 import { env } from '@/lib/env'
+import { analytics } from '@/lib/analytics'
 import { Ionicons } from '@expo/vector-icons'
 
 export default function SettingsScreen() {
@@ -33,6 +34,13 @@ export default function SettingsScreen() {
     build === undefined || build === null ? '' : ` (${String(build)})`
 
   const handleWithdraw = async () => {
+    analytics.track('settings_withdraw_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+      can_withdraw: canWithdraw,
+      winnings_amount: winnings,
+    })
+
     const subjectText = 'Withdrawal Request - Whistle'
     const bodyText = `Hi,
 
@@ -55,12 +63,24 @@ Thank you!`
     try {
       try {
         await Linking.openURL(gmailUrl)
+        analytics.track('settings_withdraw_opened_gmail', {
+          source: 'client',
+          user_id: user?.id || null,
+        })
         return
       } catch {
         // Fall through to default mail client.
       }
       await Linking.openURL(mailtoUrl)
+      analytics.track('settings_withdraw_opened_mailto', {
+        source: 'client',
+        user_id: user?.id || null,
+      })
     } catch {
+      analytics.track('settings_withdraw_open_failed', {
+        source: 'client',
+        user_id: user?.id || null,
+      })
       Alert.alert(
         'Email Not Available',
         `Please send a withdrawal request to ${email} with the following details:\n\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
@@ -69,6 +89,11 @@ Thank you!`
   }
 
   const handleSupport = async () => {
+    analytics.track('settings_support_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
+
     const subjectText = `Whistle Support (userId: ${user?.id}): [Brief description of your issue]`
     const subject = encodeURIComponent(subjectText)
     const email = 'configure@example.com'
@@ -78,12 +103,24 @@ Thank you!`
     try {
       try {
         await Linking.openURL(gmailUrl)
+        analytics.track('settings_support_opened_gmail', {
+          source: 'client',
+          user_id: user?.id || null,
+        })
         return
       } catch {
         // Fall through to default mail client.
       }
       await Linking.openURL(mailtoUrl)
+      analytics.track('settings_support_opened_mailto', {
+        source: 'client',
+        user_id: user?.id || null,
+      })
     } catch {
+      analytics.track('settings_support_open_failed', {
+        source: 'client',
+        user_id: user?.id || null,
+      })
       Alert.alert(
         'Email Not Available',
         `Please send feedback to ${email}\n\nuserId: ${user?.id}`
@@ -92,6 +129,10 @@ Thank you!`
   }
 
   const handleSignOut = () => {
+    analytics.track('settings_sign_out_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       {
         text: 'Cancel',
@@ -101,6 +142,10 @@ Thank you!`
         text: 'Sign Out',
         style: 'destructive',
         onPress: () => {
+          analytics.track('settings_sign_out_confirmed', {
+            source: 'client',
+            user_id: user?.id || null,
+          })
           router.replace('/signout')
         },
       },
@@ -108,6 +153,10 @@ Thank you!`
   }
 
   const handleDeleteAccount = () => {
+    analytics.track('settings_delete_account_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
     Alert.alert(
       'Delete Account',
       'Are you sure you want to delete your account? This action cannot be undone. Your account and all associated data will be permanently deleted, and any winnings that you have not withdrawn will be forfeited.',
@@ -120,6 +169,10 @@ Thank you!`
           text: 'Delete Account',
           style: 'destructive',
           onPress: () => {
+            analytics.track('settings_delete_account_confirmed', {
+              source: 'client',
+              user_id: user?.id || null,
+            })
             router.replace('/signout?deleteAccount=true')
           },
         },
@@ -129,6 +182,10 @@ Thank you!`
 
   const handlePracticeMode = () => {
     if (fromPractice === 'true') return
+    analytics.track('settings_practice_mode_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
     // Close the modal first so practice runs in the main stack, then navigate
     router.dismiss()
     setTimeout(
@@ -139,6 +196,22 @@ Thank you!`
         }),
       20
     )
+  }
+
+  const handleCompetitionRules = () => {
+    analytics.track('settings_competition_rules_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
+    router.push('/competition-rules')
+  }
+
+  const handleSubmitFeedback = () => {
+    analytics.track('settings_feedback_tapped', {
+      source: 'client',
+      user_id: user?.id || null,
+    })
+    router.push({ pathname: '/feedback', params: { source: 'settings' } })
   }
 
   return (
@@ -235,9 +308,19 @@ Thank you!`
           <View className="bg-card rounded-lg overflow-hidden border border-border">
             <TouchableOpacity
               onPress={() => {
-                if (theme === 'light') setTheme('dark')
-                else if (theme === 'dark') setTheme('system')
-                else setTheme('light')
+                const nextTheme =
+                  theme === 'light'
+                    ? 'dark'
+                    : theme === 'dark'
+                      ? 'system'
+                      : 'light'
+                analytics.track('settings_appearance_changed', {
+                  source: 'client',
+                  user_id: user?.id || null,
+                  previous_theme: theme,
+                  next_theme: nextTheme,
+                })
+                setTheme(nextTheme)
               }}
               className="px-4 py-4 flex-row items-center justify-between"
             >
@@ -283,7 +366,7 @@ Thank you!`
             />
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => router.push('/competition-rules')}
+            onPress={handleCompetitionRules}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >
             <Text className="text-base text-foreground">Competition rules</Text>
@@ -294,7 +377,7 @@ Thank you!`
             />
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => router.push('/feedback')}
+            onPress={handleSubmitFeedback}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >
             <Text className="text-base text-foreground">Submit feedback</Text>

@@ -1,11 +1,12 @@
 import { Button } from '@/components/ui/button'
 import { Text } from '@/components/ui/text'
 import { Textarea } from '@/components/ui/textarea'
+import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { env } from '@/lib/env'
 import { Ionicons } from '@expo/vector-icons'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Platform,
@@ -28,6 +29,7 @@ type FeedbackPayload = {
   funRating?: number
   questionVolume?: 'too_many' | 'just_right' | 'too_few'
   questionTiming?: 'too_early' | 'too_late' | 'good_timing'
+  submissionSource?: string
 }
 
 const MAX_FEEDBACK_LENGTH = 5000
@@ -137,13 +139,21 @@ const ChoiceRow = <T extends string>({
 )
 
 export default function FeedbackScreen() {
-  const { gameId: gameIdParam } = useLocalSearchParams<{
+  const { gameId: gameIdParam, source: sourceParam } = useLocalSearchParams<{
     gameId?: string | string[]
+    source?: string | string[]
   }>()
   const { firebaseUser } = useAuth()
   const insets = useSafeAreaInsets()
   const gameId = Array.isArray(gameIdParam) ? gameIdParam[0] : gameIdParam
   const isGameFeedback = typeof gameId === 'string' && gameId.length > 0
+  const source = Array.isArray(sourceParam) ? sourceParam[0] : sourceParam
+  const feedbackSource =
+    typeof source === 'string' && source.length > 0
+      ? source
+      : isGameFeedback
+        ? 'game_end_notification'
+        : 'settings'
   const [feedbackText, setFeedbackText] = useState('')
   const [funRating, setFunRating] = useState<number | null>(null)
   const [questionVolume, setQuestionVolume] = useState<QuestionVolume | null>(
@@ -155,9 +165,25 @@ export default function FeedbackScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [errorText, setErrorText] = useState('')
 
+  useEffect(() => {
+    analytics.track('feedback_screen_opened', {
+      source: 'client',
+      feedback_source: feedbackSource,
+      is_game_feedback: isGameFeedback,
+      game_id: gameId || null,
+    })
+  }, [feedbackSource, gameId, isGameFeedback])
+
   const handleSubmit = async () => {
     const text = feedbackText.trim()
     if (!firebaseUser) {
+      analytics.track('feedback_submit_validation_failed', {
+        source: 'client',
+        feedback_source: feedbackSource,
+        reason: 'missing_auth',
+        is_game_feedback: isGameFeedback,
+        game_id: gameId || null,
+      })
       setErrorText('You must be signed in to submit feedback.')
       return
     }
@@ -165,13 +191,39 @@ export default function FeedbackScreen() {
       isGameFeedback &&
       (!isValidRating(funRating) || !questionVolume || !questionTiming)
     ) {
+      analytics.track('feedback_submit_validation_failed', {
+        source: 'client',
+        feedback_source: feedbackSource,
+        reason: 'missing_game_feedback_fields',
+        is_game_feedback: isGameFeedback,
+        game_id: gameId || null,
+      })
       setErrorText('Please complete all game feedback fields.')
       return
     }
     if (!isGameFeedback && !text) {
+      analytics.track('feedback_submit_validation_failed', {
+        source: 'client',
+        feedback_source: feedbackSource,
+        reason: 'missing_text',
+        is_game_feedback: isGameFeedback,
+        game_id: gameId || null,
+      })
       setErrorText('Please enter feedback before submitting.')
       return
     }
+
+    analytics.track('feedback_submit_clicked', {
+      source: 'client',
+      feedback_source: feedbackSource,
+      is_game_feedback: isGameFeedback,
+      game_id: gameId || null,
+      has_text: text.length > 0,
+      text_length: text.length,
+      fun_rating: funRating ?? null,
+      question_volume: questionVolume ?? null,
+      question_timing: questionTiming ?? null,
+    })
 
     setSubmitting(true)
     setErrorText('')
@@ -179,6 +231,7 @@ export default function FeedbackScreen() {
     try {
       const payload: FeedbackPayload = {}
       if (text) payload.text = text
+      payload.submissionSource = feedbackSource
       if (isGameFeedback && gameId) {
         payload.gameId = gameId
         payload.funRating = funRating ?? undefined
@@ -200,6 +253,13 @@ export default function FeedbackScreen() {
         throw new Error(data.error || `Request failed (${resp.status})`)
       }
 
+      analytics.track('feedback_submit_succeeded', {
+        source: 'client',
+        feedback_source: feedbackSource,
+        is_game_feedback: isGameFeedback,
+        game_id: gameId || null,
+        feedback_id: data.feedbackId || null,
+      })
       toast.success('Feedback submitted. Thank you!')
       setFeedbackText('')
       router.back()
@@ -208,6 +268,13 @@ export default function FeedbackScreen() {
         error instanceof Error
           ? error.message
           : 'Unable to submit feedback right now.'
+      analytics.track('feedback_submit_failed', {
+        source: 'client',
+        feedback_source: feedbackSource,
+        is_game_feedback: isGameFeedback,
+        game_id: gameId || null,
+        error_message: message,
+      })
       setErrorText(message)
     } finally {
       setSubmitting(false)

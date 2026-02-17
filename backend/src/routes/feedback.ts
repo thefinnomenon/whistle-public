@@ -1,6 +1,10 @@
 import { Router } from 'express'
 import { admin } from '../firebase'
-import { trackEvent } from '../lib/mixpanel'
+import {
+  identifyUser,
+  incrementUserProperty,
+  trackEvent,
+} from '../lib/mixpanel'
 import { sendFeedbackToSlack } from '../lib/slack'
 import { authMiddleware } from '../middleware/auth'
 
@@ -12,6 +16,7 @@ type FeedbackBody = {
   funRating?: number | string
   questionVolume?: string
   questionTiming?: string
+  submissionSource?: string
 }
 
 type QuestionVolume = 'too_many' | 'just_right' | 'too_few'
@@ -38,6 +43,11 @@ const isQuestionTiming = (value: string | undefined): value is QuestionTiming =>
 router.post('/', authMiddleware, async (req, res) => {
   const userId = req.user?.uid
   if (!userId) {
+    trackEvent('feedback_submit_failed', {
+      reason: 'unauthorized',
+      http_status: 401,
+      source: 'backend',
+    })
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
@@ -47,10 +57,17 @@ router.post('/', authMiddleware, async (req, res) => {
     funRating: funRatingRaw,
     questionVolume: questionVolumeRaw,
     questionTiming: questionTimingRaw,
+    submissionSource: submissionSourceRaw,
   } = (req.body || {}) as FeedbackBody
 
   const feedbackText = typeof text === 'string' ? text.trim() : ''
   const gameId = typeof gameIdRaw === 'string' ? gameIdRaw.trim() : ''
+  const submissionSource =
+    typeof submissionSourceRaw === 'string' && submissionSourceRaw.trim()
+      ? submissionSourceRaw.trim()
+      : gameId
+        ? 'game_end_notification'
+        : 'settings'
   const funRating = parseRating(funRatingRaw)
   const questionVolume =
     typeof questionVolumeRaw === 'string'
@@ -66,14 +83,50 @@ router.post('/', authMiddleware, async (req, res) => {
     questionTimingRaw !== undefined
 
   if (feedbackText.length > 5000) {
+    trackEvent(
+      'feedback_submit_failed',
+      {
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        reason: 'text_too_long',
+        http_status: 400,
+        source: 'backend',
+      },
+      userId
+    )
     return res
       .status(400)
       .json({ error: 'Feedback text must be 5000 characters or less' })
   }
   if (!feedbackText && !gameId) {
+    trackEvent(
+      'feedback_submit_failed',
+      {
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        reason: 'missing_text',
+        http_status: 400,
+        source: 'backend',
+      },
+      userId
+    )
     return res.status(400).json({ error: 'Feedback text is required' })
   }
   if (!gameId && hasGameFeedbackInputs) {
+    trackEvent(
+      'feedback_submit_failed',
+      {
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        reason: 'missing_game_id_for_game_feedback',
+        http_status: 400,
+        source: 'backend',
+      },
+      userId
+    )
     return res
       .status(400)
       .json({ error: 'Game ID is required for game feedback fields' })
@@ -84,6 +137,18 @@ router.post('/', authMiddleware, async (req, res) => {
       !isQuestionVolume(questionVolume) ||
       !isQuestionTiming(questionTiming))
   ) {
+    trackEvent(
+      'feedback_submit_failed',
+      {
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        reason: 'invalid_game_feedback_fields',
+        http_status: 400,
+        source: 'backend',
+      },
+      userId
+    )
     return res.status(400).json({
       error:
         'All game feedback fields are required and invalid values were provided',
@@ -95,6 +160,7 @@ router.post('/', authMiddleware, async (req, res) => {
       userId: string
       text?: string
       gameId?: string
+      submissionSource: string
       funRating?: number
       questionVolume?: QuestionVolume
       questionTiming?: QuestionTiming
@@ -102,6 +168,7 @@ router.post('/', authMiddleware, async (req, res) => {
       updatedAt: FirebaseFirestore.FieldValue
     } = {
       userId,
+      submissionSource,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }
@@ -131,24 +198,32 @@ router.post('/', authMiddleware, async (req, res) => {
     trackEvent(
       'feedback_submitted',
       {
-        feedbackId: docRef.id,
-        userId,
-        gameId: gameId || null,
-        textLength: feedbackText.length,
-        funRating: funRating ?? null,
-        questionVolume: questionVolume || null,
-        questionTiming: questionTiming || null,
-        hasText: feedbackText.length > 0,
+        feedback_id: docRef.id,
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        text_length: feedbackText.length,
+        fun_rating: funRating ?? null,
+        question_volume: questionVolume || null,
+        question_timing: questionTiming || null,
+        has_text: feedbackText.length > 0,
         source: 'backend',
       },
       userId
     )
+    incrementUserProperty(userId, 'feedback_submitted_count', 1)
+    identifyUser(userId, {
+      last_feedback_at: new Date().toISOString(),
+      last_feedback_source: submissionSource,
+      last_feedback_game_id: gameId || null,
+    })
 
     try {
       await sendFeedbackToSlack({
         feedbackId: docRef.id,
         userId,
         gameId: gameId || undefined,
+        submissionSource,
         funRating,
         questionVolume,
         questionTiming,
@@ -167,6 +242,19 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(201).json({ ok: true, feedbackId: docRef.id })
   } catch (error) {
     console.error(`[feedback/create] failed userId=${userId}`, error)
+    trackEvent(
+      'feedback_submit_failed',
+      {
+        user_id: userId,
+        game_id: gameId || null,
+        feedback_source: submissionSource,
+        reason: 'server_error',
+        http_status: 500,
+        error_message: String(error),
+        source: 'backend',
+      },
+      userId
+    )
     return res.status(500).json({ error: 'Failed to create feedback' })
   }
 })
