@@ -23,6 +23,8 @@
         --muted: #b8c0d9;
         --accent: #2f6bff;
         --accent-2: #ffb020;
+        --success: #58d68d;
+        --error: #ff7f7f;
         --line: rgba(255, 255, 255, 0.08);
         --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
         --radius: 22px;
@@ -158,6 +160,52 @@
         display: grid;
         gap: 18px;
       }
+      .waitlist-form {
+        margin-top: 12px;
+      }
+      .waitlist-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .waitlist-input {
+        flex: 1;
+        min-width: 220px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--ink);
+        font: inherit;
+      }
+      .waitlist-input::placeholder {
+        color: var(--muted);
+      }
+      .waitlist-submit {
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 600;
+        padding: 12px 16px;
+        cursor: pointer;
+      }
+      .waitlist-submit:disabled {
+        opacity: 0.7;
+        cursor: default;
+      }
+      .waitlist-status {
+        margin: 10px 0 0;
+        min-height: 20px;
+      }
+      .waitlist-status.success {
+        color: var(--success);
+      }
+      .waitlist-status.error {
+        color: var(--error);
+      }
       ul {
         margin: 0;
         padding-left: 20px;
@@ -231,6 +279,43 @@
         </section>
 
         <section class="card">
+          <h2>Get notified</h2>
+          <p class="muted">
+            Don&apos;t want to test but want to know when the app is live? Add
+            your email below and we will shoot you a message when it is
+            available.
+          </p>
+          <form id="waitlist-form" class="waitlist-form" novalidate>
+            <div class="waitlist-row">
+              <input
+                id="waitlist-email"
+                class="waitlist-input"
+                type="email"
+                name="email"
+                inputmode="email"
+                autocomplete="email"
+                maxlength="320"
+                placeholder="configure@example.com"
+                required
+              />
+              <button
+                id="waitlist-submit"
+                class="waitlist-submit"
+                type="submit"
+              >
+                Notify me
+              </button>
+            </div>
+            <p
+              id="waitlist-status"
+              class="waitlist-status muted"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </form>
+        </section>
+
+        <section class="card">
           <h2>How it works</h2>
           <ul>
             <li>Join live prediction pools in the Whistle app.</li>
@@ -260,5 +345,87 @@
         <a href="/support">Support</a>
       </div>
     </div>
+    <script>
+      (() => {
+        const waitlistForm = document.getElementById('waitlist-form')
+        const emailInput = document.getElementById('waitlist-email')
+        const submitButton = document.getElementById('waitlist-submit')
+        const statusEl = document.getElementById('waitlist-status')
+
+        if (
+          !(waitlistForm instanceof HTMLFormElement) ||
+          !(emailInput instanceof HTMLInputElement) ||
+          !(submitButton instanceof HTMLButtonElement) ||
+          !(statusEl instanceof HTMLParagraphElement)
+        ) {
+          return
+        }
+
+        const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        let isSubmitting = false
+
+        const setStatus = (message, tone) => {
+          statusEl.textContent = message
+          statusEl.className = `waitlist-status ${tone}`
+        }
+
+        waitlistForm.addEventListener('submit', async (event) => {
+          event.preventDefault()
+          if (isSubmitting) return
+
+          const email = emailInput.value.trim().toLowerCase()
+          if (!email) {
+            setStatus('Please enter your email address.', 'error')
+            return
+          }
+          if (!EMAIL_PATTERN.test(email)) {
+            setStatus('Please enter a valid email address.', 'error')
+            return
+          }
+
+          isSubmitting = true
+          submitButton.disabled = true
+          setStatus('Submitting...', 'muted')
+
+          try {
+            const response = await fetch('/api/testers/waitlist', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email }),
+            })
+
+            let parsed = null
+            try {
+              parsed = await response.json()
+            } catch {
+              parsed = null
+            }
+
+            if (!response.ok) {
+              const message =
+                parsed && typeof parsed.error === 'string'
+                  ? parsed.error
+                  : 'Failed to submit email right now. Please try again.'
+              throw new Error(message)
+            }
+
+            waitlistForm.reset()
+            setStatus(
+              'Thanks. We will email you when the app is available.',
+              'success'
+            )
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Failed to submit email right now. Please try again.'
+            setStatus(message, 'error')
+          } finally {
+            isSubmitting = false
+            submitButton.disabled = false
+          }
+        })
+      })()
+    </script>
   </body>
 </html>

@@ -12,6 +12,7 @@ import gameRouter, {
   updatePlayerCountsForActiveGames,
 } from './routes/game'
 import logsRouter from './routes/logs'
+import testersRouter from './routes/testers'
 import { startSeasonProfilesWorker } from './workers/seasonProfilesWorker'
 
 const LOG_BLACKLIST = ['/health', '/api/log']
@@ -68,6 +69,7 @@ app.use('/api/games', gameRouter)
 app.use('/api', authRouter)
 app.use('/api/feedback', feedbackRouter)
 app.use('/api/log', logsRouter)
+app.use('/api/testers', testersRouter)
 app.use(Sentry.Handlers.errorHandler())
 
 const PORT = process.env.PORT || 4000
