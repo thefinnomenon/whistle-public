@@ -8,14 +8,24 @@ import {
   openAppNotificationSettings,
   requestNotificationPermission,
 } from '@/lib/notifications'
+import { Asset } from 'expo-asset'
+import { Image as ExpoImage } from 'expo-image'
 import { router } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Image, Platform, View } from 'react-native'
+import {
+  ActivityIndicator,
+  Image,
+  Platform,
+  TouchableOpacity,
+  View,
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
 
 const videoSource = null
+const iosOnboardingGif = require('@/assets/images/onboarding/ios_play_onboarding_min.gif')
+const androidOnboardingGif = require('@/assets/images/onboarding/android_play_onboarding_min.gif')
 
 export default function OnboardingScreen() {
   const { user, firebaseUser } = useAuth()
@@ -36,6 +46,12 @@ export default function OnboardingScreen() {
     player.muted = false
     player.pause()
   })
+
+  useEffect(() => {
+    Asset.loadAsync([iosOnboardingGif, androidOnboardingGif]).catch((err) => {
+      console.warn('[onboarding] onboarding media preload failed', err)
+    })
+  }, [])
 
   // Watch for onboardingPrediction from backend practice push
   useEffect(() => {
@@ -205,20 +221,32 @@ export default function OnboardingScreen() {
                       options
                     </Text>
                   )}
-                  <Image
-                    source={
-                      Platform.OS === 'ios'
-                        ? require('@/assets/images/onboarding/ios_push_example.jpg')
-                        : require('@/assets/images/onboarding/android_push_example.png')
-                    }
-                    style={{
-                      width: '100%',
-                      height: 120,
-                      borderRadius: 12,
-                      marginTop: 8,
-                    }}
-                    resizeMode="contain"
-                  />
+                  {Platform.OS === 'ios' ? (
+                    <ExpoImage
+                      source={iosOnboardingGif}
+                      transition={0}
+                      cachePolicy="memory-disk"
+                      style={{
+                        width: '100%',
+                        height: 120,
+                        borderRadius: 12,
+                        marginTop: 8,
+                      }}
+                      contentFit="contain"
+                      contentPosition="center"
+                    />
+                  ) : (
+                    <Image
+                      source={androidOnboardingGif}
+                      style={{
+                        width: '100%',
+                        height: 280,
+                        borderRadius: 12,
+                        marginTop: 8,
+                      }}
+                      resizeMode="cover"
+                    />
+                  )}
                 </View>
                 <View className="gap-1">
                   <Text className="text-lg font-semibold text-foreground">
@@ -232,6 +260,14 @@ export default function OnboardingScreen() {
           <Button onPress={handleNext} className="w-full max-w-md">
             <Text>Next</Text>
           </Button>
+          <TouchableOpacity
+            onPress={() => router.push('/competition-rules')}
+            className="mt-4"
+          >
+            <Text className="text-sm text-muted-foreground underline">
+              Read official competition rules
+            </Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     )

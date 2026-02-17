@@ -116,6 +116,7 @@ function AuthGate() {
     const inOnboarding = pathname.startsWith('onboarding')
     const inUsername = pathname.startsWith('username')
     const inSignout = pathname.startsWith('signout')
+    const inCompetitionRules = pathname.startsWith('competition-rules')
     const inGame = pathname.startsWith('game') && pathname !== 'game/lobby'
     const inSettings = pathname.startsWith('settings')
 
@@ -128,7 +129,8 @@ function AuthGate() {
       user &&
       !user.onboardingComplete &&
       !inOnboarding &&
-      !inUsername
+      !inUsername &&
+      !inCompetitionRules
     ) {
       // Redirect to onboarding if authenticated but hasn't completed onboarding
       console.log('[AuthGate] Redirect -> onboarding (onboarding incomplete)')
@@ -197,6 +199,14 @@ function AuthGate() {
       <Stack.Screen name="sign-in" options={{ headerShown: false }} />
       <Stack.Screen name="signout" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="competition-rules"
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+        }}
+      />
       <Stack.Screen name="username" options={{ headerShown: false }} />
       <Stack.Screen
         name="game"

@@ -283,6 +283,17 @@ Thank you!`
             />
           </TouchableOpacity>
           <TouchableOpacity
+            onPress={() => router.push('/competition-rules')}
+            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
+          >
+            <Text className="text-base text-foreground">Competition rules</Text>
+            <Ionicons
+              name="document-text-outline"
+              size={20}
+              color="slategray"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
             onPress={handleSubmitFeedback}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >
