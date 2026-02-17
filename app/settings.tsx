@@ -294,6 +294,17 @@ Thank you!`
             />
           </TouchableOpacity>
           <TouchableOpacity
+            onPress={() => router.push('/feedback')}
+            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
+          >
+            <Text className="text-base text-foreground">Submit feedback</Text>
+            <Ionicons
+              name="chatbox-ellipses-outline"
+              size={20}
+              color="slategray"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
             onPress={handleSupport}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >

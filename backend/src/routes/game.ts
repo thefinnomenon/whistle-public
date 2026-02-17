@@ -2190,6 +2190,7 @@ const sendNotificationsToGameUsers = async (
       },
       data: {
         gameId,
+        type: 'game_end',
       },
       android: {
         priority: 'high' as const,
@@ -2246,7 +2247,7 @@ export const endGameById = async (gameId: string, userId?: string) => {
   await calculateGameStatistics(gameId)
   const winnerNotifications = await distributeWinnings(gameId, game)
   await notifyWinners(winnerNotifications, game)
-  const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing!`
+  const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing! Please click to submit feedback about the game.`
   await sendNotificationsToGameUsers(gameId, message)
 
   const openQuestionsSnap = await gameRef

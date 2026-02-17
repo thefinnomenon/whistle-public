@@ -1,6 +1,7 @@
 import notifee, {
   AndroidImportance,
   AndroidVisibility,
+  EventType,
 } from '@notifee/react-native'
 import {
   DarkTheme,
@@ -223,6 +224,14 @@ function AuthGate() {
           animation: 'slide_from_bottom',
         }}
       />
+      <Stack.Screen
+        name="feedback"
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+        }}
+      />
     </Stack>
   )
 }
@@ -303,25 +312,61 @@ function ThemedApp() {
     return unsubscribe
   }, [])
 
+  // Handle foreground notification presses
+  useEffect(() => {
+    const unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+      if (type !== EventType.PRESS) return
+
+      const notificationData = detail.notification?.data as
+        | { gameId?: string; type?: string }
+        | undefined
+      const gameId = notificationData?.gameId
+      const notificationType = notificationData?.type
+
+      if (!gameId) return
+
+      if (notificationType === 'game_end') {
+        router.push({ pathname: '/feedback', params: { gameId } })
+        return
+      }
+
+      const isOnGame =
+        Array.isArray(currentSegments) &&
+        currentSegments.length > 0 &&
+        currentSegments[0] === 'game'
+      if (!isOnGame) {
+        router.push({ pathname: '/game', params: { gameId } })
+      }
+    })
+
+    return unsubscribe
+  }, [currentSegments])
+
   // Handle notification that opened the app from killed state
   useEffect(() => {
     const checkInitialNotification = async () => {
       const initialNotification = await notifee.getInitialNotification()
       console.log('[Notification] initialNotification', initialNotification)
-      if (
-        initialNotification?.notification?.data?.gameId &&
-        initialNotification?.notification?.data?.questionId
-      ) {
-        console.log(
-          '[Notification] App opened from notification:',
-          initialNotification.notification.data
-        )
-        router.push({
-          pathname: '/game',
-          params: {
-            gameId: initialNotification.notification.data.gameId as string,
-          },
+      const notificationData = initialNotification?.notification?.data as
+        | { gameId?: string; type?: string }
+        | undefined
+      const gameId = notificationData?.gameId
+      const notificationType = notificationData?.type
+
+      if (gameId && notificationType === 'game_end') {
+        console.log('[Notification] App opened from game_end notification', {
+          gameId,
         })
+        router.push({ pathname: '/feedback', params: { gameId } })
+        return
+      }
+
+      if (gameId) {
+        console.log('[Notification] App opened from notification:', {
+          gameId,
+          notificationType,
+        })
+        router.push({ pathname: '/game', params: { gameId } })
       }
     }
     checkInitialNotification()
@@ -335,10 +380,23 @@ function ThemedApp() {
       messagingInstance,
       (remoteMessage) => {
         const gameId = remoteMessage?.data?.gameId as string | undefined
+        const notificationType = remoteMessage?.data?.type as string | undefined
         console.log('[Notification] App opened from background notification', {
           gameId,
+          notificationType,
         })
         if (gameId) {
+          if (notificationType === 'game_end') {
+            const isOnFeedback =
+              Array.isArray(currentSegments) &&
+              currentSegments.length > 0 &&
+              currentSegments[0] === 'feedback'
+            if (!isOnFeedback) {
+              router.push({ pathname: '/feedback', params: { gameId } })
+            }
+            return
+          }
+
           // Avoid redirecting if already on game screen
           const isOnGame =
             Array.isArray(currentSegments) &&

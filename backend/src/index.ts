@@ -5,6 +5,7 @@ import path from 'path'
 import fs from 'fs'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import authRouter from './routes/auth'
+import feedbackRouter from './routes/feedback'
 import gameRouter, {
   closeExpiredQuestions,
   startScheduledGames,
@@ -62,6 +63,7 @@ app.get('/support', (_req, res) =>
 
 app.use('/api/games', gameRouter)
 app.use('/api', authRouter)
+app.use('/api/feedback', feedbackRouter)
 app.use('/api/log', logsRouter)
 app.use(Sentry.Handlers.errorHandler())
 
