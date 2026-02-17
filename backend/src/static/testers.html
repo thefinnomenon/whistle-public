@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Whistle Testers</title>
+    <meta
+      name="description"
+      content="Install the Whistle test build and review how weekly testing competition rules work."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0b1020;
+        --bg-2: #101a33;
+        --card: #131b32;
+        --ink: #f7f9ff;
+        --muted: #b8c0d9;
+        --accent: #2f6bff;
+        --accent-2: #ffb020;
+        --line: rgba(255, 255, 255, 0.08);
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+        --radius: 22px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'DM Sans', system-ui, sans-serif;
+        color: var(--ink);
+        background: radial-gradient(
+            1100px 600px at 20% -10%,
+            rgba(47, 107, 255, 0.35),
+            transparent 60%
+          ),
+          radial-gradient(
+            900px 500px at 100% 0%,
+            rgba(255, 176, 32, 0.25),
+            transparent 55%
+          ),
+          linear-gradient(180deg, var(--bg), var(--bg-2));
+        min-height: 100vh;
+      }
+      .page {
+        overflow: hidden;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 0 24px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: 'Space Grotesk', sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: var(--ink);
+        text-decoration: none;
+      }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        background: #ffffff;
+        border-radius: 12px;
+      }
+      .brand img {
+        width: 38px;
+        height: 38px;
+      }
+      h1 {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: clamp(32px, 4vw, 48px);
+        margin: 0 0 8px;
+        line-height: 1.1;
+      }
+      h2 {
+        margin: 0 0 10px;
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: clamp(24px, 3.2vw, 32px);
+      }
+      p,
+      li {
+        line-height: 1.65;
+      }
+      .card {
+        background: linear-gradient(
+          160deg,
+          rgba(255, 255, 255, 0.04),
+          rgba(255, 255, 255, 0.01)
+        );
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 22px;
+      }
+      .hero {
+        margin-bottom: 22px;
+      }
+      .hero p {
+        margin: 0;
+      }
+      .cta-row {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .store-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+      }
+      .store-badge {
+        width: 180px;
+        height: 54px;
+        object-fit: contain;
+        display: block;
+      }
+      .store-badge-android {
+        width: 220px;
+        height: 66px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+      .divider {
+        margin: 24px 0;
+        border: 0;
+        border-top: 1px solid var(--line);
+      }
+      .footer {
+        margin-top: 30px;
+        padding-top: 24px;
+        font-size: 0.95rem;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+      }
+      .footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      .cards {
+        display: grid;
+        gap: 18px;
+      }
+      ul {
+        margin: 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      li + li {
+        margin-top: 8px;
+      }
+      @media (max-width: 640px) {
+        .store-badge {
+          width: 160px;
+          height: 48px;
+        }
+        .store-badge-android {
+          width: 195px;
+          height: 58px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <a class="brand" href="/" aria-label="Go to Whistle homepage">
+          <span class="brand-mark">
+            <img src="/static/images/whistle-icon.png" alt="Whistle logo" />
+          </span>
+          <span>Whistle</span>
+        </a>
+      </header>
+
+      <section class="card hero">
+        <h1>Whistle Testing Access</h1>
+        <p class="muted">
+          Whistle is currently in testing. Install the test build below and
+          join live games as we validate gameplay and notifications.
+        </p>
+      </section>
+
+      <div class="cards">
+        <section class="card">
+          <h2>Install Test App</h2>
+          <div class="cta-row">
+            <a
+              class="store-link"
+              href="https://testflight.apple.com/join/Qd16PVYa"
+              aria-label="Install iOS test version"
+            >
+              <img
+                class="store-badge"
+                src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+                alt="Install iOS test version"
+              />
+            </a>
+            <a
+              class="store-link"
+              href="mailto:configure@example.com?subject=Android%20Whistle%20testing"
+              aria-label="Install Android test version"
+            >
+              <img
+                class="store-badge store-badge-android"
+                src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
+                alt="Install Android test version"
+              />
+            </a>
+          </div>
+          <p class="muted">
+            If you have any other questions or comments, please reach out at
+            <strong>configure@example.com</strong>.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>How it works</h2>
+          <ul>
+            <li>Join live prediction pools in the Whistle app.</li>
+            <li>Participants earn points based on prediction accuracy.</li>
+            <li>
+              The participant(s) with the highest total points between their
+              best two games for the week win.
+            </li>
+            <li>
+              Tie policy: If multiple participants are tied for the highest
+              score, the weekly prize is split evenly among them.
+            </li>
+            <li>
+              Prize: A total of $50 USD per week will be awarded during the
+              Test Phase.
+            </li>
+            <li>No purchase necessary. Participation is free.</li>
+          </ul>
+        </section>
+      </div>
+
+      <div class="footer">
+        <a href="/">Home</a>
+        <span> | </span>
+        <a href="/privacy">Privacy</a>
+        <span> | </span>
+        <a href="/support">Support</a>
+      </div>
+    </div>
+  </body>
+</html>

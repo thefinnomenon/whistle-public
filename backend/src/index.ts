@@ -60,6 +60,9 @@ app.get('/privacy', (_req, res) =>
 app.get('/support', (_req, res) =>
   res.sendFile(resolveStaticHtml('support.html'))
 )
+app.get('/testers', (_req, res) =>
+  res.sendFile(resolveStaticHtml('testers.html'))
+)
 
 app.use('/api/games', gameRouter)
 app.use('/api', authRouter)
