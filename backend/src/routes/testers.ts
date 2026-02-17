@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { admin } from '../firebase'
 import { trackEvent } from '../lib/mixpanel'
+import { sendTesterWaitlistToSlack } from '../lib/slack'
 
 const router = Router()
 
@@ -46,6 +47,7 @@ router.post('/waitlist', async (req, res) => {
   const emailDomain = email.split('@')[1] || 'unknown'
   const docId = encodeURIComponent(email)
   const waitlistRef = admin.firestore().collection('testerWaitlist').doc(docId)
+  let created = false
 
   try {
     await admin.firestore().runTransaction(async (tx) => {
@@ -61,6 +63,7 @@ router.post('/waitlist', async (req, res) => {
         return
       }
 
+      created = true
       tx.set(waitlistRef, {
         ...baseData,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -71,11 +74,42 @@ router.post('/waitlist', async (req, res) => {
       `[testers/waitlist] upserted email=${maskEmailForLog(email)} domain=${emailDomain}`
     )
     trackEvent('testers_waitlist_submitted', {
+      created,
       email_domain: emailDomain,
       source: 'backend',
     })
 
-    return res.status(201).json({ ok: true })
+    if (created) {
+      trackEvent('testers_waitlist_added', {
+        email_domain: emailDomain,
+        source: 'backend',
+      })
+    } else {
+      trackEvent('testers_waitlist_resubmitted', {
+        email_domain: emailDomain,
+        source: 'backend',
+      })
+    }
+
+    if (created) {
+      try {
+        await sendTesterWaitlistToSlack({
+          email,
+          emailDomain,
+          source: 'testers_page',
+        })
+        console.log(
+          `[testers/waitlist/slack] delivered email=${maskEmailForLog(email)} domain=${emailDomain}`
+        )
+      } catch (slackError) {
+        console.error(
+          `[testers/waitlist/slack] failed email=${maskEmailForLog(email)} domain=${emailDomain}`,
+          slackError
+        )
+      }
+    }
+
+    return res.status(201).json({ ok: true, created })
   } catch (error) {
     console.error(
       `[testers/waitlist] failed email=${maskEmailForLog(email)} domain=${emailDomain}`,

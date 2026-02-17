@@ -9,6 +9,12 @@ type FeedbackSlackMessage = {
   text: string
 }
 
+type WaitlistSlackMessage = {
+  email: string
+  emailDomain: string
+  source: string
+}
+
 type SlackPostMessagePayload = {
   channel: string
   text: string
@@ -21,6 +27,7 @@ type SlackPostMessageResponse = {
 
 const SLACK_POST_MESSAGE_URL = 'https://slack.com/api/chat.postMessage'
 const FEEDBACK_SLACK_CHANNEL = '#whistle-feedback'
+const ALERTS_SLACK_CHANNEL = '#whistle-alerts'
 const MAX_FEEDBACK_PREVIEW = 1500
 
 const normalizeForSlack = (value: string) =>
@@ -56,6 +63,18 @@ const buildFeedbackSlackMessage = ({
     preview || '[no free-text provided]',
   ].join('\n')
 }
+
+const buildWaitlistSlackMessage = ({
+  email,
+  emailDomain,
+  source,
+}: WaitlistSlackMessage) =>
+  [
+    ':mailbox_with_mail: New tester waitlist signup',
+    `email=${email}`,
+    `emailDomain=${emailDomain}`,
+    `source=${source}`,
+  ].join('\n')
 
 export const sendSlackMessage = async (channel: string, text: string) => {
   if (process.env.NODE_ENV !== 'production') {
@@ -115,6 +134,19 @@ export const sendFeedbackToSlack = async (message: FeedbackSlackMessage) => {
       questionVolume: message.questionVolume,
       questionTiming: message.questionTiming,
       text: message.text,
+    })
+  )
+}
+
+export const sendTesterWaitlistToSlack = async (
+  message: WaitlistSlackMessage
+) => {
+  await sendSlackMessage(
+    ALERTS_SLACK_CHANNEL,
+    buildWaitlistSlackMessage({
+      email: message.email,
+      emailDomain: message.emailDomain,
+      source: message.source,
     })
   )
 }
