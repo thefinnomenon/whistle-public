@@ -68,8 +68,8 @@ Thank you!`
     }
   }
 
-  const handleSubmitFeedback = async () => {
-    const subjectText = `Whistle Feedback (userId: ${user?.id})`
+  const handleSupport = async () => {
+    const subjectText = `Whistle Support (userId: ${user?.id}): [Brief description of your issue]`
     const subject = encodeURIComponent(subjectText)
     const email = 'configure@example.com'
     const gmailUrl = `googlegmail://co?to=${encodeURIComponent(email)}&subject=${subject}`
@@ -294,10 +294,10 @@ Thank you!`
             />
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={handleSubmitFeedback}
+            onPress={handleSupport}
             className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
           >
-            <Text className="text-base text-foreground">Submit Feedback</Text>
+            <Text className="text-base text-foreground">Support</Text>
             <Ionicons name="mail-outline" size={20} color="slategray" />
           </TouchableOpacity>
           <TouchableOpacity
