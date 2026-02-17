@@ -1,9 +1,9 @@
 import Constants from 'expo-constants'
-import * as Linking from 'expo-linking'
 import { router, useLocalSearchParams } from 'expo-router'
 import * as Updates from 'expo-updates'
 import {
   Alert,
+  Linking,
   Platform,
   ScrollView,
   Text,
@@ -33,9 +33,8 @@ export default function SettingsScreen() {
     build === undefined || build === null ? '' : ` (${String(build)})`
 
   const handleWithdraw = async () => {
-    const subject = encodeURIComponent('Withdrawal Request - Whistle')
-    const body = encodeURIComponent(
-      `Hi,
+    const subjectText = 'Withdrawal Request - Whistle'
+    const bodyText = `Hi,
 
 I would like to withdraw my winnings from Whistle.
 
@@ -47,24 +46,47 @@ Payment Information:
 [Please provide your preferred payment method and details here]
 
 Thank you!`
-    )
+    const subject = encodeURIComponent(subjectText)
+    const body = encodeURIComponent(bodyText)
     const email = 'configure@example.com'
+    const gmailUrl = `googlegmail://co?to=${encodeURIComponent(email)}&subject=${subject}&body=${body}`
     const mailtoUrl = `mailto:${email}?subject=${subject}&body=${body}`
 
     try {
-      const canOpen = await Linking.canOpenURL(mailtoUrl)
-      if (canOpen) {
-        await Linking.openURL(mailtoUrl)
-      } else {
-        Alert.alert(
-          'Email Not Available',
-          `Please send a withdrawal request to ${email} with the following details:\n\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
-        )
+      try {
+        await Linking.openURL(gmailUrl)
+        return
+      } catch {
+        // Fall through to default mail client.
       }
+      await Linking.openURL(mailtoUrl)
     } catch {
       Alert.alert(
         'Email Not Available',
         `Please send a withdrawal request to ${email} with the following details:\n\nEmail: ${user?.email}\nAmount: $${winnings.toFixed(2)}`
+      )
+    }
+  }
+
+  const handleSubmitFeedback = async () => {
+    const subjectText = `Whistle Feedback (userId: ${user?.id})`
+    const subject = encodeURIComponent(subjectText)
+    const email = 'configure@example.com'
+    const gmailUrl = `googlegmail://co?to=${encodeURIComponent(email)}&subject=${subject}`
+    const mailtoUrl = `mailto:${email}?subject=${subject}`
+
+    try {
+      try {
+        await Linking.openURL(gmailUrl)
+        return
+      } catch {
+        // Fall through to default mail client.
+      }
+      await Linking.openURL(mailtoUrl)
+    } catch {
+      Alert.alert(
+        'Email Not Available',
+        `Please send feedback to ${email}\n\nuserId: ${user?.id}`
       )
     }
   }
@@ -259,6 +281,13 @@ Thank you!`
               size={20}
               color="slategray"
             />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleSubmitFeedback}
+            className="bg-card rounded-lg px-4 py-4 flex-row items-center justify-between border border-border mb-3"
+          >
+            <Text className="text-base text-foreground">Submit Feedback</Text>
+            <Ionicons name="mail-outline" size={20} color="slategray" />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={handleSignOut}
