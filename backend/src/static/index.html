@@ -212,9 +212,11 @@
         grid-template-columns: 1fr minmax(100px, 180px);
       }
 
-      .step img {
+      .step img,
+      .step video {
         width: 100%;
-        border-radius: 16px;
+        border-radius: 28px;
+        display: block;
       }
 
       .step h3 {
@@ -311,7 +313,8 @@
           order: 1;
         }
 
-        .step > img {
+        .step > img,
+        .step > video {
           order: 2;
           width: 180px;
           justify-self: center;
@@ -409,16 +412,26 @@
               game is unfolding. Every pick is locked before the next play.
             </p>
           </div>
-          <img
-            src="/static/images/ios_play.gif"
-            alt="Play live by answering real-time questions"
-          />
+          <video
+            src="/static/video/ios_play.mp4"
+            autoplay
+            loop
+            muted
+            playsinline
+            preload="metadata"
+            aria-label="Play live by answering real-time questions"
+          ></video>
         </article>
         <article class="step fade-in">
-          <img
-            src="/static/images/win.gif"
-            alt="Win by stacking correct answers in Whistle"
-          />
+          <video
+            src="/static/video/win.mp4"
+            autoplay
+            loop
+            muted
+            playsinline
+            preload="metadata"
+            aria-label="Win by stacking correct answers in Whistle"
+          ></video>
           <div>
             <h3>Win</h3>
             <p>
