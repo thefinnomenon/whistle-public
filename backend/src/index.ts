@@ -1,8 +1,8 @@
 import * as Sentry from '@sentry/node'
 import cors from 'cors'
 import express from 'express'
-import path from 'path'
 import fs from 'fs'
+import path from 'path'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import authRouter from './routes/auth'
 import feedbackRouter from './routes/feedback'
@@ -83,7 +83,7 @@ const NBA_SCHEDULE_DAYS_AHEAD = Number(process.env.NBA_SCHEDULE_DAYS_AHEAD ?? 7)
 const NBA_SCHEDULE_POLL_MS = Number(
   process.env.NBA_SCHEDULE_POLL_MS ?? 3_600_000
 )
-const NBA_LIVE_POLL_MS = Number(process.env.NBA_LIVE_POLL_MS ?? 10_000)
+const NBA_LIVE_POLL_MS = Number(process.env.NBA_LIVE_POLL_MS ?? 1000)
 
 // Background worker: update player counts for active games every minute
 const startPlayerCountWorker = () => {
@@ -146,18 +146,42 @@ startNbaScheduleWorker()
 // Background worker: sync NBA live events for open games
 const startNbaLiveFeedWorker = () => {
   console.log('[worker] NBA live feed worker started')
+  let stopped = false
   const run = async () => {
+    const startedAt = Date.now()
     try {
-      const updated = await syncNbaLiveEvents()
-      if (updated > 0)
-        console.log(`[worker] NBA live events updated for ${updated} games`)
+      const stats = await syncNbaLiveEvents()
+      const durationMs = Date.now() - startedAt
+      console.log(
+        `[worker] NBA live feed summary durationMs=${durationMs} openGames=${stats.openGames} updatedGames=${stats.updatedGames} actionsProcessed=${stats.actionsProcessed} commitRetries=${stats.commitRetries}`
+      )
     } catch (err) {
       console.error('[worker] NBA live feed error', err)
       Sentry.captureException(err)
+    } finally {
+      const elapsedMs = Date.now() - startedAt
+      if (elapsedMs > NBA_LIVE_POLL_MS) {
+        console.log(
+          `[worker] NBA live feed cycle slow elapsedMs=${elapsedMs} pollMs=${NBA_LIVE_POLL_MS}`
+        )
+      }
     }
   }
-  run()
-  setInterval(run, NBA_LIVE_POLL_MS)
+
+  const loop = async () => {
+    while (!stopped) {
+      await run()
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), NBA_LIVE_POLL_MS)
+      })
+    }
+  }
+
+  void loop()
+
+  return () => {
+    stopped = true
+  }
 }
 
 startNbaLiveFeedWorker()

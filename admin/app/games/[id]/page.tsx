@@ -35,6 +35,45 @@ const getPercentile = (sortedArray: number[], percentile: number): number => {
   return sortedArray[Math.max(0, index)]
 }
 
+const timestampToMs = (value: { toMillis?: () => number } | undefined): number | null => {
+  if (!value || typeof value.toMillis !== 'function') return null
+  const ms = value.toMillis()
+  return Number.isFinite(ms) ? ms : null
+}
+
+const formatMsDateTime = (value: number | null | undefined): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return new Date(value).toLocaleString()
+}
+
+const parseTimeoutToMs = (timeoutAt: string | undefined): number | null => {
+  if (!timeoutAt) return null
+  const numeric = Number(timeoutAt)
+  if (Number.isFinite(numeric)) return numeric
+  const parsed = Date.parse(timeoutAt)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const formatRelativeSeconds = (
+  valueMs: number | null | undefined,
+  baselineMs: number | null
+): string => {
+  if (
+    typeof valueMs !== 'number' ||
+    !Number.isFinite(valueMs) ||
+    baselineMs === null ||
+    !Number.isFinite(baselineMs)
+  ) {
+    return '—'
+  }
+  return `${((valueMs - baselineMs) / 1000).toFixed(1)}s`
+}
+
+const formatMetricMs = (value: number | undefined): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return `${(value / 1000).toFixed(2)}s`
+}
+
 export default function GamePage() {
   const params = useParams()
   const { user } = useAuth()
@@ -601,6 +640,13 @@ const lastQuestionStats = React.useMemo(() => {
       </div>
     )
   }
+
+  const questionTimelineBaselineMs = questions.reduce<number | null>((minMs, question) => {
+    const candidateMs = timestampToMs(question.triggeredAt) ?? timestampToMs(question.createdAt)
+    if (candidateMs === null) return minMs
+    if (minMs === null) return candidateMs
+    return candidateMs < minMs ? candidateMs : minMs
+  }, null)
 
   return (
     <div className="min-h-screen p-8">
@@ -1619,6 +1665,109 @@ const lastQuestionStats = React.useMemo(() => {
               Custom Question
             </Link>
           </div>
+
+          {questions.length > 0 && (
+            <div className="px-6 py-4 border-b bg-gray-50">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <h3 className="text-sm font-semibold text-gray-800">
+                  Debug Question Table
+                </h3>
+                <span className="text-xs text-gray-500">
+                  Includes resolution, reason, and timing fields
+                </span>
+              </div>
+              <div className="overflow-auto border border-gray-200 rounded-md bg-white">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-700">
+                    <tr>
+                      <th className="text-left px-3 py-2">#</th>
+                      <th className="text-left px-3 py-2">Question</th>
+                      <th className="text-left px-3 py-2">Resolution</th>
+                      <th className="text-left px-3 py-2">Reason</th>
+                      <th className="text-left px-3 py-2">Timing</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {[...questions].reverse().map((question, index) => {
+                      const stats = question.statistics
+                      const createdAtMs = timestampToMs(question.createdAt)
+                      const triggeredAtMs = timestampToMs(question.triggeredAt)
+                      const closedAtMs = timestampToMs(question.closedAt)
+                      const resolvedAtMs = timestampToMs(question.resolvedAt)
+                      const cancelledAtMs = timestampToMs(question.cancelledAt)
+                      const timeoutAtMs = parseTimeoutToMs(question.timeoutAt)
+                      const answerLabel = question.answer
+                        ? (question.choices.find((choice) =>
+                            typeof choice === 'string'
+                              ? choice === question.answer
+                              : choice.id === question.answer || choice.value === question.answer
+                          ) ?? question.answer)
+                        : null
+                      const answerText =
+                        typeof answerLabel === 'string'
+                          ? answerLabel
+                          : answerLabel && typeof answerLabel !== 'string'
+                            ? answerLabel.value
+                            : null
+
+                      return (
+                        <tr key={`debug-${question.id}`}>
+                          <td className="px-3 py-2 align-top text-gray-500">{index + 1}</td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="font-medium text-sm text-gray-900">
+                              {question.question}
+                            </div>
+                            <div className="text-gray-600 mt-1">
+                              {question.choices
+                                .map((choice) =>
+                                  typeof choice === 'string' ? choice : choice.value
+                                )
+                                .join(', ')}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="font-medium">{question.state}</div>
+                            <div className="text-gray-600 mt-1">
+                              ans={answerText ?? question.answer ?? '—'}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top text-gray-700">
+                            <div>engineTag: {question.engineTag ?? '—'}</div>
+                            <div>cancel: {question.cancelReason ?? '—'}</div>
+                            <div>window: {question.windowType ?? '—'}</div>
+                          </td>
+                          <td className="px-3 py-2 align-top text-gray-700">
+                            <div>created: {formatMsDateTime(createdAtMs)}</div>
+                            <div>triggered: {formatMsDateTime(triggeredAtMs)}</div>
+                            <div>timeout: {formatMsDateTime(timeoutAtMs)}</div>
+                            <div>
+                              done:{' '}
+                              {formatMsDateTime(
+                                resolvedAtMs ?? cancelledAtMs ?? closedAtMs
+                              )}
+                            </div>
+                            <div>
+                              rel trigger:{' '}
+                              {formatRelativeSeconds(
+                                triggeredAtMs ?? createdAtMs,
+                                questionTimelineBaselineMs
+                              )}
+                            </div>
+                            <div className="mt-1 text-gray-500">
+                              delivery/open/respond:{' '}
+                              {formatMetricMs(stats?.delivery?.avg)} /{' '}
+                              {formatMetricMs(stats?.open?.avg)} /{' '}
+                              {formatMetricMs(stats?.respond?.avg)}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
               <div className="divide-y">
             {questions.length === 0 ? (

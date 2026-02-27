@@ -3011,21 +3011,30 @@ const buildResolutionContext = (
     case 'PLAYER_MILESTONE_PERIOD': {
       const playerId = asNumber(template.resolutionContext?.playerId)
       const statType = asString(template.resolutionContext?.statType) ?? ''
-      const currentStat =
+      const player =
         playerId !== null && Number.isFinite(playerId)
-          ? getPlayerGameStat(
-              getPlayerFromBoxScore(boxScore, playerId),
-              statType
-            )
+          ? getPlayerFromBoxScore(boxScore, playerId)
+          : null
+      const currentGameStat =
+        playerId !== null && Number.isFinite(playerId)
+          ? getPlayerGameStat(player, statType)
+          : null
+      const currentPeriodStat =
+        playerId !== null && Number.isFinite(playerId)
+          ? getPlayerPeriodStat(player, base.startPeriod ?? 0, statType)
           : null
       return {
         ...base,
         endPeriod: base.startPeriod,
         target: asNumber(template.resolutionContext?.target),
         playerId,
+        startGameStat:
+          currentGameStat !== null && Number.isFinite(currentGameStat)
+            ? currentGameStat
+            : null,
         initialValue:
-          currentStat !== null && Number.isFinite(currentStat)
-            ? currentStat
+          currentGameStat !== null && Number.isFinite(currentGameStat)
+            ? currentGameStat
             : null,
       }
     }
@@ -3034,9 +3043,14 @@ const buildResolutionContext = (
       const playerIds =
         asNumberArray(template.resolutionContext?.playerIds) ?? []
       const startStats: Record<string, number> = {}
+      const startGameStats: Record<string, number> = {}
       for (const playerId of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(playerId))
         if (!player) continue
+        const gameStat = getPlayerGameStat(player, statType)
+        if (gameStat !== null && !Number.isNaN(gameStat)) {
+          startGameStats[String(playerId)] = gameStat
+        }
         const stat = getPlayerPeriodStat(
           player,
           base.startPeriod ?? 0,
@@ -3052,6 +3066,9 @@ const buildResolutionContext = (
         playerIds,
         choices: asChoiceArray(template.resolutionContext?.choices) ?? [],
         tiedStatValue: asNumber(template.resolutionContext?.tiedStatValue),
+        startPlayerGameStats: Object.keys(startGameStats).length
+          ? startGameStats
+          : null,
         initialValue: Object.keys(startStats).length ? startStats : null,
       }
     }
@@ -3784,12 +3801,17 @@ export const resolveQuestionForEvent = (
         currentClockMs !== null &&
         startClockMs - currentClockMs >= windowMs))
 
-  const gameEnded =
+  // Some feeds do not emit a reliable GAME_END/PERIOD_END final event, but the
+  // box score already reports a final status. Treat any event with final status
+  // as end-of-game so "game winner" and end-of-period questions can resolve.
+  const gameEnded = event.type === EventType.GAME_END || isFinalStatus(boxScore)
+  const periodBoundaryReached =
     event.type === EventType.GAME_END ||
-    (isFinalStatus(boxScore) &&
+    (!!startPeriod &&
+      !!currentPeriod &&
       event.type === EventType.PERIOD_END &&
-      (event.gameState?.period ?? 0) >= 4)
-  const periodFinished = periodEnded || gameEnded
+      currentPeriod >= startPeriod)
+  const periodFinished = periodBoundaryReached
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
   const awayScore = getCurrentScore(event, boxScore, 'AWAY')
@@ -3800,7 +3822,7 @@ export const resolveQuestionForEvent = (
       const minTotalScore = asNumber(context.minTotalScore)
       if (minTotalScore !== null && currentTotal >= minTotalScore)
         return { state: 'resolved', answer: 'yes' }
-      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      if (windowExpired || gameEnded) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'TEAM_POINTS_NEXT_N':
@@ -3859,14 +3881,15 @@ export const resolveQuestionForEvent = (
         startHomeThrees === null ||
         startAwayThrees === null
       ) {
-        if (windowExpired) return { state: 'cancelled', answer: null }
+        if (windowExpired || gameEnded)
+          return { state: 'cancelled', answer: null }
         return null
       }
       const delta = homeThrees + awayThrees - startHomeThrees - startAwayThrees
       const minMade3Count = asNumber(context.minMade3Count)
       if (minMade3Count !== null && delta >= minMade3Count)
         return { state: 'resolved', answer: 'yes' }
-      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      if (windowExpired || gameEnded) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'MADE_FG_BEFORE_PERIOD_END':
@@ -3895,7 +3918,7 @@ export const resolveQuestionForEvent = (
         startHomeThrees === null ||
         startAwayThrees === null
       ) {
-        if (periodEnded) return { state: 'cancelled', answer: null }
+        if (periodFinished) return { state: 'cancelled', answer: null }
         return null
       }
       const delta = homeThrees + awayThrees - startHomeThrees - startAwayThrees
@@ -3986,13 +4009,22 @@ export const resolveQuestionForEvent = (
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
-      const current = getPlayerPeriodStat(player, period, statType)
+      const currentGameStat = getPlayerGameStat(player, statType)
+      const startGameStat =
+        asNumber(context.startGameStat) ?? asNumber(context.initialValue)
+      const deltaStat =
+        currentGameStat !== null &&
+        startGameStat !== null &&
+        Number.isFinite(currentGameStat) &&
+        Number.isFinite(startGameStat)
+          ? Math.max(0, currentGameStat - startGameStat)
+          : null
       const target = asNumber(context.target)
-      if (target !== null && current !== null && current >= target)
+      if (target !== null && deltaStat !== null && deltaStat >= target)
         return { state: 'resolved', answer: 'yes' }
       if (periodFinished) {
-        if (current === null) return { state: 'cancelled', answer: null }
-        return { state: 'resolved', answer: 'no' }
+        if (deltaStat !== null) return { state: 'resolved', answer: 'no' }
+        return { state: 'cancelled', answer: null }
       }
       return null
     }
@@ -4000,6 +4032,7 @@ export const resolveQuestionForEvent = (
       if (!periodFinished) return null
       const statType = asString(context.statType) ?? ''
       const playerIds = asNumberArray(context.playerIds) ?? []
+      const startPlayerGameStats = asRecordNumber(context.startPlayerGameStats)
       const period = asNumber(context.endPeriod) ?? startPeriod ?? currentPeriod
       if (!period || playerIds.length < 2)
         return { state: 'cancelled', answer: null }
@@ -4008,9 +4041,16 @@ export const resolveQuestionForEvent = (
       let tie = false
       for (const id of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(id))
-        const stat =
-          getPlayerPeriodStat(player, period, statType) ??
-          getPlayerGameStat(player, statType)
+        const currentGameStat = getPlayerGameStat(player, statType)
+        const startGameStat = startPlayerGameStats?.[String(id)]
+        const deltaStat =
+          currentGameStat !== null &&
+          startGameStat !== undefined &&
+          Number.isFinite(currentGameStat) &&
+          Number.isFinite(startGameStat)
+            ? Math.max(0, currentGameStat - startGameStat)
+            : null
+        const stat = deltaStat ?? 0
         if (stat === null || Number.isNaN(stat)) continue
         if (bestValue === null || stat > bestValue) {
           bestValue = stat
@@ -4026,7 +4066,7 @@ export const resolveQuestionForEvent = (
       return { state: 'resolved', answer: bestId }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
-      if (!windowExpired) return null
+      if (!windowExpired && !gameEnded) return null
       const statType = asString(context.statType) ?? ''
       const playerIds = asNumberArray(context.playerIds) ?? []
       const startStats = asRecordNumber(context.startPlayerStats)
@@ -4154,8 +4194,10 @@ export const resolveQuestionForEvent = (
     case 'NEXT_EVENT': {
       const expected = asString(context.expectedEventType) ?? ''
       if (!expected) return null
-      if (gameEnded && asBoolean(context.cancelOnGameEnd))
-        return { state: 'cancelled', answer: null }
+      if (asBoolean(context.cancelOnGameEnd) && gameEnded) {
+        if (event.type !== EventType.GAME_END) return null
+        return { state: 'resolved', answer: 'no' }
+      }
       const expectedSubType = asString(context.expectedSubType)
       const eventSubType =
         typeof event.subType === 'string' ? event.subType : null
@@ -4199,6 +4241,7 @@ export const resolveQuestionForEvent = (
       return null
     }
     case 'GAME_POINTS_PACE': {
+      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       const currentTotal = (homeScore ?? 0) + (awayScore ?? 0)
       const paceTotal = asNumber(context.paceTotal)
@@ -4209,6 +4252,7 @@ export const resolveQuestionForEvent = (
       }
     }
     case 'OVERTIME': {
+      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       const period = boxScore?.period ?? boxScore?.game?.period ?? null
       const statusText = String(
@@ -4222,6 +4266,7 @@ export const resolveQuestionForEvent = (
       }
     }
     case 'GAME_WINNER': {
+      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
@@ -4236,6 +4281,7 @@ export const resolveQuestionForEvent = (
       }
     }
     case 'TEAM_WINS_GAME': {
+      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }

@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'crypto'
 import { Router } from 'express'
 import { admin, db } from '../firebase'
 import { scheduleGameStartQuestions } from '../lib/engine'
+import { simulateStoredGame } from '../lib/gameSimulation'
 import {
   identifyUser,
   incrementUserProperty,
@@ -36,6 +37,76 @@ type SignedQuestionPayload = {
   timeoutAt: number | null
   engineTag?: string
   [key: string]: any
+}
+
+type TimestampLikeValue =
+  | admin.firestore.Timestamp
+  | Date
+  | number
+  | string
+  | null
+  | undefined
+
+type QuestionDocData = {
+  state?: string
+  question?: string
+  answer?: string
+  timeoutAt?: number | string | null
+  engineTag?: string
+  templateId?: string
+  trigger?: string
+  windowType?: string
+  cancelReason?: string
+  createdAt?: TimestampLikeValue
+  triggeredAt?: TimestampLikeValue
+  closedAt?: TimestampLikeValue
+  resolvedAt?: TimestampLikeValue
+  cancelledAt?: TimestampLikeValue
+}
+
+const toMs = (value: TimestampLikeValue): number | null => {
+  if (!value) return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return numeric
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  if (value instanceof Date) {
+    const ms = value.getTime()
+    return Number.isFinite(ms) ? ms : null
+  }
+  if (typeof value === 'object' && 'toMillis' in value) {
+    const timestamp = value as admin.firestore.Timestamp
+    const ms = timestamp.toMillis()
+    return Number.isFinite(ms) ? ms : null
+  }
+  return null
+}
+
+const normalizeOriginalQuestion = (
+  doc: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>
+) => {
+  const data = doc.data() as QuestionDocData
+  return {
+    id: doc.id,
+    state: typeof data.state === 'string' ? data.state : 'unknown',
+    question: typeof data.question === 'string' ? data.question : '',
+    answer: typeof data.answer === 'string' ? data.answer : null,
+    timeoutAtMs: toMs(data.timeoutAt),
+    engineTag: typeof data.engineTag === 'string' ? data.engineTag : null,
+    templateId: typeof data.templateId === 'string' ? data.templateId : null,
+    trigger: typeof data.trigger === 'string' ? data.trigger : null,
+    windowType: typeof data.windowType === 'string' ? data.windowType : null,
+    cancelReason:
+      typeof data.cancelReason === 'string' ? data.cancelReason : null,
+    createdAtMs: toMs(data.createdAt),
+    triggeredAtMs: toMs(data.triggeredAt),
+    closedAtMs: toMs(data.closedAt),
+    resolvedAtMs: toMs(data.resolvedAt),
+    cancelledAtMs: toMs(data.cancelledAt),
+  }
 }
 
 const buildSignedQuestionPayload = (payload: SignedQuestionPayload) => {
@@ -454,6 +525,54 @@ router.get('/:gameId/events', isAdminMiddleware, async (req, res) => {
     return res.json({ ok: true, events, lastActionNumber })
   } catch (error) {
     console.error('[games/events] error', error)
+    return res.status(500).json({ error: 'Internal Server Error' })
+  }
+})
+
+router.get('/:gameId/simulate', isAdminMiddleware, async (req, res) => {
+  try {
+    const { gameId } = req.params
+    const [simulation, originalQuestionsSnap] = await Promise.all([
+      simulateStoredGame(gameId),
+      db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .orderBy('createdAt', 'asc')
+        .get(),
+    ])
+
+    const originalQuestions = originalQuestionsSnap.docs.map(
+      normalizeOriginalQuestion
+    )
+
+    return res.json({
+      ok: true,
+      gameId,
+      simulation,
+      originalQuestions,
+      originalCounts: {
+        total: originalQuestions.length,
+        resolved: originalQuestions.filter((q) => q.state === 'resolved')
+          .length,
+        cancelled: originalQuestions.filter((q) => q.state === 'cancelled')
+          .length,
+        openOrClosed: originalQuestions.filter(
+          (q) => q.state === 'open' || q.state === 'closed'
+        ).length,
+      },
+      simulatedAtMs: Date.now(),
+    })
+  } catch (error) {
+    console.error('[games/simulate] error', error)
+    if (error instanceof Error) {
+      if (error.message.startsWith('Game not found:')) {
+        return res.status(404).json({ error: error.message })
+      }
+      if (error.message.startsWith('No events found for game')) {
+        return res.status(400).json({ error: error.message })
+      }
+    }
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 })
@@ -2087,8 +2206,9 @@ const calculateQuestionStatistics = async (
     | undefined
   if (playerCount !== undefined) {
     statistics.playerCount = playerCount
-    statistics.responseRate =
-      playerCount > 0 ? totalResponses / playerCount : undefined
+    if (playerCount > 0) {
+      statistics.responseRate = totalResponses / playerCount
+    }
     statistics.unanswered = playerCount - totalResponses
   }
 

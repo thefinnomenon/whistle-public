@@ -152,6 +152,87 @@ export type Prediction = {
   createdAt: FirestoreTimestamp
 }
 
+export type SimulationResolvedEvent = {
+  eventId: number
+  type: string
+  description: string
+  period: number | null
+  clockMs: number | null
+  timeActual: string | null
+  rawActionPeriod: number | null
+  rawActionClock: string | null
+}
+
+export type SimulationJsonPrimitive = string | number | boolean | null
+export type SimulationJsonValue =
+  | SimulationJsonPrimitive
+  | SimulationJsonValue[]
+  | { [key: string]: SimulationJsonValue }
+
+export type SimulationQuestion = {
+  id: string
+  templateId: string
+  question: string
+  windowType: string
+  timeoutMs: number
+  trigger: string
+  period: number
+  clockMs: number
+  state: 'open' | 'closed' | 'resolved' | 'cancelled'
+  choices: Choice[]
+  resolutionContext?: { [key: string]: SimulationJsonValue }
+  answer?: string | null
+  cancelReason?: string
+  resolvedAtEventId?: number
+  resolvedEvent?: SimulationResolvedEvent
+  result?: { [key: string]: SimulationJsonValue } | null
+  createdAtMs?: number
+  timeoutAtMs?: number
+}
+
+export type SimulatedGameResult = {
+  gameId: string
+  questions: SimulationQuestion[]
+  counts: {
+    open: number
+    resolved: number
+    cancelled: number
+  }
+  eventCount: number
+}
+
+export type OriginalSimComparisonQuestion = {
+  id: string
+  state: string
+  question: string
+  answer: string | null
+  timeoutAtMs: number | null
+  engineTag: string | null
+  templateId: string | null
+  trigger: string | null
+  windowType: string | null
+  cancelReason: string | null
+  createdAtMs: number | null
+  triggeredAtMs: number | null
+  closedAtMs: number | null
+  resolvedAtMs: number | null
+  cancelledAtMs: number | null
+}
+
+export type GameSimulationResponse = {
+  ok: true
+  gameId: string
+  simulation: SimulatedGameResult
+  originalQuestions: OriginalSimComparisonQuestion[]
+  originalCounts: {
+    total: number
+    resolved: number
+    cancelled: number
+    openOrClosed: number
+  }
+  simulatedAtMs: number
+}
+
 export type NFL_Team =
   | 'ARI'
   | 'ATL'

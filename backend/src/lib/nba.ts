@@ -420,6 +420,13 @@ const resolveOpenQuestionsForEvent = async (
   if (!docs.length) return 0
 
   let resolvedCount = 0
+  const isTerminalResolutionEvent =
+    event.type === EventType.PERIOD_END ||
+    event.type === EventType.GAME_END ||
+    isFinalStatus(
+      boxScore?.gameStatus ?? boxScore?.game?.gameStatus,
+      boxScore?.gameStatusText ?? boxScore?.game?.gameStatusText
+    )
   for (const doc of docs) {
     const data = doc.data() as any
     const currentState = String(data.state || '')
@@ -427,7 +434,7 @@ const resolveOpenQuestionsForEvent = async (
     if (!decision) continue
 
     if (decision.state === 'resolved') {
-      if (currentState === 'open') {
+      if (currentState === 'open' && !isTerminalResolutionEvent) {
         await doc.ref.set(
           {
             state: 'cancelled',
@@ -470,6 +477,61 @@ const resolveOpenQuestionsForEvent = async (
   return resolvedCount
 }
 
+const resolveQuestionsAtGameEnd = async (
+  gameId: string,
+  lastActionNumber: number,
+  boxScore: BoxScore | null
+) => {
+  const syntheticEvent: EngineEvent = {
+    eventId: Math.max(0, lastActionNumber + 1),
+    source: EngineEventSource.NBA_COM,
+    type: EventType.GAME_END,
+    subType: NbaEventSubType.END,
+    context: null,
+    description: 'synthetic_game_end_resolution',
+    questionId: null,
+    gameState: {
+      period: boxScore?.period ?? boxScore?.game?.period ?? null,
+      clockMs: parseClockToMs(boxScore?.gameClock ?? boxScore?.game?.gameClock),
+      scoreHome:
+        typeof boxScore?.homeTeam?.score === 'number'
+          ? boxScore.homeTeam.score
+          : null,
+      scoreAway:
+        typeof boxScore?.awayTeam?.score === 'number'
+          ? boxScore.awayTeam.score
+          : null,
+      possession: null,
+      boxScore: boxScore
+        ? {
+            gameId: boxScore.gameId ?? boxScore.game?.gameId ?? null,
+            gameStatus:
+              boxScore.gameStatus ?? boxScore.game?.gameStatus ?? null,
+            gameStatusText:
+              boxScore.gameStatusText ?? boxScore.game?.gameStatusText ?? '',
+            period: boxScore.period ?? boxScore.game?.period ?? null,
+            gameClock: boxScore.gameClock ?? boxScore.game?.gameClock ?? null,
+            homeTeam: boxScore.homeTeam ?? boxScore.game?.homeTeam ?? null,
+            awayTeam: boxScore.awayTeam ?? boxScore.game?.awayTeam ?? null,
+          }
+        : null,
+    },
+    ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }
+
+  const resolved = await resolveOpenQuestionsForEvent(
+    gameId,
+    syntheticEvent,
+    boxScore,
+    ['NEXT_EVENT', 'NEXT_N_MIN', 'PERIOD', 'GAME']
+  )
+  if (resolved > 0) {
+    console.log(
+      `[nba] final resolution pass game=${gameId} resolved=${resolved}`
+    )
+  }
+}
+
 const buildBaseGamePayload = (game: any, startTime: Date | null) => {
   const homeTeam = resolveTeamCode(game?.homeTeam)
   const awayTeam = resolveTeamCode(game?.awayTeam)
@@ -496,21 +558,88 @@ const buildBaseGamePayload = (game: any, startTime: Date | null) => {
 }
 
 const commitInBatches = async (
-  writes: { ref: FirebaseFirestore.DocumentReference; data: any }[]
+  writes: { ref: FirebaseFirestore.DocumentReference; data: any }[],
+  onRetry?: () => void
 ) => {
-  const limit = 450
+  const limit = 200
+  const maxAttempts = 4
+  type CommitErrorLike = {
+    code?: number | string
+    details?: string
+    message?: string
+  }
+  const asCommitError = (error: Error | CommitErrorLike): CommitErrorLike => {
+    if (typeof error !== 'object' || error === null) return {}
+    const base = error as { message?: string }
+    const details =
+      'details' in error && typeof error.details === 'string'
+        ? error.details
+        : undefined
+    const code =
+      'code' in error &&
+      (typeof error.code === 'number' || typeof error.code === 'string')
+        ? error.code
+        : undefined
+    return {
+      code,
+      details,
+      message: typeof base.message === 'string' ? base.message : undefined,
+    }
+  }
+  const isDeadlineExceeded = (error: Error | CommitErrorLike) => {
+    const normalized = asCommitError(error)
+    const code = normalized.code
+    if (code === 4 || code === '4' || code === 'DEADLINE_EXCEEDED') return true
+    const message = String(normalized.message || '')
+    const details = String(normalized.details || '')
+    return (
+      message.includes('DEADLINE_EXCEEDED') ||
+      message.includes('Deadline exceeded') ||
+      details.includes('DEADLINE_EXCEEDED') ||
+      details.includes('Deadline exceeded')
+    )
+  }
+  const commitWithRetry = async (batch: FirebaseFirestore.WriteBatch) => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await batch.commit()
+        return
+      } catch (error) {
+        const err = error as Error | CommitErrorLike
+        if (!isDeadlineExceeded(err) || attempt === maxAttempts) {
+          throw error
+        }
+        const delayMs = 250 * 2 ** (attempt - 1)
+        if (onRetry) onRetry()
+        console.warn(
+          `[nba] batch commit retry attempt=${attempt} delayMs=${delayMs} reason=deadline_exceeded`
+        )
+        await new Promise<void>((resolve) => {
+          setTimeout(() => resolve(), delayMs)
+        })
+      }
+    }
+  }
+
   let batch = db.batch()
   let count = 0
   for (const write of writes) {
     batch.set(write.ref, write.data, { merge: true })
     count += 1
     if (count >= limit) {
-      await batch.commit()
+      await commitWithRetry(batch)
       batch = db.batch()
       count = 0
     }
   }
-  if (count > 0) await batch.commit()
+  if (count > 0) await commitWithRetry(batch)
+}
+
+export type NbaLiveSyncStats = {
+  openGames: number
+  updatedGames: number
+  actionsProcessed: number
+  commitRetries: number
 }
 
 export const syncNbaSchedule = async (daysAhead: number) => {
@@ -610,10 +739,19 @@ export const syncNbaLiveEvents = async () => {
     .where('league', '==', 'NBA')
     .get()
 
-  if (gamesSnap.empty) return 0
+  if (gamesSnap.empty) {
+    return {
+      openGames: 0,
+      updatedGames: 0,
+      actionsProcessed: 0,
+      commitRetries: 0,
+    } satisfies NbaLiveSyncStats
+  }
 
   console.log(`[nba] live sync start openGames=${gamesSnap.size}`)
   let updated = 0
+  let actionsProcessed = 0
+  let commitRetries = 0
   for (const doc of gamesSnap.docs) {
     const gameId = doc.id
     const game = doc.data() as any
@@ -692,6 +830,7 @@ export const syncNbaLiveEvents = async () => {
         { merge: true }
       )
       if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+        await resolveQuestionsAtGameEnd(gameId, lastActionNumber, boxScore)
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
@@ -762,11 +901,13 @@ export const syncNbaLiveEvents = async () => {
         { merge: true }
       )
       if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+        await resolveQuestionsAtGameEnd(gameId, lastActionNumber, boxScore)
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
       continue
     }
+    actionsProcessed += newActions.length
 
     const batchSize = 200
     let latestActionObj = newActions[newActions.length - 1]
@@ -837,7 +978,9 @@ export const syncNbaLiveEvents = async () => {
         newEventPayloads.push(eventPayload)
       }
 
-      await commitInBatches(eventWrites)
+      await commitInBatches(eventWrites, () => {
+        commitRetries += 1
+      })
       for (const eventPayload of newEventPayloads) {
         await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
           persistQuestions: !isCatchup,
@@ -846,7 +989,15 @@ export const syncNbaLiveEvents = async () => {
           seasonProfiles,
         })
         const windowTypes: string[] = ['NEXT_EVENT', 'NEXT_N_MIN']
+        const finalStatusEvent = isFinalStatus(
+          eventPayload.gameState?.boxScore?.gameStatus ?? null,
+          eventPayload.gameState?.boxScore?.gameStatusText ?? ''
+        )
         if (eventPayload.type === EventType.PERIOD_END) {
+          windowTypes.push('PERIOD')
+          windowTypes.push('GAME')
+        }
+        if (finalStatusEvent) {
           windowTypes.push('PERIOD')
           windowTypes.push('GAME')
         }
@@ -856,11 +1007,12 @@ export const syncNbaLiveEvents = async () => {
         if (eventPayload.type === EventType.GAME_END) {
           windowTypes.push('GAME')
         }
+        const uniqueWindowTypes = Array.from(new Set(windowTypes))
         await resolveOpenQuestionsForEvent(
           gameId,
           eventPayload,
           boxScore,
-          windowTypes
+          uniqueWindowTypes
         )
       }
 
@@ -887,9 +1039,11 @@ export const syncNbaLiveEvents = async () => {
       )
     }
     if (latestActionObj && isGameEndAction(latestActionObj)) {
+      await resolveQuestionsAtGameEnd(gameId, latestAction, boxScore)
       console.log(`[nba] live sync game=${gameId} action=game_end auto-end`)
       await endGameById(gameId)
     } else if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+      await resolveQuestionsAtGameEnd(gameId, latestAction, boxScore)
       console.log(`[nba] live sync game=${gameId} status=final auto-end`)
       await endGameById(gameId)
     }
@@ -897,5 +1051,10 @@ export const syncNbaLiveEvents = async () => {
   }
 
   console.log(`[nba] live sync done updated=${updated}`)
-  return updated
+  return {
+    openGames: gamesSnap.size,
+    updatedGames: updated,
+    actionsProcessed,
+    commitRetries,
+  } satisfies NbaLiveSyncStats
 }
