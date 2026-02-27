@@ -20,6 +20,15 @@ import {
 } from '@react-native-firebase/messaging'
 import { Linking, Platform } from 'react-native'
 
+const toLatencyBucket = (latencyMs: number | null) => {
+  if (typeof latencyMs !== 'number' || !Number.isFinite(latencyMs)) return null
+  if (latencyMs < 5000) return '0-5s'
+  if (latencyMs < 10000) return '5-10s'
+  if (latencyMs < 20000) return '10-20s'
+  if (latencyMs < 40000) return '20-40s'
+  return '40s+'
+}
+
 export interface NotificationPermissionResult {
   granted: boolean
   status: 'authorized' | 'denied' | 'not_determined'
@@ -354,7 +363,50 @@ export async function handleNotificationActionPress(
       timingData.answer_latency_ms = answeredAt - parseInt(receivedAt as string)
     }
 
-    analytics.track('question_answered', timingData)
+    const triggerType = String(data?.trigger || 'notification')
+      .toLowerCase()
+      .split(':')[0]
+    const windowType = String(data?.windowType || '')
+      .trim()
+      .toUpperCase()
+    const timeHorizon =
+      windowType === 'GAME'
+        ? 'game_end'
+        : windowType === 'PERIOD'
+          ? 'quarter_end'
+          : windowType === 'NEXT_N_MIN'
+            ? 'next_2_min'
+            : 'next_play'
+    const answeredCanonical = {
+      question_id: questionId,
+      user_id: userId,
+      game_id: gameId,
+      answered_timestamp: new Date(answeredAt).toISOString(),
+      answer: String(actionId),
+      time_to_answer_ms:
+        receivedAt && Number.isFinite(parseInt(receivedAt as string))
+          ? answeredAt - parseInt(receivedAt as string)
+          : null,
+      was_push_open: true,
+      latency_at_answer_ms:
+        receivedAt && sentAt
+          ? parseInt(receivedAt as string) - parseInt(sentAt as string)
+          : null,
+      latency_bucket: toLatencyBucket(
+        receivedAt && sentAt
+          ? parseInt(receivedAt as string) - parseInt(sentAt as string)
+          : null
+      ),
+      question_type: String(engineTag || 'MANUAL').toUpperCase(),
+      trigger_type: triggerType || 'notification',
+      time_horizon: timeHorizon,
+      question_structure: 'binary',
+      predictability_bucket: 'medium_variance',
+      schema_version: 'v1',
+      ...timingData,
+    }
+
+    analytics.track('question_answered', answeredCanonical)
     console.log('[Mixpanel] Tracked question_answered with timing data')
   } catch (error) {
     console.error(

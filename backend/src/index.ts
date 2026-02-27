@@ -5,6 +5,7 @@ import fs from 'fs'
 import path from 'path'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
 import authRouter from './routes/auth'
+import analyticsRouter from './routes/analytics'
 import feedbackRouter from './routes/feedback'
 import gameRouter, {
   closeExpiredQuestions,
@@ -70,6 +71,7 @@ app.use('/api', authRouter)
 app.use('/api/feedback', feedbackRouter)
 app.use('/api/log', logsRouter)
 app.use('/api/testers', testersRouter)
+app.use('/api/admin/mixpanel', analyticsRouter)
 app.use(Sentry.Handlers.errorHandler())
 
 const PORT = process.env.PORT || 4000

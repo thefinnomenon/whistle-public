@@ -9,6 +9,14 @@ import {
   trackEvent,
 } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
+import {
+  buildQuestionCreatedProps,
+  buildQuestionResolvedProps,
+  buildQuestionSentProps,
+  deriveQuestionDimensions,
+  QUESTION_ANALYTICS_SCHEMA_VERSION,
+  toLatencyBucket,
+} from '../lib/questionAnalytics'
 import { authMiddleware } from '../middleware/auth'
 import { isAdminMiddleware } from '../middleware/isAdmin'
 import type { EngineGameState } from '../types/engine'
@@ -905,9 +913,31 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
 
     await admin.messaging().send(questionNotification as any)
 
+    const normalizedChoices = Array.isArray(choices)
+      ? (choices as { id?: string; value?: string }[]).map((choice) => ({
+          id: String(choice?.id ?? ''),
+          value: String(choice?.value ?? ''),
+        }))
+      : []
+    const dimensions = deriveQuestionDimensions({
+      templateId: typeof engineTag === 'string' ? engineTag : type,
+      trigger: 'manual',
+      windowType: typeof windowType === 'string' ? windowType : null,
+      questionText: typeof question === 'string' ? question : null,
+      choices: normalizedChoices,
+    })
+    const createdCanonical = buildQuestionCreatedProps({
+      gameId,
+      league: typeof game?.league === 'string' ? game.league : 'NBA',
+      questionId: qRef.id,
+      expectedResolutionTimeMs: Number(timeoutAt),
+      dimensions,
+    })
+
     trackEvent(
       'question_created',
       {
+        ...createdCanonical,
         gameId,
         questionId: qRef.id,
         type,
@@ -917,6 +947,34 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       },
       req.user?.uid
     )
+
+    try {
+      const usersSnap = await db
+        .collection('games')
+        .doc(gameId)
+        .collection('users')
+        .get()
+      const sentAtMs = now
+      for (const userDoc of usersSnap.docs) {
+        const userId = userDoc.id
+        trackEvent(
+          'question_sent',
+          buildQuestionSentProps({
+            questionId: qRef.id,
+            userId,
+            gameId,
+            sendTimestampMs: sentAtMs,
+            dimensions,
+          }),
+          userId
+        )
+      }
+    } catch (error) {
+      console.error(
+        `[questions/create] analytics question_sent failed game=${gameId} question=${qRef.id}`,
+        error
+      )
+    }
 
     return res.json({ id: qRef.id })
   } catch (err) {
@@ -1016,6 +1074,21 @@ router.post(
         },
         req.user?.uid
       )
+      trackEvent(
+        'question_resolved',
+        {
+          ...buildQuestionResolvedProps({
+            questionId,
+            gameId,
+            resolvedTimestampMs: Date.now(),
+            outcome: null,
+            resolutionType: 'void',
+            voidReason: 'manual_cancel',
+          }),
+          schema_version: QUESTION_ANALYTICS_SCHEMA_VERSION,
+        },
+        req.user?.uid
+      )
 
       return res.json({ ok: true })
     } catch (err) {
@@ -1065,6 +1138,19 @@ router.post(
       trackEvent(
         'question_resolved',
         {
+          ...buildQuestionResolvedProps({
+            questionId,
+            gameId,
+            resolvedTimestampMs: Date.now(),
+            outcome:
+              String(answer).trim().toLowerCase() === 'tie'
+                ? null
+                : String(answer),
+            resolutionType:
+              String(answer).trim().toLowerCase() === 'tie' ? 'void' : 'normal',
+            voidReason:
+              String(answer).trim().toLowerCase() === 'tie' ? 'tie' : null,
+          }),
           gameId,
           questionId,
           answer,
@@ -1285,6 +1371,42 @@ router.post(
         return res.json({ ok: true, practice: true })
       }
 
+      type QuestionAnalyticsDoc = {
+        engineTag?: string
+        templateId?: string
+        trigger?: string
+        windowType?: string
+        question?: string
+        choices?: { id?: string; value?: string }[]
+      }
+
+      const questionSnap = await db
+        .collection('games')
+        .doc(gameId)
+        .collection('questions')
+        .doc(questionId)
+        .get()
+      const questionData = questionSnap.exists
+        ? (questionSnap.data() as QuestionAnalyticsDoc)
+        : null
+      const questionChoices = Array.isArray(questionData?.choices)
+        ? questionData.choices.map((choice) => ({
+            id: String(choice?.id ?? ''),
+            value: String(choice?.value ?? ''),
+          }))
+        : []
+      const dimensions = deriveQuestionDimensions({
+        templateId:
+          questionData?.engineTag ||
+          questionData?.templateId ||
+          verifiedQuestionPayload?.engineTag ||
+          null,
+        trigger: questionData?.trigger || null,
+        windowType: questionData?.windowType || null,
+        questionText: questionData?.question || null,
+        choices: questionChoices,
+      })
+
       const predictionRef = db
         .collection('games')
         .doc(gameId)
@@ -1408,6 +1530,44 @@ router.post(
       if (verifiedQuestionPayload)
         eventProps.questionPayloadVersion =
           verifiedQuestionPayload.version ?? QUESTION_PAYLOAD_VERSION
+
+      const answeredTimestamp = new Date(createdAtMs).toISOString()
+      const wasPushOpen =
+        parsedNotificationViewedAt !== undefined ||
+        normalizedSource.includes('notification')
+      const timeToAnswerMs =
+        parsedNotificationDisplayedAt !== undefined
+          ? createdAtMs - parsedNotificationDisplayedAt
+          : parsedNotificationViewedAt !== undefined
+            ? createdAtMs - parsedNotificationViewedAt
+            : null
+      const latencyAtAnswerMs =
+        deliveryMs !== undefined && Number.isFinite(deliveryMs)
+          ? deliveryMs
+          : null
+      const latencyBucket = toLatencyBucket(latencyAtAnswerMs)
+
+      trackEvent(
+        'question_answered',
+        {
+          question_id: questionId,
+          user_id: userId,
+          game_id: gameId,
+          answered_timestamp: answeredTimestamp,
+          answer: String(prediction),
+          time_to_answer_ms: timeToAnswerMs,
+          was_push_open: wasPushOpen,
+          latency_at_answer_ms: latencyAtAnswerMs,
+          latency_bucket: latencyBucket,
+          question_type: dimensions.question_type,
+          trigger_type: dimensions.trigger_type,
+          time_horizon: dimensions.time_horizon,
+          question_structure: dimensions.question_structure,
+          predictability_bucket: dimensions.predictability_bucket,
+          schema_version: QUESTION_ANALYTICS_SCHEMA_VERSION,
+        },
+        userId
+      )
 
       trackEvent('prediction_submitted', eventProps, userId)
       incrementUserProperty(userId, 'predictions_submitted_count', 1)
@@ -2409,6 +2569,17 @@ export const endGameById = async (gameId: string, userId?: string) => {
         { merge: true }
       )
       await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
+      trackEvent(
+        'question_resolved',
+        buildQuestionResolvedProps({
+          questionId: doc.id,
+          gameId,
+          resolvedTimestampMs: Date.now(),
+          outcome: null,
+          resolutionType: 'void',
+          voidReason: 'game_end',
+        })
+      )
       console.log(
         `[game] cancel open question game=${gameId} question=${doc.id} reason=game_end`
       )

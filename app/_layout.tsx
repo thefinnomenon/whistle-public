@@ -237,8 +237,43 @@ function AuthGate() {
   )
 }
 
+const trackQuestionOpenedFromPush = (
+  openSource: 'foreground' | 'background' | 'initial',
+  notificationData:
+    | {
+        gameId?: string
+        questionId?: string
+        type?: string
+        receivedAt?: string
+      }
+    | undefined,
+  primaryUserId: string | null
+) => {
+  if (!notificationData) return
+  if (notificationData.type !== 'question') return
+  if (!notificationData.gameId || !notificationData.questionId) return
+
+  const openedAtMs = Date.now()
+  const receivedAtMs = Number(notificationData.receivedAt)
+  const clientLatencyMs = Number.isFinite(receivedAtMs)
+    ? openedAtMs - receivedAtMs
+    : null
+
+  analytics.track('question_opened', {
+    question_id: notificationData.questionId,
+    user_id: primaryUserId,
+    game_id: notificationData.gameId,
+    opened_timestamp: new Date(openedAtMs).toISOString(),
+    was_push_open: true,
+    client_latency_ms: clientLatencyMs,
+    schema_version: 'v1',
+    open_source: openSource,
+  })
+}
+
 function ThemedApp() {
   const { theme, colorScheme } = useTheme()
+  const { user, firebaseUser } = useAuth()
   const { setColorScheme: setNativeWindColorScheme } =
     useNativeWindColorScheme()
   const currentSegments = useSegments()
@@ -259,6 +294,8 @@ function ThemedApp() {
       notification_type: 'game_end',
     })
   }
+
+  const primaryUserId = firebaseUser?.uid || user?.id || null
 
   useEffect(() => {
     // Force NativeWind to update by setting to undefined first if switching to system
@@ -352,6 +389,8 @@ function ThemedApp() {
         return
       }
 
+      trackQuestionOpenedFromPush('foreground', notificationData, primaryUserId)
+
       const isOnGame =
         Array.isArray(currentSegments) &&
         currentSegments.length > 0 &&
@@ -362,7 +401,7 @@ function ThemedApp() {
     })
 
     return unsubscribe
-  }, [currentSegments])
+  }, [currentSegments, primaryUserId])
 
   // Handle notification that opened the app from killed state
   useEffect(() => {
@@ -388,6 +427,7 @@ function ThemedApp() {
       }
 
       if (gameId) {
+        trackQuestionOpenedFromPush('initial', notificationData, primaryUserId)
         console.log('[Notification] App opened from notification:', {
           gameId,
           notificationType,
@@ -396,7 +436,7 @@ function ThemedApp() {
       }
     }
     checkInitialNotification()
-  }, [])
+  }, [primaryUserId])
 
   // Handle notification taps while app is in background
   useEffect(() => {
@@ -427,6 +467,17 @@ function ThemedApp() {
             return
           }
 
+          trackQuestionOpenedFromPush(
+            'background',
+            {
+              gameId,
+              questionId: remoteMessage?.data?.questionId as string | undefined,
+              type: notificationType,
+              receivedAt: remoteMessage?.data?.receivedAt as string | undefined,
+            },
+            primaryUserId
+          )
+
           // Avoid redirecting if already on game screen
           const isOnGame =
             Array.isArray(currentSegments) &&
@@ -439,7 +490,7 @@ function ThemedApp() {
       }
     )
     return unsubscribe
-  }, [currentSegments])
+  }, [currentSegments, primaryUserId])
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

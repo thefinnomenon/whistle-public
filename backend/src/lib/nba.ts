@@ -1,5 +1,7 @@
 import https from 'https'
 import { admin, db } from '../firebase'
+import { trackEvent } from './mixpanel'
+import { buildQuestionResolvedProps } from './questionAnalytics'
 import { calculateScores, endGameById } from '../routes/game'
 import {
   EngineEventSource,
@@ -467,6 +469,38 @@ const resolveOpenQuestionsForEvent = async (
         { merge: true }
       )
     }
+    const normalizedAnswer =
+      typeof decision.answer === 'string'
+        ? decision.answer.trim().toLowerCase()
+        : ''
+    const isTie = normalizedAnswer === 'tie'
+    const becameCancelled =
+      currentState === 'open' && !isTerminalResolutionEvent
+    const resolutionType: 'normal' | 'void' =
+      decision.state === 'resolved' && !isTie && !becameCancelled
+        ? 'normal'
+        : 'void'
+    const voidReason =
+      resolutionType === 'void'
+        ? isTie
+          ? 'tie'
+          : becameCancelled
+            ? 'resolved_while_open'
+            : decision.state === 'cancelled'
+              ? 'void'
+              : 'void'
+        : null
+    trackEvent(
+      'question_resolved',
+      buildQuestionResolvedProps({
+        questionId: doc.id,
+        gameId,
+        resolvedTimestampMs: Date.now(),
+        outcome: resolutionType === 'normal' ? decision.answer : null,
+        resolutionType,
+        voidReason,
+      })
+    )
     await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
     console.log(
       `[nba] question resolved game=${gameId} question=${doc.id} state=${currentState === 'open' && decision.state === 'resolved' ? 'cancelled' : decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`

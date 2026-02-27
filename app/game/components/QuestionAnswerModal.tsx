@@ -28,6 +28,43 @@ type Props = {
   isPractice?: boolean
 }
 
+const normalizeUpper = (value: string | null | undefined) =>
+  String(value || '')
+    .trim()
+    .toUpperCase()
+
+const normalizeLower = (value: string | null | undefined) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+
+const deriveTriggerType = (trigger: string | null | undefined) => {
+  const raw = normalizeLower(trigger)
+  if (!raw) return 'manual'
+  const colonIndex = raw.indexOf(':')
+  return colonIndex > 0 ? raw.slice(0, colonIndex) : raw
+}
+
+const deriveTimeHorizon = (windowType: string | null | undefined) => {
+  const raw = normalizeUpper(windowType)
+  if (raw === 'GAME') return 'game_end'
+  if (raw === 'PERIOD') return 'quarter_end'
+  if (raw === 'NEXT_N_MIN') return 'next_2_min'
+  return 'next_play'
+}
+
+const deriveQuestionStructure = (choices: Choice[]) => {
+  if (choices.length > 2) return 'multi_option'
+  if (choices.length !== 2) return 'binary'
+  const labels = choices
+    .map((choice) => normalizeLower(choice.id))
+    .concat(choices.map((choice) => normalizeLower(choice.value)))
+  const isBinary = labels.every((label) =>
+    ['yes', 'no', 'true', 'false', '1', '0'].includes(label)
+  )
+  return isBinary ? 'binary' : 'head_to_head'
+}
+
 export function QuestionAnswerModal({
   question,
   gameId,
@@ -38,6 +75,7 @@ export function QuestionAnswerModal({
   const [timeRemainingMs, setTimeRemainingMs] = useState(0)
   const [totalDurationMs, setTotalDurationMs] = useState(0)
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
+  const [openedAtMs, setOpenedAtMs] = useState<number>(Date.now())
 
   useEffect(() => {
     if (!question) return
@@ -67,6 +105,10 @@ export function QuestionAnswerModal({
       setSubmitting(false)
       setSelectedChoiceId(null)
     }
+  }, [question])
+
+  useEffect(() => {
+    if (question) setOpenedAtMs(Date.now())
   }, [question])
 
   if (!question) return null
@@ -135,6 +177,33 @@ export function QuestionAnswerModal({
         question_id: question.id,
         prediction: answer,
         method: 'app',
+      })
+      const questionType = normalizeUpper(question.engineTag) || 'MANUAL'
+      const triggerType = deriveTriggerType(
+        (question as { trigger?: string }).trigger
+      )
+      const timeHorizon = deriveTimeHorizon(question.windowType)
+      const questionStructure = deriveQuestionStructure(
+        Array.isArray(question.choices)
+          ? (question.choices as Choice[])
+          : ([] as Choice[])
+      )
+      analytics.track('question_answered', {
+        question_id: question.id,
+        user_id: userId,
+        game_id: gameId,
+        answered_timestamp: new Date().toISOString(),
+        answer,
+        time_to_answer_ms: Date.now() - openedAtMs,
+        was_push_open: false,
+        latency_at_answer_ms: null,
+        latency_bucket: null,
+        question_type: questionType,
+        trigger_type: triggerType,
+        time_horizon: timeHorizon,
+        question_structure: questionStructure,
+        predictability_bucket: 'medium_variance',
+        schema_version: 'v1',
       })
     } catch (error) {
       console.error('Failed to submit prediction:', error)

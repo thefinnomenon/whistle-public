@@ -129,6 +129,12 @@ export default function HomePage() {
             >
               Simulate Game
             </Link>
+            <Link
+              href="/analytics"
+              className="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700"
+            >
+              Analytics
+            </Link>
             <button
               onClick={sendTestQuestion}
               disabled={sendingTest}

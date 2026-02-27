@@ -9,6 +9,12 @@ import type {
   EngineGameState,
 } from '../types/engine'
 import { EngineEventSource, EventType, NbaEventSubType } from '../types/engine'
+import { trackEvent } from './mixpanel'
+import {
+  buildQuestionCreatedProps,
+  buildQuestionSentProps,
+  deriveQuestionDimensions,
+} from './questionAnalytics'
 import type {
   PlayerSeasonProfile,
   TeamSeasonProfile,
@@ -984,6 +990,37 @@ const createAndSendEngineQuestion = async (
     .collection('questions')
     .add(questionPayload)
 
+  const dimensions = deriveQuestionDimensions({
+    templateId: question.templateId,
+    trigger: question.trigger,
+    windowType: question.windowType,
+    questionText: question.question,
+    choices,
+  })
+
+  try {
+    const gameSnap = await db.collection('games').doc(gameId).get()
+    const gameData = gameSnap.exists
+      ? (gameSnap.data() as { league?: string })
+      : null
+    const league = gameData?.league || 'NBA'
+    trackEvent(
+      'question_created',
+      buildQuestionCreatedProps({
+        gameId,
+        league,
+        questionId: qRef.id,
+        expectedResolutionTimeMs: timeoutAt,
+        dimensions,
+      })
+    )
+  } catch (error) {
+    console.error(
+      `[engine] analytics question_created failed game=${gameId} question=${qRef.id}`,
+      error
+    )
+  }
+
   const baseQuestionPayload = {
     version: QUESTION_PAYLOAD_VERSION,
     gameId,
@@ -1048,6 +1085,33 @@ const createAndSendEngineQuestion = async (
   }
 
   await admin.messaging().send(message as Message)
+
+  try {
+    const usersSnap = await db
+      .collection('games')
+      .doc(gameId)
+      .collection('users')
+      .get()
+    for (const userDoc of usersSnap.docs) {
+      const userId = userDoc.id
+      trackEvent(
+        'question_sent',
+        buildQuestionSentProps({
+          questionId: qRef.id,
+          userId,
+          gameId,
+          sendTimestampMs: now,
+          dimensions,
+        }),
+        userId
+      )
+    }
+  } catch (error) {
+    console.error(
+      `[engine] analytics question_sent failed game=${gameId} question=${qRef.id}`,
+      error
+    )
+  }
 }
 
 type GroupScope = 'PERIOD' | 'HALF' | 'GAME'
