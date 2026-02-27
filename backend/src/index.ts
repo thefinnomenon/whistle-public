@@ -152,9 +152,11 @@ const startNbaLiveFeedWorker = () => {
     try {
       const stats = await syncNbaLiveEvents()
       const durationMs = Date.now() - startedAt
-      console.log(
-        `[worker] NBA live feed summary durationMs=${durationMs} openGames=${stats.openGames} updatedGames=${stats.updatedGames} actionsProcessed=${stats.actionsProcessed} commitRetries=${stats.commitRetries}`
-      )
+      if (stats.actionsProcessed > 0) {
+        console.log(
+          `[worker] NBA live feed summary durationMs=${durationMs} openGames=${stats.openGames} updatedGames=${stats.updatedGames} actionsProcessed=${stats.actionsProcessed} commitRetries=${stats.commitRetries}`
+        )
+      }
     } catch (err) {
       console.error('[worker] NBA live feed error', err)
       Sentry.captureException(err)

@@ -1,3 +1,4 @@
+import { execSync } from 'child_process'
 import { db } from '../firebase'
 import {
   buildQuestionChoices,
@@ -49,6 +50,7 @@ export type SimResolvedEvent = {
 
 export type SimQuestion = EngineQuestionPayload & {
   id: string
+  engineVersion: string
   choices: { id: string; value: string }[]
   state: 'open' | 'closed' | 'resolved' | 'cancelled'
   answer?: string | null
@@ -59,6 +61,28 @@ export type SimQuestion = EngineQuestionPayload & {
   createdAtMs?: number
   timeoutAtMs?: number
 }
+
+const resolveEngineVersion = (): string => {
+  const fromEnv =
+    process.env.ENGINE_VERSION ||
+    process.env.GIT_COMMIT_SHA ||
+    process.env.RENDER_GIT_COMMIT ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    ''
+  if (fromEnv) return String(fromEnv).slice(0, 40)
+  try {
+    const sha = execSync('git rev-parse --short=12 HEAD', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim()
+    return sha || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+const ENGINE_VERSION = resolveEngineVersion()
 
 export type SimulateStoredGameResult = {
   gameId: string
@@ -224,6 +248,7 @@ export const simulateStoredGame = async (
   for (const payload of gameStartQuestions) {
     const question: SimQuestion = {
       ...payload,
+      engineVersion: ENGINE_VERSION,
       choices: buildQuestionChoices(payload),
       id: `q_${questions.length + 1}`,
       state: 'open',
@@ -271,6 +296,7 @@ export const simulateStoredGame = async (
       const timeoutAtMs = createdAtMs + generated.timeoutMs
       const simQuestion: SimQuestion = {
         ...generated,
+        engineVersion: ENGINE_VERSION,
         choices: buildQuestionChoices(generated),
         id: `q_${questions.length + 1}`,
         state: 'open',

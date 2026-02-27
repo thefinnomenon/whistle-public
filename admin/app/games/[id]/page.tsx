@@ -1870,6 +1870,11 @@ const lastQuestionStats = React.useMemo(() => {
                             <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200">
                               🏷️ {question.engineTag.replace(/_/g, ' ')}
                             </span>
+                            {question.engineVersion && (
+                              <span className="inline-block ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                                engineVersion {question.engineVersion}
+                              </span>
+                            )}
                           </div>
                         )}
 

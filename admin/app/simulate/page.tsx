@@ -296,6 +296,9 @@ export default function SimulatePage() {
                                   {originalQuestion.engineTag
                                     ? ` • ${originalQuestion.engineTag}`
                                     : ''}
+                                  {originalQuestion.engineVersion
+                                    ? ` • engineVersion=${originalQuestion.engineVersion}`
+                                    : ''}
                                 </div>
                               </div>
                             ) : (
@@ -345,6 +348,9 @@ export default function SimulatePage() {
                           <div className="font-medium">{question.question}</div>
                           <div className="text-xs text-gray-600 mt-1">
                             {question.templateId} • trigger={question.trigger}
+                            {question.engineVersion
+                              ? ` • engineVersion=${question.engineVersion}`
+                              : ''}
                           </div>
                           {getStartContextEntries(question.resolutionContext).length > 0 && (
                             <div className="text-xs text-gray-600 mt-2">
@@ -427,6 +433,9 @@ export default function SimulatePage() {
                           <div className="font-medium">{question.question}</div>
                           <div className="text-xs text-gray-600 mt-1">
                             {question.engineTag ?? question.templateId ?? '—'}
+                            {question.engineVersion
+                              ? ` • commit=${question.engineVersion}`
+                              : ''}
                           </div>
                         </td>
                         <td className="px-3 py-2 align-top">

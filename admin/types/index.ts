@@ -125,6 +125,7 @@ export type Question = {
   cancelledAt?: FirestoreTimestamp
   changedAt?: FirestoreTimestamp
   engineTag?: string
+  engineVersion?: string
   statistics?: QuestionStatistics
 }
 
@@ -171,6 +172,7 @@ export type SimulationJsonValue =
 
 export type SimulationQuestion = {
   id: string
+  engineVersion: string
   templateId: string
   question: string
   windowType: string
@@ -208,6 +210,7 @@ export type OriginalSimComparisonQuestion = {
   answer: string | null
   timeoutAtMs: number | null
   engineTag: string | null
+  engineVersion: string | null
   templateId: string | null
   trigger: string | null
   windowType: string | null

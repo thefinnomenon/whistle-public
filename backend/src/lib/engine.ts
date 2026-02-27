@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto'
+import { execSync } from 'child_process'
 import type { Message } from 'firebase-admin/messaging'
 import type {
   BoxScore,
@@ -168,6 +169,26 @@ const PLAYER_USAGE_BY_GAME = new Map<
 >()
 const QUESTION_SIGNATURE_SECRET = process.env.WHISTLE_JWT_SECRET
 const QUESTION_PAYLOAD_VERSION = 1
+const resolveEngineVersion = (): string => {
+  const fromEnv =
+    process.env.ENGINE_VERSION ||
+    process.env.GIT_COMMIT_SHA ||
+    process.env.RENDER_GIT_COMMIT ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    ''
+  if (fromEnv) return String(fromEnv).slice(0, 40)
+  try {
+    const sha = execSync('git rev-parse --short=12 HEAD', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim()
+    return sha || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+const ENGINE_VERSION = resolveEngineVersion()
 const MIN_QUESTION_INTERVAL_MS = 4 * 60 * 1000
 const MAX_QUESTION_INTERVAL_MS = 8 * 60 * 1000
 const QUESTION_TIMEOUT_MS = 30_000
@@ -884,6 +905,7 @@ type SignedQuestionPayload = {
   choices: { id: string; value: string }[]
   timeoutAt: number
   engineTag: string
+  engineVersion: string
   windowType: QuestionWindowType
   resolutionWindowMs: number | null
   resolutionContext: ResolutionContext | null
@@ -911,19 +933,14 @@ export const buildQuestionChoices = (
   question: EngineQuestionPayload
 ): { id: string; value: string }[] => {
   const choices = asChoiceArray(question.resolutionContext?.choices)
-  const withTie = (entries: { id: string; value: string }[]) => {
-    if (!COMPARE_TEMPLATE_IDS.has(question.templateId)) return entries
-    if (entries.some((entry) => entry.id === 'tie')) return entries
-    return [...entries, { id: 'tie', value: 'Tie' }]
-  }
-  if (choices) return withTie(choices)
+  if (choices) return choices
   if (MULTI_CHOICE_TEMPLATE_IDS.has(question.templateId)) {
     const home = asString(question.resolutionContext?.homeTricode) ?? 'HOME'
     const away = asString(question.resolutionContext?.awayTricode) ?? 'AWAY'
-    return withTie([
+    return [
       { id: String(home), value: String(home) },
       { id: String(away), value: String(away) },
-    ])
+    ]
   }
   return [
     { id: 'yes', value: 'Yes' },
@@ -951,6 +968,7 @@ const createAndSendEngineQuestion = async (
     state: 'open',
     timeoutAt,
     engineTag: question.templateId,
+    engineVersion: ENGINE_VERSION,
     windowType: question.windowType,
     resolutionWindowMs: question.resolutionWindowMs ?? null,
     resolutionContext: question.resolutionContext ?? null,
@@ -974,6 +992,7 @@ const createAndSendEngineQuestion = async (
     choices,
     timeoutAt,
     engineTag: question.templateId,
+    engineVersion: ENGINE_VERSION,
     windowType: question.windowType,
     resolutionWindowMs: question.resolutionWindowMs ?? null,
     resolutionContext: question.resolutionContext ?? null,
@@ -995,6 +1014,7 @@ const createAndSendEngineQuestion = async (
       title,
       sentAt: now.toString(),
       engineTag: question.templateId,
+      engineVersion: ENGINE_VERSION,
       collapseId,
       choices: JSON.stringify(choices),
       timeoutAt: String(timeoutAt),
@@ -3964,7 +3984,7 @@ export const resolveQuestionForEvent = (
               : 'no',
         }
       }
-      if (leader === 'TIE') return { state: 'resolved', answer: 'tie' }
+      if (leader === 'TIE') return { state: 'cancelled', answer: null }
       return {
         state: 'resolved',
         answer: leaderTricode ?? null,
@@ -3986,7 +4006,7 @@ export const resolveQuestionForEvent = (
         return { state: 'cancelled', answer: null }
       const homeDelta = homeStat - minHomeStat
       const awayDelta = awayStat - minAwayStat
-      if (homeDelta === awayDelta) return { state: 'resolved', answer: 'tie' }
+      if (homeDelta === awayDelta) return { state: 'cancelled', answer: null }
       const homeTricode =
         normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
       const awayTricode =
@@ -4062,7 +4082,7 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'resolved', answer: 'tie' }
+      if (tie) return { state: 'cancelled', answer: null }
       return { state: 'resolved', answer: bestId }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
@@ -4093,7 +4113,7 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'resolved', answer: 'tie' }
+      if (tie) return { state: 'cancelled', answer: null }
       return { state: 'resolved', answer: bestId }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT': {

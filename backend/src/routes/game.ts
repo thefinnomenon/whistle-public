@@ -53,6 +53,7 @@ type QuestionDocData = {
   answer?: string
   timeoutAt?: number | string | null
   engineTag?: string
+  engineVersion?: string
   templateId?: string
   trigger?: string
   windowType?: string
@@ -96,6 +97,8 @@ const normalizeOriginalQuestion = (
     answer: typeof data.answer === 'string' ? data.answer : null,
     timeoutAtMs: toMs(data.timeoutAt),
     engineTag: typeof data.engineTag === 'string' ? data.engineTag : null,
+    engineVersion:
+      typeof data.engineVersion === 'string' ? data.engineVersion : null,
     templateId: typeof data.templateId === 'string' ? data.templateId : null,
     trigger: typeof data.trigger === 'string' ? data.trigger : null,
     windowType: typeof data.windowType === 'string' ? data.windowType : null,
