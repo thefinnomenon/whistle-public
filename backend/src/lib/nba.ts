@@ -828,12 +828,7 @@ export const syncNbaLiveEvents = async () => {
     let payload
     let boxScore: BoxScore | null = null
     try {
-      const [pbp, box] = await Promise.all([
-        fetchPlayByPlay(nbaGameId),
-        fetchBoxScore(nbaGameId),
-      ])
-      payload = pbp
-      boxScore = box
+      payload = await fetchPlayByPlay(nbaGameId)
     } catch (err) {
       const message = String(err)
       if (message.includes('NBA not modified')) {
@@ -847,6 +842,18 @@ export const syncNbaLiveEvents = async () => {
       }
       console.error(`[nba] live sync game error game=${gameId}`, err)
       return { updated, actionsProcessed, commitRetries }
+    }
+    try {
+      boxScore = await fetchBoxScore(nbaGameId)
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('NBA not modified')) {
+        console.error(
+          `[nba] live sync boxscore fetch error game=${gameId} nbaGameId=${nbaGameId}`,
+          err
+        )
+      }
+      boxScore = null
     }
     const actions = payload?.actions || []
     const nbaGameStatus =
