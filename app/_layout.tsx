@@ -271,6 +271,39 @@ const trackQuestionOpenedFromPush = (
   })
 }
 
+const sanitizeNotificationId = (
+  value: string | null | undefined
+): string | null => {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const sanitized = trimmed.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 120)
+  return sanitized.length > 0 ? sanitized : null
+}
+
+const asStringOrNull = (value: string | object | undefined): string | null =>
+  typeof value === 'string' ? value : null
+
+const buildForegroundNotificationId = (params: {
+  collapseId: string | null
+  messageId: string | null
+  questionId: string | null
+  gameId: string | null
+}): string => {
+  const compositeId =
+    params.gameId && params.questionId
+      ? `${params.gameId}_${params.questionId}`
+      : null
+  const candidate =
+    sanitizeNotificationId(params.collapseId) ??
+    sanitizeNotificationId(params.messageId) ??
+    sanitizeNotificationId(compositeId) ??
+    sanitizeNotificationId(params.questionId) ??
+    sanitizeNotificationId(params.gameId)
+  if (candidate) return candidate
+  return `fg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
 function ThemedApp() {
   const { theme, colorScheme } = useTheme()
   const { user, firebaseUser } = useAuth()
@@ -321,7 +354,22 @@ function ThemedApp() {
         )
         return
       }
-      const collapseId = remoteMessage.data?.collapseId as string
+      const collapseId = sanitizeNotificationId(
+        asStringOrNull(remoteMessage.data?.collapseId)
+      )
+      const messageId = sanitizeNotificationId(remoteMessage.messageId)
+      const questionId = sanitizeNotificationId(
+        asStringOrNull(remoteMessage.data?.questionId)
+      )
+      const gameId = sanitizeNotificationId(
+        asStringOrNull(remoteMessage.data?.gameId)
+      )
+      const notificationId = buildForegroundNotificationId({
+        collapseId,
+        messageId,
+        questionId,
+        gameId,
+      })
 
       // Handle dismiss/expired messages
       if (remoteMessage.data?.type === 'question_expired' && collapseId) {
@@ -343,7 +391,7 @@ function ThemedApp() {
 
       // Display via Notifee to ensure banner while app is foreground
       await notifee.displayNotification({
-        id: collapseId,
+        id: notificationId,
         title,
         body,
         data: remoteMessage.data,
