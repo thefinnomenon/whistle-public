@@ -793,10 +793,10 @@ export const syncNbaLiveEvents = async () => {
     } satisfies NbaLiveSyncStats
   }
 
-  let updated = 0
-  let actionsProcessed = 0
-  let commitRetries = 0
-  for (const doc of gamesSnap.docs) {
+  const processGame = async (doc: FirebaseFirestore.QueryDocumentSnapshot) => {
+    let updated = 0
+    let actionsProcessed = 0
+    let commitRetries = 0
     const gameId = doc.id
     const game = doc.data() as any
     const nbaGameId = String(game?.nbaGameId || '')
@@ -806,7 +806,7 @@ export const syncNbaLiveEvents = async () => {
           game?.homeTeam || ''
         )} awayTeam=${String(game?.awayTeam || '')}`
       )
-      continue
+      return { updated, actionsProcessed, commitRetries }
     }
 
     const lastActionNumber =
@@ -837,15 +837,16 @@ export const syncNbaLiveEvents = async () => {
     } catch (err) {
       const message = String(err)
       if (message.includes('NBA not modified')) {
-        continue
+        return { updated, actionsProcessed, commitRetries }
       }
       if (message.includes('NBA request failed 403') && !lastActionNumber) {
         console.log(
           `[nba] live sync skip game=${gameId} nbaGameId=${nbaGameId} reason=pbp_forbidden_not_started`
         )
-        continue
+        return { updated, actionsProcessed, commitRetries }
       }
-      throw err
+      console.error(`[nba] live sync game error game=${gameId}`, err)
+      return { updated, actionsProcessed, commitRetries }
     }
     const actions = payload?.actions || []
     const nbaGameStatus =
@@ -878,7 +879,7 @@ export const syncNbaLiveEvents = async () => {
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
-      continue
+      return { updated, actionsProcessed, commitRetries }
     }
 
     const gameStartState: EngineGameState = {
@@ -949,7 +950,7 @@ export const syncNbaLiveEvents = async () => {
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
-      continue
+      return { updated, actionsProcessed, commitRetries }
     }
 
     const latestFetchedAction = newActions[newActions.length - 1]
@@ -1102,7 +1103,23 @@ export const syncNbaLiveEvents = async () => {
       await endGameById(gameId)
     }
     updated += 1
+    return { updated, actionsProcessed, commitRetries }
   }
+
+  const gameResults = await Promise.all(
+    gamesSnap.docs.map((doc) => processGame(doc))
+  )
+  const totals = gameResults.reduce(
+    (acc, result) => ({
+      updated: acc.updated + result.updated,
+      actionsProcessed: acc.actionsProcessed + result.actionsProcessed,
+      commitRetries: acc.commitRetries + result.commitRetries,
+    }),
+    { updated: 0, actionsProcessed: 0, commitRetries: 0 }
+  )
+  const updated = totals.updated
+  const actionsProcessed = totals.actionsProcessed
+  const commitRetries = totals.commitRetries
 
   if (updated > 0 || actionsProcessed > 0 || commitRetries > 0) {
     console.log(

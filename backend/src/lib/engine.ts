@@ -152,6 +152,7 @@ type TriggerOptions = {
 
 const LAST_QUESTION_AT_BY_GAME = new Map<string, number>()
 const LAST_QUESTION_COOLDOWN_MS_BY_GAME = new Map<string, number>()
+const LAST_COOLDOWN_LOGGED_UNTIL_BY_GAME = new Map<string, number>()
 const PLAYER_THREE_STREAK_BY_GAME = new Map<string, Map<number, number>>()
 const PLAYER_FG_STREAK_BY_GAME = new Map<string, Map<number, number>>()
 const TEAM_THREE_STREAK_BY_GAME = new Map<string, Map<string, number>>()
@@ -3577,13 +3578,18 @@ export const triggerBasketballQuestion = async (
   ) {
     const remainingMs = cooldownMs - (now - lastAskedAt)
     if (!opts?.suppressLogs) {
-      const cooldownSeconds = Math.max(0, Math.round(remainingMs / 1000))
-      const cooldownMinutes = Math.floor(cooldownSeconds / 60)
-      const cooldownSecondsRemainder = cooldownSeconds % 60
-      const cooldownLabel = `${cooldownMinutes}:${String(cooldownSecondsRemainder).padStart(2, '0')}`
-      console.log(
-        `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemaining=${cooldownLabel} elapsed=${elapsedLabel} timeLeft=${timeLeftLabel}`
-      )
+      const cooldownEndMs = lastAskedAt + cooldownMs
+      const lastLoggedUntil = LAST_COOLDOWN_LOGGED_UNTIL_BY_GAME.get(gameId)
+      if (lastLoggedUntil !== cooldownEndMs) {
+        const cooldownSeconds = Math.max(0, Math.round(remainingMs / 1000))
+        const cooldownMinutes = Math.floor(cooldownSeconds / 60)
+        const cooldownSecondsRemainder = cooldownSeconds % 60
+        const cooldownLabel = `${cooldownMinutes}:${String(cooldownSecondsRemainder).padStart(2, '0')}`
+        console.log(
+          `[engine] skip question game=${gameId} reason=cooldown trigger=${triggerReason} cooldownRemaining=${cooldownLabel} elapsed=${elapsedLabel} timeLeft=${timeLeftLabel}`
+        )
+        LAST_COOLDOWN_LOGGED_UNTIL_BY_GAME.set(gameId, cooldownEndMs)
+      }
     }
     return null
   }
@@ -3722,6 +3728,7 @@ export const triggerBasketballQuestion = async (
       Math.random() * (MAX_QUESTION_INTERVAL_MS - MIN_QUESTION_INTERVAL_MS)
     )
   LAST_QUESTION_COOLDOWN_MS_BY_GAME.set(gameId, nextCooldownMs)
+  LAST_COOLDOWN_LOGGED_UNTIL_BY_GAME.delete(gameId)
   if (opts?.persistQuestions) {
     await createAndSendEngineQuestion(gameId, questionPayload)
   }
