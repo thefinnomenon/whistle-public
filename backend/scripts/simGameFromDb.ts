@@ -10,6 +10,11 @@ import path from 'path'
 
 import { db } from '../src/firebase'
 import {
+  EngineEventSource,
+  EventType,
+  NbaEventSubType,
+} from '../src/types/engine'
+import {
   resolveQuestionForEvent,
   triggerBasketballQuestion,
   triggerGameStartQuestions,
@@ -305,16 +310,11 @@ const main = async () => {
         const decision = resolveQuestionForEvent(open, event, eventBoxScore)
         if (!decision) continue
         if (decision.state === 'resolved') {
-          if (open.state === 'open') {
-            open.state = 'cancelled'
-            open.cancelReason = 'RESOLVED_WHILE_OPEN'
-          } else {
-            open.state = 'resolved'
-            open.answer = decision.answer ?? null
-          }
+          open.state = 'resolved'
+          open.answer = decision.answer ?? null
         } else {
           open.state = 'cancelled'
-          open.cancelReason = 'VOID'
+          open.cancelReason = decision.reason || 'VOID'
         }
         open.resolvedAtEventId = event.eventId
         open.resolvedEvent = buildResolvedEvent(event)
@@ -327,16 +327,48 @@ const main = async () => {
   }
   if (openQuestions.length) {
     const lastEvent = events[events.length - 1]
-    const lastEventId =
-      typeof lastEvent?.eventId === 'number' ? lastEvent.eventId : null
-    for (const open of openQuestions) {
-      open.state = 'cancelled'
-      open.answer = null
-      open.cancelReason = 'VOID'
-      if (lastEventId !== null) open.resolvedAtEventId = lastEventId
-      cancelledQuestions.push(open)
+    const syntheticEvent: EngineEvent = {
+      eventId:
+        typeof lastEvent?.eventId === 'number' ? lastEvent.eventId + 1 : 0,
+      source: EngineEventSource.NBA_COM,
+      type: EventType.GAME_END,
+      subType: NbaEventSubType.END,
+      context: null,
+      description: 'synthetic_game_end_resolution',
+      questionId: null,
+      gameState: {
+        period: lastEvent?.gameState?.period ?? null,
+        clockMs: lastEvent?.gameState?.clockMs ?? null,
+        scoreHome: lastEvent?.gameState?.scoreHome ?? null,
+        scoreAway: lastEvent?.gameState?.scoreAway ?? null,
+        possession: null,
+        boxScore: lastEvent?.gameState?.boxScore ?? null,
+      },
+      ingestedAt: Date.now(),
     }
-    openQuestions.length = 0
+
+    for (let i = openQuestions.length - 1; i >= 0; i -= 1) {
+      const open = openQuestions[i]
+      const decision = resolveQuestionForEvent(
+        open,
+        syntheticEvent,
+        syntheticEvent.gameState?.boxScore ?? null
+      )
+      if (decision?.state === 'resolved') {
+        open.state = 'resolved'
+        open.answer = decision.answer ?? null
+        open.resolvedAtEventId = syntheticEvent.eventId
+        open.resolvedEvent = buildResolvedEvent(syntheticEvent)
+        resolvedQuestions.push(open)
+      } else {
+        open.state = 'cancelled'
+        open.answer = null
+        open.cancelReason = decision?.reason || 'VOID'
+        open.resolvedAtEventId = syntheticEvent.eventId
+        cancelledQuestions.push(open)
+      }
+      openQuestions.splice(i, 1)
+    }
   }
 
   const outputDir = path.join(process.cwd(), 'testGames')

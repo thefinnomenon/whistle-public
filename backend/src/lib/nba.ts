@@ -396,6 +396,41 @@ const resolveGameDoc = async (nbaGameId: string) => {
   }
 }
 
+const persistBoxScoreSnapshot = async (
+  gameId: string,
+  actionNumber: number,
+  boxScore: BoxScore | null
+) => {
+  if (!boxScore || !Number.isFinite(actionNumber) || actionNumber <= 0) return
+
+  const scoreHome =
+    typeof boxScore.homeTeam?.score === 'number'
+      ? boxScore.homeTeam.score
+      : null
+  const scoreAway =
+    typeof boxScore.awayTeam?.score === 'number'
+      ? boxScore.awayTeam.score
+      : null
+
+  await db
+    .collection('games')
+    .doc(gameId)
+    .collection('boxScoreSnapshots')
+    .doc(String(actionNumber))
+    .set(
+      {
+        actionNumber,
+        period: boxScore.period ?? boxScore.game?.period ?? null,
+        clockMs: parseClockToMs(boxScore.gameClock ?? boxScore.game?.gameClock),
+        scoreHome,
+        scoreAway,
+        boxScore,
+        capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+}
+
 const resolveOpenQuestionsForEvent = async (
   gameId: string,
   event: EngineEvent,
@@ -422,47 +457,27 @@ const resolveOpenQuestionsForEvent = async (
   if (!docs.length) return 0
 
   let resolvedCount = 0
-  const isTerminalResolutionEvent =
-    event.type === EventType.PERIOD_END ||
-    event.type === EventType.GAME_END ||
-    isFinalStatus(
-      boxScore?.gameStatus ?? boxScore?.game?.gameStatus,
-      boxScore?.gameStatusText ?? boxScore?.game?.gameStatusText
-    )
   for (const doc of docs) {
     const data = doc.data() as any
-    const currentState = String(data.state || '')
     const decision = resolveQuestionForEvent(data, event, boxScore)
     if (!decision) continue
 
     if (decision.state === 'resolved') {
-      if (currentState === 'open' && !isTerminalResolutionEvent) {
-        await doc.ref.set(
-          {
-            state: 'cancelled',
-            cancelReason: 'RESOLVED_WHILE_OPEN',
-            closedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        )
-      } else {
-        await doc.ref.set(
-          {
-            state: 'resolved',
-            answer: decision.answer ?? null,
-            resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        )
-        await calculateScores(gameId, doc.id)
-      }
+      await doc.ref.set(
+        {
+          state: 'resolved',
+          answer: decision.answer ?? null,
+          resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      await calculateScores(gameId, doc.id)
     } else {
       await doc.ref.set(
         {
           state: 'cancelled',
-          cancelReason: 'VOID',
+          cancelReason: decision.reason || 'VOID',
           closedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -473,19 +488,15 @@ const resolveOpenQuestionsForEvent = async (
       typeof decision.answer === 'string'
         ? decision.answer.trim().toLowerCase()
         : ''
-    const isTie = normalizedAnswer === 'tie'
-    const becameCancelled =
-      currentState === 'open' && !isTerminalResolutionEvent
+    const isTie = normalizedAnswer === 'tie' || decision.reason === 'TIE'
     const resolutionType: 'normal' | 'void' =
-      decision.state === 'resolved' && !isTie && !becameCancelled
-        ? 'normal'
-        : 'void'
+      decision.state === 'resolved' && !isTie ? 'normal' : 'void'
     const voidReason =
       resolutionType === 'void'
         ? isTie
           ? 'tie'
-          : becameCancelled
-            ? 'resolved_while_open'
+          : decision.reason === 'NO_ATTEMPT'
+            ? 'no_attempt'
             : decision.state === 'cancelled'
               ? 'void'
               : 'void'
@@ -503,7 +514,7 @@ const resolveOpenQuestionsForEvent = async (
     )
     await sendDismissNotification(gameId, doc.id, `game_${gameId}`)
     console.log(
-      `[nba] question resolved game=${gameId} question=${doc.id} state=${currentState === 'open' && decision.state === 'resolved' ? 'cancelled' : decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`
+      `[nba] question resolved game=${gameId} question=${doc.id} state=${decision.state} answer=${decision.answer ?? 'null'} event=${event.eventId} type=${event.type} template=${String(data.engineTag || '')}`
     )
     resolvedCount += 1
   }
@@ -782,7 +793,6 @@ export const syncNbaLiveEvents = async () => {
     } satisfies NbaLiveSyncStats
   }
 
-  console.log(`[nba] live sync start openGames=${gamesSnap.size}`)
   let updated = 0
   let actionsProcessed = 0
   let commitRetries = 0
@@ -941,6 +951,16 @@ export const syncNbaLiveEvents = async () => {
       }
       continue
     }
+
+    const latestFetchedAction = newActions[newActions.length - 1]
+    const latestFetchedActionNumber =
+      typeof latestFetchedAction?.actionNumber === 'number'
+        ? latestFetchedAction.actionNumber
+        : 0
+    if (latestFetchedActionNumber > 0) {
+      await persistBoxScoreSnapshot(gameId, latestFetchedActionNumber, boxScore)
+    }
+
     actionsProcessed += newActions.length
 
     const batchSize = 200
@@ -967,10 +987,10 @@ export const syncNbaLiveEvents = async () => {
           .collection(`games/${gameId}/events`)
           .doc(String(actionNumber))
         const gameState: EngineGameState = {
-          period: boxScore?.period ?? action?.period ?? null,
-          clockMs: parseClockToMs(boxScore?.gameClock ?? action?.clock),
-          scoreHome: boxScore?.homeTeam?.score ?? action?.scoreHome ?? null,
-          scoreAway: boxScore?.awayTeam?.score ?? action?.scoreAway ?? null,
+          period: action?.period ?? boxScore?.period ?? null,
+          clockMs: parseClockToMs(action?.clock ?? boxScore?.gameClock),
+          scoreHome: action?.scoreHome ?? boxScore?.homeTeam?.score ?? null,
+          scoreAway: action?.scoreAway ?? boxScore?.awayTeam?.score ?? null,
           possession: action?.possession ?? null,
           boxScore: boxScore
             ? {
@@ -1084,7 +1104,11 @@ export const syncNbaLiveEvents = async () => {
     updated += 1
   }
 
-  console.log(`[nba] live sync done updated=${updated}`)
+  if (updated > 0 || actionsProcessed > 0 || commitRetries > 0) {
+    console.log(
+      `[nba] live sync done updated=${updated} actionsProcessed=${actionsProcessed} commitRetries=${commitRetries}`
+    )
+  }
   return {
     openGames: gamesSnap.size,
     updatedGames: updated,

@@ -3,7 +3,7 @@
 import { useAuth } from '@/components/AuthProvider'
 import { apiRequest } from '@/lib/api'
 import { db } from '@/lib/firebase'
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
+import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
@@ -74,7 +74,11 @@ export default function SimulatePage() {
       return
     }
 
-    const gamesQuery = query(collection(db, 'games'), orderBy('startTime', 'desc'))
+    const gamesQuery = query(
+      collection(db, 'games'),
+      where('state', '==', 'resolved'),
+      orderBy('startTime', 'desc')
+    )
 
     const unsubscribe = onSnapshot(
       gamesQuery,
@@ -172,7 +176,7 @@ export default function SimulatePage() {
           <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select game (newest first)
+                Select completed game (newest first)
               </label>
               <select
                 value={selectedGameId}
@@ -181,7 +185,7 @@ export default function SimulatePage() {
                 className="w-full border border-gray-300 rounded px-3 py-2 bg-white"
               >
                 <option value="">
-                  {gamesLoading ? 'Loading games...' : 'Choose a game'}
+                  {gamesLoading ? 'Loading completed games...' : 'Choose a completed game'}
                 </option>
                 {games.map((game) => (
                   <option key={game.id} value={game.id}>

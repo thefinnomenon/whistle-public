@@ -1,5 +1,6 @@
 import { execSync } from 'child_process'
 import { db } from '../firebase'
+import { EngineEventSource, EventType, NbaEventSubType } from '../types/engine'
 import {
   buildQuestionChoices,
   resolveQuestionForEvent,
@@ -117,6 +118,25 @@ type RawEventDoc = {
   } | null
 }
 
+type StoredBoxScoreSnapshot = {
+  actionNumber?: number
+  period?: number | null
+  clockMs?: number | null
+  scoreHome?: number | null
+  scoreAway?: number | null
+  boxScore?: BoxScore | null
+}
+
+const parseRawClockToMs = (value: string | null | undefined): number | null => {
+  if (typeof value !== 'string') return null
+  const match = value.match(/PT(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/)
+  if (!match) return null
+  const minutes = match[1] ? Number(match[1]) : 0
+  const seconds = match[2] ? Number(match[2]) : 0
+  if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null
+  return Math.round((minutes * 60 + seconds) * 1000)
+}
+
 const loadRawEventsByActionNumber = async (gameId: string) => {
   const snap = await db
     .collection('games')
@@ -133,6 +153,23 @@ const loadRawEventsByActionNumber = async (gameId: string) => {
     }
   }
   return byActionNumber
+}
+
+const loadBoxScoreSnapshots = async (gameId: string) => {
+  const snap = await db
+    .collection('games')
+    .doc(gameId)
+    .collection('boxScoreSnapshots')
+    .orderBy('actionNumber', 'asc')
+    .get()
+
+  return snap.docs
+    .map((doc) => doc.data() as StoredBoxScoreSnapshot)
+    .filter(
+      (entry): entry is StoredBoxScoreSnapshot & { actionNumber: number } =>
+        typeof entry.actionNumber === 'number' &&
+        Number.isFinite(entry.actionNumber)
+    )
 }
 
 const buildResolvedEvent = (
@@ -153,6 +190,61 @@ const buildResolvedEvent = (
   rawActionClock:
     typeof rawEvent?.raw?.clock === 'string' ? rawEvent.raw.clock : null,
 })
+
+const withRawActionTiming = (
+  event: EngineEvent,
+  rawEvent: RawEventDoc | null
+): EngineEvent => {
+  const rawPeriod =
+    typeof rawEvent?.raw?.period === 'number' ? rawEvent.raw.period : null
+  const rawClock =
+    typeof rawEvent?.raw?.clock === 'string' ? rawEvent.raw.clock : null
+
+  if (rawPeriod === null && rawClock === null) return event
+
+  return {
+    ...event,
+    gameState: {
+      ...event.gameState,
+      period: rawPeriod ?? event.gameState?.period ?? null,
+      clockMs: parseRawClockToMs(rawClock) ?? event.gameState?.clockMs ?? null,
+      scoreHome: event.gameState?.scoreHome ?? null,
+      scoreAway: event.gameState?.scoreAway ?? null,
+      possession: event.gameState?.possession ?? null,
+      boxScore: event.gameState?.boxScore ?? null,
+    },
+  }
+}
+
+const resolveEventBoxScore = (
+  event: EngineEvent,
+  snapshots: (StoredBoxScoreSnapshot & { actionNumber: number })[]
+): BoxScore | null => {
+  if (!snapshots.length) return event.gameState?.boxScore ?? null
+
+  let latestBeforeOrAt: BoxScore | null = null
+  let firstAfter: BoxScore | null = null
+
+  for (const snapshot of snapshots) {
+    const candidate = snapshot.boxScore ?? null
+    if (!candidate) continue
+    if (snapshot.actionNumber <= event.eventId) {
+      latestBeforeOrAt = candidate
+      continue
+    }
+    firstAfter = candidate
+    break
+  }
+
+  if (
+    event.type === EventType.PERIOD_END ||
+    event.type === EventType.GAME_END
+  ) {
+    return firstAfter ?? latestBeforeOrAt ?? event.gameState?.boxScore ?? null
+  }
+
+  return latestBeforeOrAt ?? firstAfter ?? event.gameState?.boxScore ?? null
+}
 
 const loadSeasonProfiles = async () => {
   try {
@@ -223,6 +315,7 @@ export const simulateStoredGame = async (
     throw new Error(`No events found for game ${gameId}`)
   }
   const rawEventsByActionNumber = await loadRawEventsByActionNumber(gameId)
+  const boxScoreSnapshots = await loadBoxScoreSnapshots(gameId)
 
   const boxScore = findBoxScore(events)
   const seasonProfiles = await loadSeasonProfiles()
@@ -264,8 +357,13 @@ export const simulateStoredGame = async (
   let lastElapsedMs = 0
 
   for (const event of events) {
-    const eventBoxScore = event.gameState?.boxScore ?? null
-    const timeActual = event.context?.raw?.timeActual
+    const rawEvent = rawEventsByActionNumber.get(event.eventId) ?? null
+    const effectiveEvent = withRawActionTiming(event, rawEvent)
+    const eventBoxScore = resolveEventBoxScore(
+      effectiveEvent,
+      boxScoreSnapshots
+    )
+    const timeActual = effectiveEvent.context?.raw?.timeActual
     const parsedTime =
       typeof timeActual === 'string' ? Date.parse(timeActual) : Number.NaN
 
@@ -282,7 +380,7 @@ export const simulateStoredGame = async (
 
     const generated = await triggerBasketballQuestion(
       simEngineGameKey,
-      event,
+      effectiveEvent,
       eventBoxScore,
       {
         nowMs: lastElapsedMs,
@@ -319,28 +417,24 @@ export const simulateStoredGame = async (
         open.state = 'closed'
       }
 
-      const decision = resolveQuestionForEvent(open, event, eventBoxScore)
+      const decision = resolveQuestionForEvent(
+        open,
+        effectiveEvent,
+        eventBoxScore
+      )
       if (!decision) continue
 
       if (decision.state === 'resolved') {
-        if (open.state === 'open') {
-          open.state = 'cancelled'
-          open.cancelReason = 'RESOLVED_WHILE_OPEN'
-        } else {
-          open.state = 'resolved'
-          open.answer = decision.answer ?? null
-        }
+        open.state = 'resolved'
+        open.answer = decision.answer ?? null
       } else {
         open.state = 'cancelled'
-        open.cancelReason = 'VOID'
+        open.cancelReason = decision.reason || 'VOID'
       }
 
-      open.resolvedAtEventId = event.eventId
-      open.resolvedEvent = buildResolvedEvent(
-        event,
-        rawEventsByActionNumber.get(event.eventId) ?? null
-      )
-      open.result = buildSimResult(open, event, eventBoxScore)
+      open.resolvedAtEventId = effectiveEvent.eventId
+      open.resolvedEvent = buildResolvedEvent(effectiveEvent, rawEvent)
+      open.result = buildSimResult(open, effectiveEvent, eventBoxScore)
       openQuestions.splice(i, 1)
 
       if (open.state === 'resolved') resolvedQuestions.push(open)
@@ -350,16 +444,53 @@ export const simulateStoredGame = async (
 
   if (openQuestions.length) {
     const lastEvent = events[events.length - 1]
-    const lastEventId =
-      typeof lastEvent?.eventId === 'number' ? lastEvent.eventId : null
-    for (const open of openQuestions) {
-      open.state = 'cancelled'
-      open.answer = null
-      open.cancelReason = 'VOID'
-      if (lastEventId !== null) open.resolvedAtEventId = lastEventId
-      cancelledQuestions.push(open)
+    const syntheticEvent: EngineEvent = {
+      eventId:
+        typeof lastEvent?.eventId === 'number' ? lastEvent.eventId + 1 : 0,
+      source: EngineEventSource.NBA_COM,
+      type: EventType.GAME_END,
+      subType: NbaEventSubType.END,
+      context: null,
+      description: 'synthetic_game_end_resolution',
+      questionId: null,
+      gameState: {
+        period: lastEvent?.gameState?.period ?? null,
+        clockMs: lastEvent?.gameState?.clockMs ?? null,
+        scoreHome: lastEvent?.gameState?.scoreHome ?? null,
+        scoreAway: lastEvent?.gameState?.scoreAway ?? null,
+        possession: null,
+        boxScore: lastEvent?.gameState?.boxScore ?? null,
+      },
+      ingestedAt: Date.now(),
     }
-    openQuestions.length = 0
+
+    for (let i = openQuestions.length - 1; i >= 0; i -= 1) {
+      const open = openQuestions[i]
+      const decision = resolveQuestionForEvent(
+        open,
+        syntheticEvent,
+        syntheticEvent.gameState?.boxScore ?? null
+      )
+      if (decision?.state === 'resolved') {
+        open.state = 'resolved'
+        open.answer = decision.answer ?? null
+        open.resolvedAtEventId = syntheticEvent.eventId
+        open.resolvedEvent = buildResolvedEvent(
+          syntheticEvent,
+          rawEventsByActionNumber.get(
+            typeof lastEvent?.eventId === 'number' ? lastEvent.eventId : -1
+          ) ?? null
+        )
+        resolvedQuestions.push(open)
+      } else {
+        open.state = 'cancelled'
+        open.answer = null
+        open.cancelReason = decision?.reason || 'VOID'
+        open.resolvedAtEventId = syntheticEvent.eventId
+        cancelledQuestions.push(open)
+      }
+      openQuestions.splice(i, 1)
+    }
   }
 
   return {

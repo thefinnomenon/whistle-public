@@ -209,6 +209,17 @@ const getCurrentScore = (
   return null
 }
 
+const getComparableTeamValue = (
+  event: EngineEvent,
+  boxScore: BoxScore | null,
+  team: 'HOME' | 'AWAY',
+  statType: string | null | undefined
+): number | null => {
+  const key = String(statType || '').toUpperCase()
+  if (key === 'POINTS') return getCurrentScore(event, boxScore, team)
+  return getTeamStat(boxScore, team, key)
+}
+
 const buildPlayerResults = (
   playerIds: number[],
   choices: { id: string; value: string }[] | null,
@@ -271,7 +282,8 @@ export const buildSimResult = (
         asString(context.teamTricode)
       )
       if (!teamSide) return null
-      const current = getTeamStat(
+      const current = getComparableTeamValue(
+        event,
         boxScore,
         teamSide,
         asString(context.statType)
@@ -297,8 +309,8 @@ export const buildSimResult = (
     }
     case 'TEAM_COMPARE_PERIOD': {
       const statType = asString(context.statType)
-      const homeStat = getTeamStat(boxScore, 'HOME', statType)
-      const awayStat = getTeamStat(boxScore, 'AWAY', statType)
+      const homeStat = getComparableTeamValue(event, boxScore, 'HOME', statType)
+      const awayStat = getComparableTeamValue(event, boxScore, 'AWAY', statType)
       const minHomeStat = asNumber(context.minHomeStat)
       const minAwayStat = asNumber(context.minAwayStat)
       if (homeStat === null || awayStat === null) return null

@@ -2865,6 +2865,17 @@ const getTeamStat = (
   return null
 }
 
+const getComparableTeamValue = (
+  event: EngineEvent,
+  boxScore: BoxScore | null,
+  team: 'HOME' | 'AWAY',
+  statType: string | null | undefined
+): number | null => {
+  const key = String(statType || '').toUpperCase()
+  if (key === 'POINTS') return getTeamScore(event, team)
+  return getTeamStat(boxScore, team, key)
+}
+
 const getTeamPlayersByTricode = (
   boxScore: BoxScore | null,
   teamTricode: string | null
@@ -2995,7 +3006,8 @@ const buildResolutionContext = (
       const statType = asString(template.resolutionContext?.statType)
       const current =
         teamSide && statType
-          ? (getTeamStat(statBoxScore, teamSide, statType) ?? 0)
+          ? (getComparableTeamValue(event, statBoxScore, teamSide, statType) ??
+            0)
           : 0
       const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
@@ -3081,8 +3093,10 @@ const buildResolutionContext = (
     }
     case 'TEAM_COMPARE_PERIOD': {
       const statType = asString(template.resolutionContext?.statType) ?? ''
-      const homeStat = getTeamStat(statBoxScore, 'HOME', statType) ?? 0
-      const awayStat = getTeamStat(statBoxScore, 'AWAY', statType) ?? 0
+      const homeStat =
+        getComparableTeamValue(event, statBoxScore, 'HOME', statType) ?? 0
+      const awayStat =
+        getComparableTeamValue(event, statBoxScore, 'AWAY', statType) ?? 0
       return {
         ...base,
         endPeriod: base.startPeriod,
@@ -3749,6 +3763,7 @@ export const triggerBasketballQuestion = async (
 type QuestionResolutionDecision = {
   state: 'resolved' | 'cancelled'
   answer: string | null
+  reason?: string
 }
 
 export const getEventPlayerId = (event: EngineEvent): number | null =>
@@ -3836,6 +3851,9 @@ const isMissForExpected = (type: EventType, expected: string): boolean => {
   return false
 }
 
+const isShotAttemptExpectation = (expected: string): boolean =>
+  expected === 'MADE_FG' || expected === 'MADE_3' || expected === 'ATTEMPT_3'
+
 const isFinalStatus = (boxScore: BoxScore | null): boolean => {
   const status = boxScore?.gameStatus ?? boxScore?.game?.gameStatus
   const statusText = String(
@@ -3869,12 +3887,6 @@ export const resolveQuestionForEvent = (
       ? question.resolutionWindowMs
       : asNumber(context.windowMs)
 
-  const periodEnded =
-    !!startPeriod &&
-    !!currentPeriod &&
-    (currentPeriod > startPeriod ||
-      (event.type === EventType.PERIOD_END && currentPeriod === startPeriod))
-
   const windowExpired =
     windowMs !== null &&
     !!startPeriod &&
@@ -3885,9 +3897,11 @@ export const resolveQuestionForEvent = (
         currentClockMs !== null &&
         startClockMs - currentClockMs >= windowMs))
 
-  // Some feeds do not emit a reliable GAME_END/PERIOD_END final event, but the
-  // box score already reports a final status. Treat any event with final status
-  // as end-of-game so "game winner" and end-of-period questions can resolve.
+  // Some feeds do not emit a reliable final event, but the box score can
+  // already report a final status. We still treat that as end-of-game for
+  // game-wide questions, but period questions should only resolve on an actual
+  // PERIOD_END/GAME_END event to avoid resolving early against a later shared
+  // box score snapshot.
   const gameEnded = event.type === EventType.GAME_END || isFinalStatus(boxScore)
   const periodBoundaryReached =
     event.type === EventType.GAME_END ||
@@ -3896,6 +3910,7 @@ export const resolveQuestionForEvent = (
       event.type === EventType.PERIOD_END &&
       currentPeriod >= startPeriod)
   const periodFinished = periodBoundaryReached
+  const periodStatsReady = periodBoundaryReached
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
   const awayScore = getCurrentScore(event, boxScore, 'AWAY')
@@ -3932,11 +3947,16 @@ export const resolveQuestionForEvent = (
       )
       if (!teamSide) return { state: 'cancelled', answer: null }
       const statType = asString(context.statType) ?? ''
-      const current = getTeamStat(boxScore, teamSide, statType)
+      const current = getComparableTeamValue(
+        event,
+        boxScore,
+        teamSide,
+        statType
+      )
       const minTeamStat = asNumber(context.minTeamStat)
       if (minTeamStat !== null && current !== null && current >= minTeamStat)
         return { state: 'resolved', answer: 'yes' }
-      if (periodFinished) return { state: 'resolved', answer: 'no' }
+      if (periodStatsReady) return { state: 'resolved', answer: 'no' }
       return null
     }
     case 'BOTH_TEAMS_10_REST_PERIOD': {
@@ -4048,17 +4068,18 @@ export const resolveQuestionForEvent = (
               : 'no',
         }
       }
-      if (leader === 'TIE') return { state: 'cancelled', answer: null }
+      if (leader === 'TIE')
+        return { state: 'cancelled', answer: null, reason: 'TIE' }
       return {
         state: 'resolved',
         answer: leaderTricode ?? null,
       }
     }
     case 'TEAM_COMPARE_PERIOD': {
-      if (!periodFinished) return null
+      if (!periodStatsReady) return null
       const statType = asString(context.statType) ?? ''
-      const homeStat = getTeamStat(boxScore, 'HOME', statType)
-      const awayStat = getTeamStat(boxScore, 'AWAY', statType)
+      const homeStat = getComparableTeamValue(event, boxScore, 'HOME', statType)
+      const awayStat = getComparableTeamValue(event, boxScore, 'AWAY', statType)
       const minHomeStat = asNumber(context.minHomeStat)
       const minAwayStat = asNumber(context.minAwayStat)
       if (
@@ -4070,7 +4091,8 @@ export const resolveQuestionForEvent = (
         return { state: 'cancelled', answer: null }
       const homeDelta = homeStat - minHomeStat
       const awayDelta = awayStat - minAwayStat
-      if (homeDelta === awayDelta) return { state: 'cancelled', answer: null }
+      if (homeDelta === awayDelta)
+        return { state: 'cancelled', answer: null, reason: 'TIE' }
       const homeTricode =
         normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
       const awayTricode =
@@ -4089,7 +4111,7 @@ export const resolveQuestionForEvent = (
           return { state: 'resolved', answer: 'yes' }
         if (statType === 'STEALS' && event.type === EventType.STEAL)
           return { state: 'resolved', answer: 'yes' }
-        if (periodFinished) return { state: 'resolved', answer: 'no' }
+        if (periodStatsReady) return { state: 'resolved', answer: 'no' }
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
@@ -4106,14 +4128,14 @@ export const resolveQuestionForEvent = (
       const target = asNumber(context.target)
       if (target !== null && deltaStat !== null && deltaStat >= target)
         return { state: 'resolved', answer: 'yes' }
-      if (periodFinished) {
+      if (periodStatsReady) {
         if (deltaStat !== null) return { state: 'resolved', answer: 'no' }
         return { state: 'cancelled', answer: null }
       }
       return null
     }
     case 'PLAYER_COMPARE_PERIOD': {
-      if (!periodFinished) return null
+      if (!periodStatsReady) return null
       const statType = asString(context.statType) ?? ''
       const playerIds = asNumberArray(context.playerIds) ?? []
       const startPlayerGameStats = asRecordNumber(context.startPlayerGameStats)
@@ -4146,7 +4168,7 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'cancelled', answer: null, reason: 'TIE' }
       return { state: 'resolved', answer: bestId }
     }
     case 'PLAYER_COMPARE_NEXT_N': {
@@ -4177,7 +4199,7 @@ export const resolveQuestionForEvent = (
       }
       if (!bestId || bestValue === null)
         return { state: 'cancelled', answer: null }
-      if (tie) return { state: 'cancelled', answer: null }
+      if (tie) return { state: 'cancelled', answer: null, reason: 'TIE' }
       return { state: 'resolved', answer: bestId }
     }
     case 'TEAM_SCORE_AFTER_TIMEOUT': {
@@ -4280,7 +4302,11 @@ export const resolveQuestionForEvent = (
       if (!expected) return null
       if (asBoolean(context.cancelOnGameEnd) && gameEnded) {
         if (event.type !== EventType.GAME_END) return null
-        return { state: 'resolved', answer: 'no' }
+        return {
+          state: isShotAttemptExpectation(expected) ? 'cancelled' : 'resolved',
+          answer: isShotAttemptExpectation(expected) ? null : 'no',
+          reason: isShotAttemptExpectation(expected) ? 'NO_ATTEMPT' : undefined,
+        }
       }
       const expectedSubType = asString(context.expectedSubType)
       const eventSubType =
@@ -4303,7 +4329,12 @@ export const resolveQuestionForEvent = (
       }
       if (isMissForExpected(event.type, expected))
         return { state: 'resolved', answer: 'no' }
-      if (windowExpired) return { state: 'resolved', answer: 'no' }
+      if (windowExpired) {
+        if (isShotAttemptExpectation(expected)) {
+          return { state: 'cancelled', answer: null, reason: 'NO_ATTEMPT' }
+        }
+        return { state: 'resolved', answer: 'no' }
+      }
       return null
     }
     case 'LEAD_CHANGE_REST_GAME': {
@@ -4354,7 +4385,8 @@ export const resolveQuestionForEvent = (
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
-      if (homeScore === awayScore) return { state: 'cancelled', answer: null }
+      if (homeScore === awayScore)
+        return { state: 'cancelled', answer: null, reason: 'TIE' }
       const homeTricode =
         normalizeTricode(asString(context.homeTricode)) ?? 'HOME'
       const awayTricode =
@@ -4369,7 +4401,8 @@ export const resolveQuestionForEvent = (
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
-      if (homeScore === awayScore) return { state: 'cancelled', answer: null }
+      if (homeScore === awayScore)
+        return { state: 'cancelled', answer: null, reason: 'TIE' }
       const teamTricode = normalizeTricode(asString(context.teamTricode))
       if (!teamTricode) return { state: 'cancelled', answer: null }
       const teamSide = resolveTeamSideByTricode(boxScore, teamTricode)

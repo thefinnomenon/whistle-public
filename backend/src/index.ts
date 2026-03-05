@@ -162,13 +162,6 @@ const startNbaLiveFeedWorker = () => {
     } catch (err) {
       console.error('[worker] NBA live feed error', err)
       Sentry.captureException(err)
-    } finally {
-      const elapsedMs = Date.now() - startedAt
-      if (elapsedMs > NBA_LIVE_POLL_MS) {
-        console.log(
-          `[worker] NBA live feed cycle slow elapsedMs=${elapsedMs} pollMs=${NBA_LIVE_POLL_MS}`
-        )
-      }
     }
   }
 
