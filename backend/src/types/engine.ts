@@ -197,6 +197,7 @@ export type NbaFreeThrowContext = {
 
 export type NbaShotContext = {
   shooterId: number | null
+  assistPlayerId?: number | null
   teamId: number | null
   teamTricode: string | null
   result: NbaEventResult
@@ -211,6 +212,39 @@ export type NbaEventContext = {
   teamId?: number | null
   teamTricode?: string | null
   raw?: Record<string, string>
+  officialCumulativeStats?: OfficialCumulativeStatsSnapshot
+}
+
+export type DerivedStatLine = {
+  points: number
+  assists: number
+  rebounds: number
+  steals: number
+  threes: number
+  blocks: number
+  freeThrowsMade: number
+}
+
+export type DerivedStatsSnapshot = {
+  teams: Record<string, DerivedStatLine>
+  players: Record<string, DerivedStatLine>
+}
+
+export type OfficialStatLine = {
+  points: number
+  assists: number
+  rebounds: number
+  steals: number
+  threes: number
+  blocks: number
+  freeThrowsMade: number
+}
+
+export type OfficialCumulativeStatsSnapshot = {
+  throughPeriod: number
+  sourceUrls: string[]
+  teams: Record<string, OfficialStatLine>
+  players: Record<string, OfficialStatLine>
 }
 
 export type EngineEvent = {
@@ -222,5 +256,6 @@ export type EngineEvent = {
   description: string
   questionId: string | null
   gameState: EngineGameState
+  derivedStatsSnapshot?: DerivedStatsSnapshot | null
   ingestedAt: EngineIngestedAt
 }

@@ -12,8 +12,11 @@ import {
   type EngineEvent,
   type EngineGameState,
   type NbaEventContext,
+  type OfficialCumulativeStatsSnapshot,
+  type OfficialStatLine,
 } from '../types/engine'
 import {
+  type DerivedStatsSnapshot,
   resolveQuestionForEvent,
   triggerBasketballQuestion,
   triggerGameStartQuestions,
@@ -33,6 +36,7 @@ const NBA_JSON_HEADERS = {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 }
 const NBA_JSON_TIMEOUT_MS = Number(process.env.NBA_JSON_TIMEOUT_MS ?? 120_000)
+const NBA_HTML_TIMEOUT_MS = Number(process.env.NBA_HTML_TIMEOUT_MS ?? 120_000)
 
 type CacheEntry = {
   etag?: string
@@ -98,6 +102,287 @@ const fetchJson = <T>(
     })
     req.on('error', (err) => reject(err))
   })
+
+const fetchHtml = (
+  url: string,
+  timeoutMs: number = NBA_HTML_TIMEOUT_MS
+): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'Accept-Encoding': 'identity',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Referer: 'https://www.nba.com/',
+          Origin: 'https://www.nba.com',
+          'User-Agent': NBA_JSON_HEADERS['User-Agent'],
+        },
+      },
+      (res) => {
+        const { statusCode } = res
+        let raw = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          raw += chunk
+        })
+        res.on('end', () => {
+          if (statusCode && statusCode >= 400) {
+            reject(new Error(`NBA HTML request failed ${statusCode}: ${url}`))
+            return
+          }
+          resolve(raw)
+        })
+      }
+    )
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`NBA HTML timeout ${timeoutMs}ms: ${url}`))
+    })
+    req.on('error', (err) => reject(err))
+  })
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+
+const asObject = (
+  value: JsonValue | undefined | null
+): { [key: string]: JsonValue } | null => {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return null
+  return value
+}
+
+const asArray = (value: JsonValue | undefined | null): JsonValue[] | null => {
+  if (!value || !Array.isArray(value)) return null
+  return value
+}
+
+const toNumber = (value: JsonValue | undefined | null): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+const parseNextData = (html: string): JsonValue | null => {
+  const match = html.match(
+    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+  )
+  if (!match || typeof match[1] !== 'string') return null
+  try {
+    return JSON.parse(match[1]) as JsonValue
+  } catch {
+    return null
+  }
+}
+
+const readJsonPath = (
+  root: JsonValue,
+  pathParts: string[]
+): JsonValue | null => {
+  let cursor: JsonValue | null = root
+  for (const key of pathParts) {
+    const obj = asObject(cursor)
+    if (!obj) return null
+    cursor = obj[key] ?? null
+  }
+  return cursor
+}
+
+const emptyOfficialStatLine = (): OfficialStatLine => ({
+  points: 0,
+  assists: 0,
+  rebounds: 0,
+  steals: 0,
+  threes: 0,
+  blocks: 0,
+  freeThrowsMade: 0,
+})
+
+const addOfficialStatLine = (
+  target: OfficialStatLine,
+  source: OfficialStatLine
+) => {
+  target.points += source.points
+  target.assists += source.assists
+  target.rebounds += source.rebounds
+  target.steals += source.steals
+  target.threes += source.threes
+  target.blocks += source.blocks
+  target.freeThrowsMade += source.freeThrowsMade
+}
+
+const readStatNumber = (
+  stats: { [key: string]: JsonValue } | null,
+  key: string
+): number => {
+  if (!stats) return 0
+  return toNumber(stats[key] ?? null) ?? 0
+}
+
+const extractOfficialPeriodStats = (
+  nextData: JsonValue
+): {
+  teams: Record<string, OfficialStatLine>
+  players: Record<string, OfficialStatLine>
+} | null => {
+  const gameObj = asObject(
+    readJsonPath(nextData, ['props', 'pageProps', 'game'])
+  )
+  if (!gameObj) return null
+
+  const teams: Record<string, OfficialStatLine> = {}
+  const players: Record<string, OfficialStatLine> = {}
+  const teamKeys: ('homeTeam' | 'awayTeam')[] = ['homeTeam', 'awayTeam']
+  for (const teamKey of teamKeys) {
+    const teamObj = asObject(gameObj[teamKey])
+    if (!teamObj) continue
+    const tricodeRaw = teamObj.teamTricode
+    const tricode =
+      typeof tricodeRaw === 'string' ? normalizeTeamCode(tricodeRaw) : null
+    const teamStats = asObject(teamObj.statistics)
+    const teamLine: OfficialStatLine = {
+      points: readStatNumber(teamStats, 'points'),
+      assists: readStatNumber(teamStats, 'assists'),
+      rebounds: readStatNumber(teamStats, 'reboundsTotal'),
+      steals: readStatNumber(teamStats, 'steals'),
+      threes: readStatNumber(teamStats, 'threePointersMade'),
+      blocks: readStatNumber(teamStats, 'blocks'),
+      freeThrowsMade: readStatNumber(teamStats, 'freeThrowsMade'),
+    }
+    if (tricode) teams[tricode] = teamLine
+
+    const playersRaw = asArray(teamObj.players) ?? []
+    for (const playerRaw of playersRaw) {
+      const playerObj = asObject(playerRaw)
+      if (!playerObj) continue
+      const playerId = toNumber(playerObj.personId)
+      if (playerId === null) continue
+      const playerStats = asObject(playerObj.statistics)
+      players[String(playerId)] = {
+        points: readStatNumber(playerStats, 'points'),
+        assists: readStatNumber(playerStats, 'assists'),
+        rebounds: readStatNumber(playerStats, 'reboundsTotal'),
+        steals: readStatNumber(playerStats, 'steals'),
+        threes: readStatNumber(playerStats, 'threePointersMade'),
+        blocks: readStatNumber(playerStats, 'blocks'),
+        freeThrowsMade: readStatNumber(playerStats, 'freeThrowsMade'),
+      }
+    }
+  }
+  return { teams, players }
+}
+
+const buildOfficialGamePageBaseUrl = (
+  gameSlug: string | null,
+  awayTeam: string | null,
+  homeTeam: string | null,
+  nbaGameId: string
+) => {
+  const slug =
+    typeof gameSlug === 'string' && gameSlug.trim()
+      ? gameSlug.trim()
+      : buildGameSlug(
+          normalizeTeamCode(awayTeam ?? ''),
+          normalizeTeamCode(homeTeam ?? ''),
+          nbaGameId
+        )
+  return `https://www.nba.com/game/${slug}/box-score`
+}
+
+const fetchOfficialCumulativeStatsThroughPeriod = async (
+  baseUrl: string,
+  throughPeriod: number
+): Promise<OfficialCumulativeStatsSnapshot | null> => {
+  if (!Number.isFinite(throughPeriod) || throughPeriod < 1) return null
+  const periodMax = Math.min(throughPeriod, 10)
+  const teams: Record<string, OfficialStatLine> = {}
+  const players: Record<string, OfficialStatLine> = {}
+  const sourceUrls: string[] = []
+
+  for (let period = 1; period <= periodMax; period += 1) {
+    const periodUrl = `${baseUrl}?period=Q${period}`
+    sourceUrls.push(periodUrl)
+    const html = await fetchHtml(periodUrl)
+    const nextData = parseNextData(html)
+    if (!nextData) {
+      throw new Error(
+        `official quarter page missing __NEXT_DATA__: ${periodUrl}`
+      )
+    }
+    const periodStats = extractOfficialPeriodStats(nextData)
+    if (!periodStats) {
+      throw new Error(
+        `official quarter page missing team/player stats: ${periodUrl}`
+      )
+    }
+    for (const [tricode, line] of Object.entries(periodStats.teams)) {
+      if (!teams[tricode]) teams[tricode] = emptyOfficialStatLine()
+      addOfficialStatLine(teams[tricode], line)
+    }
+    for (const [playerId, line] of Object.entries(periodStats.players)) {
+      if (!players[playerId]) players[playerId] = emptyOfficialStatLine()
+      addOfficialStatLine(players[playerId], line)
+    }
+  }
+
+  return {
+    throughPeriod: periodMax,
+    sourceUrls,
+    teams,
+    players,
+  }
+}
+
+type OfficialCumulativeCacheEntry = {
+  period: number
+  fetchedAtMs: number
+  snapshot: OfficialCumulativeStatsSnapshot | null
+}
+
+const OFFICIAL_CUMULATIVE_TTL_MS = Number(
+  process.env.NBA_OFFICIAL_CUMULATIVE_TTL_MS ?? 15000
+)
+const OFFICIAL_CUMULATIVE_CACHE = new Map<
+  string,
+  OfficialCumulativeCacheEntry
+>()
+
+const getOfficialCumulativeForGamePeriod = async (
+  gameId: string,
+  baseUrl: string,
+  period: number,
+  forceRefresh: boolean
+): Promise<OfficialCumulativeStatsSnapshot | null> => {
+  if (!Number.isFinite(period) || period < 1) return null
+  const cache = OFFICIAL_CUMULATIVE_CACHE.get(gameId)
+  const now = Date.now()
+  if (
+    !forceRefresh &&
+    cache &&
+    cache.period === period &&
+    now - cache.fetchedAtMs <= OFFICIAL_CUMULATIVE_TTL_MS
+  ) {
+    return cache.snapshot
+  }
+  const snapshot = await fetchOfficialCumulativeStatsThroughPeriod(
+    baseUrl,
+    period
+  )
+  OFFICIAL_CUMULATIVE_CACHE.set(gameId, {
+    period,
+    fetchedAtMs: now,
+    snapshot,
+  })
+  return snapshot
+}
 
 const normalizeTeamCode = (value: string) =>
   value.trim().replace(/\s+/g, '').toUpperCase()
@@ -322,6 +607,10 @@ const toEventContext = (
   ) {
     context.shot = {
       shooterId: primaryPlayerId,
+      assistPlayerId:
+        typeof action?.assistPersonId === 'number'
+          ? action.assistPersonId
+          : null,
       teamId,
       teamTricode,
       result: toEventResult(action),
@@ -349,6 +638,247 @@ const parseClockToMs = (value: any): number | null => {
   const seconds = match[2] ? Number(match[2]) : 0
   if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null
   return Math.round((minutes * 60 + seconds) * 1000)
+}
+
+type DerivedStatLine = {
+  points: number
+  assists: number
+  rebounds: number
+  steals: number
+  threes: number
+  blocks: number
+  freeThrowsMade: number
+}
+
+const createEmptyDerivedStatLine = (): DerivedStatLine => ({
+  points: 0,
+  assists: 0,
+  rebounds: 0,
+  steals: 0,
+  threes: 0,
+  blocks: 0,
+  freeThrowsMade: 0,
+})
+
+const normalizeDerivedSnapshot = (
+  value: Record<string, unknown> | null | undefined
+): DerivedStatsSnapshot => {
+  const output: DerivedStatsSnapshot = { teams: {}, players: {} }
+  if (!value) return output
+  const readBucket = (bucketKey: 'teams' | 'players') => {
+    const bucket = value[bucketKey]
+    if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) return
+    for (const [id, lineRaw] of Object.entries(bucket)) {
+      if (!lineRaw || typeof lineRaw !== 'object' || Array.isArray(lineRaw))
+        continue
+      const lineObj = lineRaw as Record<string, unknown>
+      const line: DerivedStatLine = {
+        points:
+          typeof lineObj.points === 'number' && Number.isFinite(lineObj.points)
+            ? lineObj.points
+            : 0,
+        assists:
+          typeof lineObj.assists === 'number' &&
+          Number.isFinite(lineObj.assists)
+            ? lineObj.assists
+            : 0,
+        rebounds:
+          typeof lineObj.rebounds === 'number' &&
+          Number.isFinite(lineObj.rebounds)
+            ? lineObj.rebounds
+            : 0,
+        steals:
+          typeof lineObj.steals === 'number' && Number.isFinite(lineObj.steals)
+            ? lineObj.steals
+            : 0,
+        threes:
+          typeof lineObj.threes === 'number' && Number.isFinite(lineObj.threes)
+            ? lineObj.threes
+            : 0,
+        blocks:
+          typeof lineObj.blocks === 'number' && Number.isFinite(lineObj.blocks)
+            ? lineObj.blocks
+            : 0,
+        freeThrowsMade:
+          typeof lineObj.freeThrowsMade === 'number' &&
+          Number.isFinite(lineObj.freeThrowsMade)
+            ? lineObj.freeThrowsMade
+            : typeof lineObj.ftm === 'number' && Number.isFinite(lineObj.ftm)
+              ? lineObj.ftm
+              : 0,
+      }
+      output[bucketKey][id] = line
+    }
+  }
+  readBucket('teams')
+  readBucket('players')
+  return output
+}
+
+const getOrCreateTeamDerived = (
+  derivedStats: DerivedStatsSnapshot,
+  tricode: string | null
+): DerivedStatLine | null => {
+  if (!tricode) return null
+  const key = tricode.trim().toUpperCase()
+  if (!key) return null
+  if (!derivedStats.teams[key]) {
+    derivedStats.teams[key] = createEmptyDerivedStatLine()
+  }
+  return derivedStats.teams[key]
+}
+
+const getOrCreatePlayerDerived = (
+  derivedStats: DerivedStatsSnapshot,
+  playerId: number | null
+): DerivedStatLine | null => {
+  if (!playerId || !Number.isFinite(playerId)) return null
+  const key = String(playerId)
+  if (!derivedStats.players[key]) {
+    derivedStats.players[key] = createEmptyDerivedStatLine()
+  }
+  return derivedStats.players[key]
+}
+
+const applyDerivedStatsForEvent = (
+  derivedStats: DerivedStatsSnapshot,
+  eventType: EventType,
+  eventContext: NbaEventContext | null
+) => {
+  const teamCode =
+    typeof eventContext?.teamTricode === 'string'
+      ? eventContext.teamTricode.trim().toUpperCase()
+      : null
+  const primaryPlayerId =
+    typeof eventContext?.primaryPlayerId === 'number'
+      ? eventContext.primaryPlayerId
+      : null
+  const shot = eventContext?.shot
+  const shotTeamCode =
+    typeof shot?.teamTricode === 'string'
+      ? shot.teamTricode.trim().toUpperCase()
+      : teamCode
+  const shotPlayerId =
+    typeof shot?.shooterId === 'number' ? shot.shooterId : primaryPlayerId
+  const assistPlayerId =
+    typeof shot?.assistPlayerId === 'number' ? shot.assistPlayerId : null
+
+  if (eventType === EventType.REBOUND) {
+    const team = getOrCreateTeamDerived(derivedStats, teamCode)
+    if (team) team.rebounds += 1
+    const player = getOrCreatePlayerDerived(derivedStats, primaryPlayerId)
+    if (player) player.rebounds += 1
+    return
+  }
+
+  if (eventType === EventType.STEAL) {
+    const team = getOrCreateTeamDerived(derivedStats, teamCode)
+    if (team) team.steals += 1
+    const player = getOrCreatePlayerDerived(derivedStats, primaryPlayerId)
+    if (player) player.steals += 1
+    return
+  }
+
+  if (eventType === EventType.BLOCK) {
+    const team = getOrCreateTeamDerived(derivedStats, teamCode)
+    if (team) team.blocks += 1
+    const player = getOrCreatePlayerDerived(derivedStats, primaryPlayerId)
+    if (player) player.blocks += 1
+    return
+  }
+
+  if (eventType === EventType.MADE_3) {
+    const team = getOrCreateTeamDerived(derivedStats, shotTeamCode)
+    if (team) {
+      team.points += 3
+      team.threes += 1
+    }
+    const shooter = getOrCreatePlayerDerived(derivedStats, shotPlayerId)
+    if (shooter) {
+      shooter.points += 3
+      shooter.threes += 1
+    }
+    const assister = getOrCreatePlayerDerived(derivedStats, assistPlayerId)
+    if (assister) assister.assists += 1
+    if (team && assister) team.assists += 1
+    return
+  }
+
+  if (eventType === EventType.MADE_FG) {
+    const team = getOrCreateTeamDerived(derivedStats, shotTeamCode)
+    if (team) {
+      team.points += 2
+    }
+    const shooter = getOrCreatePlayerDerived(derivedStats, shotPlayerId)
+    if (shooter) {
+      shooter.points += 2
+    }
+    const assister = getOrCreatePlayerDerived(derivedStats, assistPlayerId)
+    if (assister) assister.assists += 1
+    if (team && assister) team.assists += 1
+    return
+  }
+
+  if (eventType === EventType.MADE_FT) {
+    const team = getOrCreateTeamDerived(derivedStats, teamCode)
+    if (team) {
+      team.points += 1
+      team.freeThrowsMade += 1
+    }
+    const shooter = getOrCreatePlayerDerived(derivedStats, primaryPlayerId)
+    if (shooter) {
+      shooter.points += 1
+      shooter.freeThrowsMade += 1
+    }
+  }
+}
+
+const cloneDerivedStatsSnapshot = (
+  derivedStats: DerivedStatsSnapshot
+): DerivedStatsSnapshot => {
+  const copyBucket = (
+    bucket: Record<
+      string,
+      {
+        points: number
+        assists: number
+        rebounds: number
+        steals: number
+        threes: number
+        blocks: number
+        freeThrowsMade: number
+      }
+    >
+  ) => {
+    const output: Record<
+      string,
+      {
+        points: number
+        assists: number
+        rebounds: number
+        steals: number
+        threes: number
+        blocks: number
+        freeThrowsMade: number
+      }
+    > = {}
+    for (const [key, value] of Object.entries(bucket)) {
+      output[key] = {
+        points: value.points,
+        assists: value.assists,
+        rebounds: value.rebounds,
+        steals: value.steals,
+        threes: value.threes,
+        blocks: value.blocks,
+        freeThrowsMade: value.freeThrowsMade,
+      }
+    }
+    return output
+  }
+  return {
+    teams: copyBucket(derivedStats.teams),
+    players: copyBucket(derivedStats.players),
+  }
 }
 
 const isFinalStatus = (status: any, statusText: any) => {
@@ -435,7 +965,8 @@ const resolveOpenQuestionsForEvent = async (
   gameId: string,
   event: EngineEvent,
   boxScore: BoxScore | null,
-  windowTypes: string[]
+  windowTypes: string[],
+  derivedStats?: DerivedStatsSnapshot
 ): Promise<number> => {
   const states: ('open' | 'closed')[] = ['open', 'closed']
   const docs: FirebaseFirestore.QueryDocumentSnapshot[] = []
@@ -459,7 +990,12 @@ const resolveOpenQuestionsForEvent = async (
   let resolvedCount = 0
   for (const doc of docs) {
     const data = doc.data() as any
-    const decision = resolveQuestionForEvent(data, event, boxScore)
+    const decision = resolveQuestionForEvent(
+      data,
+      event,
+      boxScore,
+      derivedStats
+    )
     if (!decision) continue
 
     if (decision.state === 'resolved') {
@@ -813,6 +1349,16 @@ export const syncNbaLiveEvents = async () => {
       typeof game?.lastNbaActionNumber === 'number'
         ? game.lastNbaActionNumber
         : 0
+    const derivedStats =
+      lastActionNumber > 0
+        ? normalizeDerivedSnapshot(
+            game?.nbaDerivedStats &&
+              typeof game.nbaDerivedStats === 'object' &&
+              !Array.isArray(game.nbaDerivedStats)
+              ? (game.nbaDerivedStats as Record<string, unknown>)
+              : null
+          )
+        : ({ teams: {}, players: {} } as DerivedStatsSnapshot)
     const nowMs = Date.now()
     const lastSyncMs =
       typeof game?.nbaLastSyncAt?.toMillis === 'function'
@@ -970,6 +1516,12 @@ export const syncNbaLiveEvents = async () => {
     }
 
     actionsProcessed += newActions.length
+    const officialPageBaseUrl = buildOfficialGamePageBaseUrl(
+      typeof game?.nbaGameSlug === 'string' ? game.nbaGameSlug : null,
+      typeof game?.awayTeam === 'string' ? game.awayTeam : null,
+      typeof game?.homeTeam === 'string' ? game.homeTeam : null,
+      nbaGameId
+    )
 
     const batchSize = 200
     let latestActionObj = newActions[newActions.length - 1]
@@ -977,6 +1529,7 @@ export const syncNbaLiveEvents = async () => {
       const batch = newActions.slice(i, i + batchSize)
       const eventWrites: { ref: any; data: any }[] = []
       const newEventPayloads: EngineEvent[] = []
+      const previewDerivedStats = cloneDerivedStatsSnapshot(derivedStats)
 
       for (const action of batch) {
         const actionNumber = action.actionNumber as number
@@ -1021,7 +1574,42 @@ export const syncNbaLiveEvents = async () => {
           eventResult,
           action?.description
         )
-        const eventContext = toEventContext(eventType, eventSubType, action)
+        let eventContext = toEventContext(eventType, eventSubType, action)
+        const periodNumber =
+          typeof action?.period === 'number' && Number.isFinite(action.period)
+            ? action.period
+            : null
+        if (
+          eventType === EventType.PERIOD_END &&
+          periodNumber !== null &&
+          periodNumber > 0
+        ) {
+          let officialCumulative: OfficialCumulativeStatsSnapshot | null = null
+          try {
+            officialCumulative = await getOfficialCumulativeForGamePeriod(
+              gameId,
+              officialPageBaseUrl,
+              periodNumber,
+              true
+            )
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            console.warn(
+              `[nba] official cumulative fetch failed game=${gameId} nbaGameId=${nbaGameId} period=${periodNumber} error=${message}`
+            )
+          }
+          if (officialCumulative) {
+            eventContext = eventContext
+              ? {
+                  ...eventContext,
+                  officialCumulativeStats: officialCumulative,
+                }
+              : {
+                  officialCumulativeStats: officialCumulative,
+                }
+          }
+        }
 
         const eventPayload: EngineEvent = {
           eventId: actionNumber,
@@ -1035,6 +1623,10 @@ export const syncNbaLiveEvents = async () => {
           ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
         }
 
+        applyDerivedStatsForEvent(previewDerivedStats, eventType, eventContext)
+        eventPayload.derivedStatsSnapshot =
+          cloneDerivedStatsSnapshot(previewDerivedStats)
+
         eventWrites.push({ ref: rawRef, data: rawPayload })
         eventWrites.push({ ref: eventRef, data: eventPayload })
         newEventPayloads.push(eventPayload)
@@ -1044,13 +1636,55 @@ export const syncNbaLiveEvents = async () => {
         commitRetries += 1
       })
       for (const eventPayload of newEventPayloads) {
-        await triggerBasketballQuestion(gameId, eventPayload, boxScore, {
+        applyDerivedStatsForEvent(
+          derivedStats,
+          eventPayload.type,
+          eventPayload.context
+        )
+        let eventForEngine: EngineEvent = eventPayload
+        const eventPeriod = eventPayload.gameState?.period
+        if (
+          !isCatchup &&
+          typeof eventPeriod === 'number' &&
+          Number.isFinite(eventPeriod) &&
+          eventPeriod > 0
+        ) {
+          try {
+            const officialAtEvent = await getOfficialCumulativeForGamePeriod(
+              gameId,
+              officialPageBaseUrl,
+              eventPeriod,
+              false
+            )
+            if (officialAtEvent) {
+              eventForEngine = {
+                ...eventPayload,
+                context: eventPayload.context
+                  ? {
+                      ...eventPayload.context,
+                      officialCumulativeStats: officialAtEvent,
+                    }
+                  : {
+                      officialCumulativeStats: officialAtEvent,
+                    },
+              }
+            }
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            console.warn(
+              `[nba] official cumulative fetch failed game=${gameId} nbaGameId=${nbaGameId} period=${eventPeriod} error=${message}`
+            )
+          }
+        }
+        await triggerBasketballQuestion(gameId, eventForEngine, boxScore, {
           persistQuestions: !isCatchup,
           skipQuestionGeneration: isCatchup,
           suppressLogs: isCatchup,
           seasonProfiles,
+          derivedStats,
         })
-        const windowTypes: string[] = ['NEXT_EVENT', 'NEXT_N_MIN']
+        const windowTypes: string[] = ['NEXT_EVENT', 'NEXT_N_MIN', 'PERIOD']
         const finalStatusEvent = isFinalStatus(
           eventPayload.gameState?.boxScore?.gameStatus ?? null,
           eventPayload.gameState?.boxScore?.gameStatusText ?? ''
@@ -1072,9 +1706,10 @@ export const syncNbaLiveEvents = async () => {
         const uniqueWindowTypes = Array.from(new Set(windowTypes))
         await resolveOpenQuestionsForEvent(
           gameId,
-          eventPayload,
+          eventForEngine,
           boxScore,
-          uniqueWindowTypes
+          uniqueWindowTypes,
+          derivedStats
         )
       }
 
@@ -1088,6 +1723,7 @@ export const syncNbaLiveEvents = async () => {
         nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
         nbaGameStatus: nbaGameStatus ?? null,
         nbaGameStatusText,
+        nbaDerivedStats: derivedStats,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }

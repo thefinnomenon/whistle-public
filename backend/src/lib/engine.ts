@@ -7,6 +7,7 @@ import type {
   BoxScoreTeam,
   EngineEvent,
   EngineGameState,
+  OfficialCumulativeStatsSnapshot,
 } from '../types/engine'
 import { EngineEventSource, EventType, NbaEventSubType } from '../types/engine'
 import { trackEvent } from './mixpanel'
@@ -148,6 +149,22 @@ type TriggerOptions = {
     playersById: Map<string, PlayerSeasonProfile>
     teamsById: Map<string, TeamSeasonProfile>
   }
+  derivedStats?: DerivedStatsSnapshot
+}
+
+type DerivedStatLine = {
+  points: number
+  assists: number
+  rebounds: number
+  steals: number
+  threes: number
+  blocks: number
+  freeThrowsMade: number
+}
+
+export type DerivedStatsSnapshot = {
+  teams: Record<string, DerivedStatLine>
+  players: Record<string, DerivedStatLine>
 }
 
 const LAST_QUESTION_AT_BY_GAME = new Map<string, number>()
@@ -2560,7 +2577,8 @@ const buildQuestionPayload = (
   seasonProfiles?: {
     playersById: Map<string, PlayerSeasonProfile>
     teamsById: Map<string, TeamSeasonProfile>
-  }
+  },
+  derivedStats?: DerivedStatsSnapshot
 ): EngineQuestionPayload => {
   const clockMs = event.gameState?.clockMs ?? null
   const resolvedTemplate = resolveTemplate(
@@ -2576,7 +2594,8 @@ const buildQuestionPayload = (
     resolvedTemplate,
     event,
     boxScore,
-    resolutionWindowMs
+    resolutionWindowMs,
+    derivedStats
   )
   if (
     resolvedTemplate.windowType === 'PERIOD' &&
@@ -2877,6 +2896,105 @@ const getComparableTeamValue = (
   return getTeamStat(boxScore, team, key)
 }
 
+const getDerivedTeamStat = (
+  derived: DerivedStatsSnapshot | null | undefined,
+  tricode: string | null,
+  statType: string | null | undefined
+): number | null => {
+  if (!derived || !tricode) return null
+  const key = normalizeTricode(tricode)
+  if (!key) return null
+  const line = derived.teams[key]
+  if (!line) return null
+  const stat = String(statType || '').toUpperCase()
+  if (stat === 'POINTS') return line.points
+  if (stat === 'ASSISTS') return line.assists
+  if (stat === 'REBOUNDS') return line.rebounds
+  if (stat === 'STEALS') return line.steals
+  if (stat === 'THREES' || stat === 'FG3M') return line.threes
+  if (stat === 'BLOCKS') return line.blocks
+  if (stat === 'FTM' || stat === 'FREE_THROWS' || stat === 'FREETHROWS')
+    return line.freeThrowsMade
+  return null
+}
+
+const getDerivedPlayerStat = (
+  derived: DerivedStatsSnapshot | null | undefined,
+  playerId: number | null,
+  statType: string | null | undefined
+): number | null => {
+  if (!derived || !playerId) return null
+  const line = derived.players[String(playerId)]
+  if (!line) return null
+  const stat = String(statType || '').toUpperCase()
+  if (stat === 'POINTS') return line.points
+  if (stat === 'ASSISTS') return line.assists
+  if (stat === 'REBOUNDS') return line.rebounds
+  if (stat === 'STEALS') return line.steals
+  if (stat === 'THREES' || stat === 'FG3M') return line.threes
+  if (stat === 'BLOCKS') return line.blocks
+  if (stat === 'FTM' || stat === 'FREE_THROWS' || stat === 'FREETHROWS')
+    return line.freeThrowsMade
+  return null
+}
+
+const getOfficialStatLineValue = (
+  line: {
+    points: number
+    assists: number
+    rebounds: number
+    steals: number
+    threes: number
+    blocks: number
+    freeThrowsMade: number
+  } | null,
+  statType: string | null | undefined
+): number | null => {
+  if (!line) return null
+  const stat = String(statType || '').toUpperCase()
+  if (stat === 'POINTS') return line.points
+  if (stat === 'ASSISTS') return line.assists
+  if (stat === 'REBOUNDS') return line.rebounds
+  if (stat === 'STEALS') return line.steals
+  if (stat === 'THREES' || stat === 'FG3M') return line.threes
+  if (stat === 'BLOCKS') return line.blocks
+  if (stat === 'FTM' || stat === 'FREE_THROWS' || stat === 'FREETHROWS')
+    return line.freeThrowsMade
+  return null
+}
+
+const getOfficialCumulativeSnapshot = (
+  event: EngineEvent
+): OfficialCumulativeStatsSnapshot | null => {
+  const snapshot = event.context?.officialCumulativeStats
+  if (!snapshot) return null
+  return snapshot
+}
+
+const getOfficialCumulativeTeamStat = (
+  event: EngineEvent,
+  tricode: string | null,
+  statType: string | null | undefined
+): number | null => {
+  const snapshot = getOfficialCumulativeSnapshot(event)
+  if (!snapshot || !tricode) return null
+  const key = normalizeTricode(tricode)
+  if (!key) return null
+  const line = snapshot.teams[key] ?? null
+  return getOfficialStatLineValue(line, statType)
+}
+
+const getOfficialCumulativePlayerStat = (
+  event: EngineEvent,
+  playerId: number | null,
+  statType: string | null | undefined
+): number | null => {
+  const snapshot = getOfficialCumulativeSnapshot(event)
+  if (!snapshot || !playerId) return null
+  const line = snapshot.players[String(playerId)] ?? null
+  return getOfficialStatLineValue(line, statType)
+}
+
 const getTeamPlayersByTricode = (
   boxScore: BoxScore | null,
   teamTricode: string | null
@@ -2917,7 +3035,8 @@ const buildResolutionContext = (
   template: QuestionTemplate,
   event: EngineEvent,
   boxScore: BoxScore | null,
-  resolutionWindowMs: number | null
+  resolutionWindowMs: number | null,
+  derivedStats?: DerivedStatsSnapshot
 ): ResolutionContext => {
   const statBoxScore = event.gameState?.boxScore ?? null
   const { homeTeam, awayTeam } = getBoxScoreTeams(boxScore)
@@ -3007,8 +3126,28 @@ const buildResolutionContext = (
       const statType = asString(template.resolutionContext?.statType)
       const current =
         teamSide && statType
-          ? (getComparableTeamValue(event, statBoxScore, teamSide, statType) ??
-            0)
+          ? (() => {
+              const byOfficial = getOfficialCumulativeTeamStat(
+                event,
+                teamTricode,
+                statType
+              )
+              if (byOfficial !== null) return byOfficial
+              const byDerived = getDerivedTeamStat(
+                derivedStats,
+                teamTricode,
+                statType
+              )
+              if (byDerived !== null) return byDerived
+              return (
+                getComparableTeamValue(
+                  event,
+                  statBoxScore,
+                  teamSide,
+                  statType
+                ) ?? 0
+              )
+            })()
           : 0
       const target = asNumber(template.resolutionContext?.target) ?? 0
       return {
@@ -3032,8 +3171,14 @@ const buildResolutionContext = (
       }
     }
     case 'MADE_3_COUNT_NEXT_N': {
-      const homeThrees = getTeamStat(statBoxScore, 'HOME', 'THREES') ?? null
-      const awayThrees = getTeamStat(statBoxScore, 'AWAY', 'THREES') ?? null
+      const homeThrees =
+        getDerivedTeamStat(derivedStats, homeTricode, 'THREES') ??
+        getTeamStat(statBoxScore, 'HOME', 'THREES') ??
+        null
+      const awayThrees =
+        getDerivedTeamStat(derivedStats, awayTricode, 'THREES') ??
+        getTeamStat(statBoxScore, 'AWAY', 'THREES') ??
+        null
       return {
         ...base,
         minMade3Count: asNumber(template.resolutionContext?.target) ?? 0,
@@ -3053,8 +3198,14 @@ const buildResolutionContext = (
     }
     case 'ANY_3_THIS_PERIOD':
     case 'THREE_COUNT_THIS_PERIOD': {
-      const homeThrees = getTeamStat(statBoxScore, 'HOME', 'THREES') ?? null
-      const awayThrees = getTeamStat(statBoxScore, 'AWAY', 'THREES') ?? null
+      const homeThrees =
+        getDerivedTeamStat(derivedStats, homeTricode, 'THREES') ??
+        getTeamStat(statBoxScore, 'HOME', 'THREES') ??
+        null
+      const awayThrees =
+        getDerivedTeamStat(derivedStats, awayTricode, 'THREES') ??
+        getTeamStat(statBoxScore, 'AWAY', 'THREES') ??
+        null
       return {
         ...base,
         endPeriod: base.startPeriod,
@@ -3094,10 +3245,40 @@ const buildResolutionContext = (
     }
     case 'TEAM_COMPARE_PERIOD': {
       const statType = asString(template.resolutionContext?.statType) ?? ''
-      const homeStat =
-        getComparableTeamValue(event, statBoxScore, 'HOME', statType) ?? 0
-      const awayStat =
-        getComparableTeamValue(event, statBoxScore, 'AWAY', statType) ?? 0
+      const homeStat = (() => {
+        const byOfficial = getOfficialCumulativeTeamStat(
+          event,
+          homeTricode,
+          statType
+        )
+        if (byOfficial !== null) return byOfficial
+        const byDerived = getDerivedTeamStat(
+          derivedStats,
+          homeTricode,
+          statType
+        )
+        if (byDerived !== null) return byDerived
+        return (
+          getComparableTeamValue(event, statBoxScore, 'HOME', statType) ?? 0
+        )
+      })()
+      const awayStat = (() => {
+        const byOfficial = getOfficialCumulativeTeamStat(
+          event,
+          awayTricode,
+          statType
+        )
+        if (byOfficial !== null) return byOfficial
+        const byDerived = getDerivedTeamStat(
+          derivedStats,
+          awayTricode,
+          statType
+        )
+        if (byDerived !== null) return byDerived
+        return (
+          getComparableTeamValue(event, statBoxScore, 'AWAY', statType) ?? 0
+        )
+      })()
       return {
         ...base,
         endPeriod: base.startPeriod,
@@ -3116,7 +3297,21 @@ const buildResolutionContext = (
           : null
       const currentGameStat =
         playerId !== null && Number.isFinite(playerId)
-          ? getPlayerGameStat(player, statType)
+          ? (() => {
+              const byOfficial = getOfficialCumulativePlayerStat(
+                event,
+                playerId,
+                statType
+              )
+              if (byOfficial !== null) return byOfficial
+              const byDerived = getDerivedPlayerStat(
+                derivedStats,
+                playerId,
+                statType
+              )
+              if (byDerived !== null) return byDerived
+              return getPlayerGameStat(player, statType)
+            })()
           : null
       const currentPeriodStat =
         playerId !== null && Number.isFinite(playerId)
@@ -3145,11 +3340,27 @@ const buildResolutionContext = (
       const startGameStats: Record<string, number> = {}
       for (const playerId of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(playerId))
-        if (!player) continue
-        const gameStat = getPlayerGameStat(player, statType)
-        if (gameStat !== null && !Number.isNaN(gameStat)) {
-          startGameStats[String(playerId)] = gameStat
+        const byOfficial = getOfficialCumulativePlayerStat(
+          event,
+          playerId,
+          statType
+        )
+        const gameStat = player ? getPlayerGameStat(player, statType) : null
+        const derivedGameStat = getDerivedPlayerStat(
+          derivedStats,
+          playerId,
+          statType
+        )
+        const baseGameStat =
+          byOfficial !== null
+            ? byOfficial
+            : derivedGameStat !== null
+              ? derivedGameStat
+              : gameStat
+        if (baseGameStat !== null && !Number.isNaN(baseGameStat)) {
+          startGameStats[String(playerId)] = baseGameStat
         }
+        if (!player) continue
         const stat = getPlayerPeriodStat(
           player,
           base.startPeriod ?? 0,
@@ -3175,21 +3386,28 @@ const buildResolutionContext = (
       const playerIds =
         asNumberArray(template.resolutionContext?.playerIds) ?? []
       const startPlayerStats: Record<string, number> = {}
+      const statType = asString(template.resolutionContext?.statType) ?? ''
       if (playerIds.length) {
         for (const playerId of playerIds) {
           const player = getPlayerFromBoxScore(boxScore, Number(playerId))
-          if (!player) continue
-          const stat = getPlayerGameStat(
-            player,
-            asString(template.resolutionContext?.statType) ?? ''
+          const derivedStat = getDerivedPlayerStat(
+            derivedStats,
+            playerId,
+            statType
           )
+          const stat =
+            derivedStat !== null
+              ? derivedStat
+              : player
+                ? getPlayerGameStat(player, statType)
+                : null
           if (stat === null || Number.isNaN(stat)) continue
           startPlayerStats[String(playerId)] = stat
         }
       }
       return {
         ...base,
-        statType: asString(template.resolutionContext?.statType),
+        statType,
         minutes: asNumber(template.resolutionContext?.minutes),
         windowMs: resolutionWindowMs,
         playerIds,
@@ -3674,7 +3892,8 @@ export const triggerBasketballQuestion = async (
       boxScore,
       triggerReason,
       getUsedPlayerIds(gameId),
-      opts?.seasonProfiles
+      opts?.seasonProfiles,
+      opts?.derivedStats
     )
     const invalidResolution =
       asBoolean(nextPayload.resolutionContext?.invalid) === true
@@ -3876,7 +4095,8 @@ const isFinalStatus = (boxScore: BoxScore | null): boolean => {
 export const resolveQuestionForEvent = (
   question: QuestionRecord,
   event: EngineEvent,
-  boxScore: BoxScore | null
+  boxScore: BoxScore | null,
+  derivedStats?: DerivedStatsSnapshot
 ): QuestionResolutionDecision | null => {
   const context = question?.resolutionContext ?? {}
   const type = asString(context.type) ?? ''
@@ -3910,14 +4130,28 @@ export const resolveQuestionForEvent = (
   // PERIOD_END/GAME_END event to avoid resolving early against a later shared
   // box score snapshot.
   const gameEnded = event.type === EventType.GAME_END || isFinalStatus(boxScore)
-  const periodBoundaryReached =
+  const periodFinished =
     event.type === EventType.GAME_END ||
     (!!startPeriod &&
       !!currentPeriod &&
-      event.type === EventType.PERIOD_END &&
-      currentPeriod >= startPeriod)
-  const periodFinished = periodBoundaryReached
-  const periodStatsReady = periodBoundaryReached
+      (currentPeriod > startPeriod ||
+        (event.type === EventType.PERIOD_END && currentPeriod >= startPeriod)))
+  const hasOfficialPeriodSnapshot =
+    event.context?.raw &&
+    typeof event.context.raw === 'object' &&
+    (event.context.raw as { officialPeriodSnapshot?: unknown })
+      .officialPeriodSnapshot === '1'
+  const hasDerivedStats = Boolean(derivedStats)
+  // Stat-based period resolutions should resolve at period boundary only when we
+  // know the period snapshot is authoritative. Otherwise wait for next period.
+  const periodStatsReady =
+    event.type === EventType.GAME_END ||
+    (!!startPeriod &&
+      !!currentPeriod &&
+      (currentPeriod > startPeriod ||
+        (event.type === EventType.PERIOD_END &&
+          currentPeriod >= startPeriod &&
+          (hasDerivedStats || hasOfficialPeriodSnapshot))))
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
   const awayScore = getCurrentScore(event, boxScore, 'AWAY')
@@ -3934,10 +4168,11 @@ export const resolveQuestionForEvent = (
     case 'TEAM_POINTS_NEXT_N':
     case 'TEAM_POINTS_REST_PERIOD':
     case 'TEAM_POINTS_THIS_PERIOD': {
-      const teamSide = resolveTeamSideByTricode(
-        boxScore,
-        asString(context.teamTricode)
-      )
+      const tricode = asString(context.teamTricode)
+      const teamContext = asString(context.team)
+      const teamSide =
+        resolveTeamSideByTricode(boxScore, tricode) ??
+        (teamContext === 'HOME' || teamContext === 'AWAY' ? teamContext : null)
       if (!teamSide) return { state: 'cancelled', answer: null }
       const current = getCurrentScore(event, boxScore, teamSide)
       const minTeamScore = asNumber(context.minTeamScore)
@@ -3948,18 +4183,17 @@ export const resolveQuestionForEvent = (
       return null
     }
     case 'TEAM_STAT_THIS_PERIOD': {
-      const teamSide = resolveTeamSideByTricode(
-        boxScore,
-        asString(context.teamTricode)
-      )
+      const tricode = asString(context.teamTricode)
+      const teamContext = asString(context.team)
+      const teamSide =
+        resolveTeamSideByTricode(boxScore, tricode) ??
+        (teamContext === 'HOME' || teamContext === 'AWAY' ? teamContext : null)
       if (!teamSide) return { state: 'cancelled', answer: null }
       const statType = asString(context.statType) ?? ''
-      const current = getComparableTeamValue(
-        event,
-        boxScore,
-        teamSide,
-        statType
-      )
+      const current =
+        getOfficialCumulativeTeamStat(event, tricode, statType) ??
+        getDerivedTeamStat(derivedStats, tricode, statType) ??
+        getComparableTeamValue(event, boxScore, teamSide, statType)
       const minTeamStat = asNumber(context.minTeamStat)
       if (minTeamStat !== null && current !== null && current >= minTeamStat)
         return { state: 'resolved', answer: 'yes' }
@@ -3982,8 +4216,18 @@ export const resolveQuestionForEvent = (
       return null
     }
     case 'MADE_3_COUNT_NEXT_N': {
-      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
-      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      const homeThrees =
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.homeTricode),
+          'THREES'
+        ) ?? getTeamStat(boxScore, 'HOME', 'THREES')
+      const awayThrees =
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.awayTricode),
+          'THREES'
+        ) ?? getTeamStat(boxScore, 'AWAY', 'THREES')
       const startHomeThrees = asNumber(context.startHomeThrees)
       const startAwayThrees = asNumber(context.startAwayThrees)
       if (
@@ -4019,8 +4263,18 @@ export const resolveQuestionForEvent = (
     }
     case 'ANY_3_THIS_PERIOD':
     case 'THREE_COUNT_THIS_PERIOD': {
-      const homeThrees = getTeamStat(boxScore, 'HOME', 'THREES')
-      const awayThrees = getTeamStat(boxScore, 'AWAY', 'THREES')
+      const homeThrees =
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.homeTricode),
+          'THREES'
+        ) ?? getTeamStat(boxScore, 'HOME', 'THREES')
+      const awayThrees =
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.awayTricode),
+          'THREES'
+        ) ?? getTeamStat(boxScore, 'AWAY', 'THREES')
       const startHomeThrees = asNumber(context.startHomeThrees)
       const startAwayThrees = asNumber(context.startAwayThrees)
       if (
@@ -4085,8 +4339,30 @@ export const resolveQuestionForEvent = (
     case 'TEAM_COMPARE_PERIOD': {
       if (!periodStatsReady) return null
       const statType = asString(context.statType) ?? ''
-      const homeStat = getComparableTeamValue(event, boxScore, 'HOME', statType)
-      const awayStat = getComparableTeamValue(event, boxScore, 'AWAY', statType)
+      const homeStat =
+        getOfficialCumulativeTeamStat(
+          event,
+          asString(context.homeTricode),
+          statType
+        ) ??
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.homeTricode),
+          statType
+        ) ??
+        getComparableTeamValue(event, boxScore, 'HOME', statType)
+      const awayStat =
+        getOfficialCumulativeTeamStat(
+          event,
+          asString(context.awayTricode),
+          statType
+        ) ??
+        getDerivedTeamStat(
+          derivedStats,
+          asString(context.awayTricode),
+          statType
+        ) ??
+        getComparableTeamValue(event, boxScore, 'AWAY', statType)
       const minHomeStat = asNumber(context.minHomeStat)
       const minAwayStat = asNumber(context.minAwayStat)
       if (
@@ -4113,6 +4389,23 @@ export const resolveQuestionForEvent = (
       const playerId = asNumber(context.playerId) ?? 0
       const period = asNumber(context.endPeriod) ?? startPeriod ?? currentPeriod
       const statType = asString(context.statType) ?? 'POINTS'
+      const eventPlayerId = getEventPlayerId(event)
+      if (
+        playerId &&
+        statType === 'THREES' &&
+        event.type === EventType.MADE_3 &&
+        eventPlayerId === playerId
+      ) {
+        return { state: 'resolved', answer: 'yes' }
+      }
+      if (
+        playerId &&
+        statType === 'STEALS' &&
+        event.type === EventType.STEAL &&
+        eventPlayerId === playerId
+      ) {
+        return { state: 'resolved', answer: 'yes' }
+      }
       if (!playerId || !period) {
         if (statType === 'THREES' && event.type === EventType.MADE_3)
           return { state: 'resolved', answer: 'yes' }
@@ -4122,7 +4415,10 @@ export const resolveQuestionForEvent = (
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
-      const currentGameStat = getPlayerGameStat(player, statType)
+      const currentGameStat =
+        getOfficialCumulativePlayerStat(event, playerId, statType) ??
+        getDerivedPlayerStat(derivedStats, playerId, statType) ??
+        getPlayerGameStat(player, statType)
       const startGameStat =
         asNumber(context.startGameStat) ?? asNumber(context.initialValue)
       const deltaStat =
@@ -4154,7 +4450,10 @@ export const resolveQuestionForEvent = (
       let tie = false
       for (const id of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(id))
-        const currentGameStat = getPlayerGameStat(player, statType)
+        const currentGameStat =
+          getOfficialCumulativePlayerStat(event, Number(id), statType) ??
+          getDerivedPlayerStat(derivedStats, Number(id), statType) ??
+          getPlayerGameStat(player, statType)
         const startGameStat = startPlayerGameStats?.[String(id)]
         const deltaStat =
           currentGameStat !== null &&
@@ -4163,8 +4462,8 @@ export const resolveQuestionForEvent = (
           Number.isFinite(startGameStat)
             ? Math.max(0, currentGameStat - startGameStat)
             : null
-        const stat = deltaStat ?? 0
-        if (stat === null || Number.isNaN(stat)) continue
+        if (deltaStat === null || Number.isNaN(deltaStat)) continue
+        const stat = deltaStat
         if (bestValue === null || stat > bestValue) {
           bestValue = stat
           bestId = String(id)
@@ -4189,7 +4488,9 @@ export const resolveQuestionForEvent = (
       let tie = false
       for (const id of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(id))
-        const current = getPlayerGameStat(player, statType)
+        const current =
+          getDerivedPlayerStat(derivedStats, Number(id), statType) ??
+          getPlayerGameStat(player, statType)
         if (current === null || Number.isNaN(current)) continue
         const start = startStats?.[String(id)]
         const delta =
@@ -4388,7 +4689,6 @@ export const resolveQuestionForEvent = (
       }
     }
     case 'GAME_WINNER': {
-      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
@@ -4404,7 +4704,6 @@ export const resolveQuestionForEvent = (
       }
     }
     case 'TEAM_WINS_GAME': {
-      if (event.type !== EventType.GAME_END) return null
       if (!gameEnded) return null
       if (homeScore === null || awayScore === null)
         return { state: 'cancelled', answer: null }
