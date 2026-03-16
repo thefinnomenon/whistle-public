@@ -970,6 +970,10 @@ const PERIOD_COMPARE_TYPES = new Set<string>([
   'TEAM_POINTS_THIS_PERIOD',
   'PLAYER_MILESTONE_PERIOD',
   'PLAYER_COMPARE_PERIOD',
+  'TEAM_POINTS_NEXT_N',
+  'TOTAL_POINTS_NEXT_N',
+  'MADE_3_COUNT_NEXT_N',
+  'PLAYER_COMPARE_NEXT_N',
 ])
 
 const toFiniteNumber = (value: number | string | null | undefined) => {
@@ -1153,6 +1157,20 @@ const toNumberRecord = (value: object | null | undefined) => {
   return Object.keys(output).length ? output : null
 }
 
+const getPlayerIdsFromContext = (
+  value: object | string | number | boolean | null | undefined
+) => {
+  if (!Array.isArray(value)) return [] as number[]
+  const playerIds: number[] = []
+  for (const item of value) {
+    const parsed = toFiniteNumber(
+      typeof item === 'number' || typeof item === 'string' ? item : null
+    )
+    if (parsed !== null) playerIds.push(parsed)
+  }
+  return playerIds
+}
+
 const logOfficialCompare = (params: {
   phase: 'creation' | 'resolution'
   gameId: string
@@ -1289,6 +1307,202 @@ const logOfficialCompare = (params: {
         ? context.startPlayerGameStats
         : null
     compare.startMap = toNumberRecord(startMapRaw as object | null)
+    const playerIds = getPlayerIdsFromContext(context.playerIds)
+    if (playerIds.length) {
+      const officialMap: Record<string, number> = {}
+      const derivedMap: Record<string, number> = {}
+      const boxMap: Record<string, number> = {}
+      for (const playerId of playerIds) {
+        const officialValue = getOfficialPlayerStat(
+          official,
+          playerId,
+          statType
+        )
+        const derivedValue = getDerivedPlayerStat(
+          params.derivedStats,
+          playerId,
+          statType
+        )
+        const boxValue = getBoxScorePlayerStat(
+          params.boxScore,
+          playerId,
+          statType
+        )
+        if (officialValue !== null)
+          officialMap[String(playerId)] = officialValue
+        if (derivedValue !== null) derivedMap[String(playerId)] = derivedValue
+        if (boxValue !== null) boxMap[String(playerId)] = boxValue
+      }
+      compare.officialMap = Object.keys(officialMap).length ? officialMap : null
+      compare.derivedMap = Object.keys(derivedMap).length ? derivedMap : null
+      compare.boxMap = Object.keys(boxMap).length ? boxMap : null
+    }
+  } else if (type === 'PLAYER_COMPARE_NEXT_N') {
+    const playerIds = getPlayerIdsFromContext(context.playerIds)
+    const startMapRaw =
+      typeof context.startPlayerStats === 'object' &&
+      context.startPlayerStats &&
+      !Array.isArray(context.startPlayerStats)
+        ? context.startPlayerStats
+        : null
+    compare.startMap = toNumberRecord(startMapRaw as object | null)
+    if (playerIds.length) {
+      const officialMap: Record<string, number> = {}
+      const derivedMap: Record<string, number> = {}
+      const boxMap: Record<string, number> = {}
+      for (const playerId of playerIds) {
+        const officialValue = getOfficialPlayerStat(
+          official,
+          playerId,
+          statType
+        )
+        const derivedValue = getDerivedPlayerStat(
+          params.derivedStats,
+          playerId,
+          statType
+        )
+        const boxValue = getBoxScorePlayerStat(
+          params.boxScore,
+          playerId,
+          statType
+        )
+        if (officialValue !== null)
+          officialMap[String(playerId)] = officialValue
+        if (derivedValue !== null) derivedMap[String(playerId)] = derivedValue
+        if (boxValue !== null) boxMap[String(playerId)] = boxValue
+      }
+      compare.officialMap = Object.keys(officialMap).length ? officialMap : null
+      compare.derivedMap = Object.keys(derivedMap).length ? derivedMap : null
+      compare.boxMap = Object.keys(boxMap).length ? boxMap : null
+    }
+  } else if (type === 'TEAM_POINTS_NEXT_N') {
+    const teamTricode =
+      typeof context.teamTricode === 'string' ? context.teamTricode : null
+    const homeScore = toFiniteNumber(params.event.gameState?.scoreHome)
+    const awayScore = toFiniteNumber(params.event.gameState?.scoreAway)
+    const teamFromScore =
+      teamTricode &&
+      params.boxScore &&
+      String(params.boxScore.homeTeam?.teamTricode || '').toUpperCase() ===
+        String(teamTricode).toUpperCase()
+        ? homeScore
+        : teamTricode &&
+            params.boxScore &&
+            String(
+              params.boxScore.awayTeam?.teamTricode || ''
+            ).toUpperCase() === String(teamTricode).toUpperCase()
+          ? awayScore
+          : null
+    compare.teamTricode = teamTricode
+    compare.start = toFiniteNumber(
+      typeof context.initialValue === 'number' ||
+        typeof context.initialValue === 'string'
+        ? context.initialValue
+        : null
+    )
+    compare.minTarget = toFiniteNumber(
+      typeof context.minTeamScore === 'number' ||
+        typeof context.minTeamScore === 'string'
+        ? context.minTeamScore
+        : null
+    )
+    compare.official = getOfficialTeamStat(official, teamTricode, 'POINTS')
+    compare.derived = getDerivedTeamStat(
+      params.derivedStats,
+      teamTricode,
+      'POINTS'
+    )
+    compare.boxScore = teamFromScore
+  } else if (type === 'TOTAL_POINTS_NEXT_N') {
+    const homeCode =
+      params.boxScore &&
+      typeof params.boxScore.homeTeam?.teamTricode === 'string'
+        ? params.boxScore.homeTeam.teamTricode
+        : null
+    const awayCode =
+      params.boxScore &&
+      typeof params.boxScore.awayTeam?.teamTricode === 'string'
+        ? params.boxScore.awayTeam.teamTricode
+        : null
+    const scoreHome = toFiniteNumber(params.event.gameState?.scoreHome)
+    const scoreAway = toFiniteNumber(params.event.gameState?.scoreAway)
+    compare.start = toFiniteNumber(
+      typeof context.startTotal === 'number' ||
+        typeof context.startTotal === 'string'
+        ? context.startTotal
+        : null
+    )
+    compare.minTarget = toFiniteNumber(
+      typeof context.minTotalScore === 'number' ||
+        typeof context.minTotalScore === 'string'
+        ? context.minTotalScore
+        : null
+    )
+    compare.boxScore =
+      scoreHome !== null && scoreAway !== null ? scoreHome + scoreAway : null
+    const derivedHome = getDerivedTeamStat(
+      params.derivedStats,
+      homeCode,
+      'POINTS'
+    )
+    const derivedAway = getDerivedTeamStat(
+      params.derivedStats,
+      awayCode,
+      'POINTS'
+    )
+    compare.derived =
+      derivedHome !== null && derivedAway !== null
+        ? derivedHome + derivedAway
+        : null
+    const officialHome = getOfficialTeamStat(official, homeCode, 'POINTS')
+    const officialAway = getOfficialTeamStat(official, awayCode, 'POINTS')
+    compare.official =
+      officialHome !== null && officialAway !== null
+        ? officialHome + officialAway
+        : null
+  } else if (type === 'MADE_3_COUNT_NEXT_N') {
+    const homeCode =
+      typeof context.homeTricode === 'string' ? context.homeTricode : null
+    const awayCode =
+      typeof context.awayTricode === 'string' ? context.awayTricode : null
+    compare.startHome = toFiniteNumber(
+      typeof context.startHomeThrees === 'number' ||
+        typeof context.startHomeThrees === 'string'
+        ? context.startHomeThrees
+        : null
+    )
+    compare.startAway = toFiniteNumber(
+      typeof context.startAwayThrees === 'number' ||
+        typeof context.startAwayThrees === 'string'
+        ? context.startAwayThrees
+        : null
+    )
+    compare.minTarget = toFiniteNumber(
+      typeof context.minMade3Count === 'number' ||
+        typeof context.minMade3Count === 'string'
+        ? context.minMade3Count
+        : null
+    )
+    const officialHome = getOfficialTeamStat(official, homeCode, 'THREES')
+    const officialAway = getOfficialTeamStat(official, awayCode, 'THREES')
+    const derivedHome = getDerivedTeamStat(
+      params.derivedStats,
+      homeCode,
+      'THREES'
+    )
+    const derivedAway = getDerivedTeamStat(
+      params.derivedStats,
+      awayCode,
+      'THREES'
+    )
+    const boxHome = getBoxScoreTeamStat(params.boxScore, homeCode, 'THREES')
+    const boxAway = getBoxScoreTeamStat(params.boxScore, awayCode, 'THREES')
+    compare.officialHome = officialHome
+    compare.officialAway = officialAway
+    compare.derivedHome = derivedHome
+    compare.derivedAway = derivedAway
+    compare.boxHome = boxHome
+    compare.boxAway = boxAway
   }
 
   const questionId = params.questionId ? ` question=${params.questionId}` : ''
