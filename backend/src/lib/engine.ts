@@ -193,6 +193,8 @@ const PLAYER_USAGE_BY_GAME = new Map<
 >()
 const QUESTION_SIGNATURE_SECRET = process.env.WHISTLE_JWT_SECRET
 const QUESTION_PAYLOAD_VERSION = 1
+const USE_OFFICIAL_CUMULATIVE_RESOLUTION =
+  process.env.NBA_USE_OFFICIAL_CUMULATIVE_RESOLUTION === '1'
 const resolveEngineVersion = (): string => {
   const fromEnv =
     process.env.ENGINE_VERSION ||
@@ -3127,12 +3129,6 @@ const buildResolutionContext = (
       const current =
         teamSide && statType
           ? (() => {
-              const byOfficial = getOfficialCumulativeTeamStat(
-                event,
-                teamTricode,
-                statType
-              )
-              if (byOfficial !== null) return byOfficial
               const byDerived = getDerivedTeamStat(
                 derivedStats,
                 teamTricode,
@@ -3246,12 +3242,6 @@ const buildResolutionContext = (
     case 'TEAM_COMPARE_PERIOD': {
       const statType = asString(template.resolutionContext?.statType) ?? ''
       const homeStat = (() => {
-        const byOfficial = getOfficialCumulativeTeamStat(
-          event,
-          homeTricode,
-          statType
-        )
-        if (byOfficial !== null) return byOfficial
         const byDerived = getDerivedTeamStat(
           derivedStats,
           homeTricode,
@@ -3263,12 +3253,6 @@ const buildResolutionContext = (
         )
       })()
       const awayStat = (() => {
-        const byOfficial = getOfficialCumulativeTeamStat(
-          event,
-          awayTricode,
-          statType
-        )
-        if (byOfficial !== null) return byOfficial
         const byDerived = getDerivedTeamStat(
           derivedStats,
           awayTricode,
@@ -3298,12 +3282,6 @@ const buildResolutionContext = (
       const currentGameStat =
         playerId !== null && Number.isFinite(playerId)
           ? (() => {
-              const byOfficial = getOfficialCumulativePlayerStat(
-                event,
-                playerId,
-                statType
-              )
-              if (byOfficial !== null) return byOfficial
               const byDerived = getDerivedPlayerStat(
                 derivedStats,
                 playerId,
@@ -3340,11 +3318,6 @@ const buildResolutionContext = (
       const startGameStats: Record<string, number> = {}
       for (const playerId of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(playerId))
-        const byOfficial = getOfficialCumulativePlayerStat(
-          event,
-          playerId,
-          statType
-        )
         const gameStat = player ? getPlayerGameStat(player, statType) : null
         const derivedGameStat = getDerivedPlayerStat(
           derivedStats,
@@ -3352,11 +3325,7 @@ const buildResolutionContext = (
           statType
         )
         const baseGameStat =
-          byOfficial !== null
-            ? byOfficial
-            : derivedGameStat !== null
-              ? derivedGameStat
-              : gameStat
+          derivedGameStat !== null ? derivedGameStat : gameStat
         if (baseGameStat !== null && !Number.isNaN(baseGameStat)) {
           startGameStats[String(playerId)] = baseGameStat
         }
@@ -4191,7 +4160,9 @@ export const resolveQuestionForEvent = (
       if (!teamSide) return { state: 'cancelled', answer: null }
       const statType = asString(context.statType) ?? ''
       const current =
-        getOfficialCumulativeTeamStat(event, tricode, statType) ??
+        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
+          ? getOfficialCumulativeTeamStat(event, tricode, statType)
+          : null) ??
         getDerivedTeamStat(derivedStats, tricode, statType) ??
         getComparableTeamValue(event, boxScore, teamSide, statType)
       const minTeamStat = asNumber(context.minTeamStat)
@@ -4340,11 +4311,13 @@ export const resolveQuestionForEvent = (
       if (!periodStatsReady) return null
       const statType = asString(context.statType) ?? ''
       const homeStat =
-        getOfficialCumulativeTeamStat(
-          event,
-          asString(context.homeTricode),
-          statType
-        ) ??
+        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
+          ? getOfficialCumulativeTeamStat(
+              event,
+              asString(context.homeTricode),
+              statType
+            )
+          : null) ??
         getDerivedTeamStat(
           derivedStats,
           asString(context.homeTricode),
@@ -4352,11 +4325,13 @@ export const resolveQuestionForEvent = (
         ) ??
         getComparableTeamValue(event, boxScore, 'HOME', statType)
       const awayStat =
-        getOfficialCumulativeTeamStat(
-          event,
-          asString(context.awayTricode),
-          statType
-        ) ??
+        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
+          ? getOfficialCumulativeTeamStat(
+              event,
+              asString(context.awayTricode),
+              statType
+            )
+          : null) ??
         getDerivedTeamStat(
           derivedStats,
           asString(context.awayTricode),
@@ -4416,7 +4391,9 @@ export const resolveQuestionForEvent = (
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
       const currentGameStat =
-        getOfficialCumulativePlayerStat(event, playerId, statType) ??
+        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
+          ? getOfficialCumulativePlayerStat(event, playerId, statType)
+          : null) ??
         getDerivedPlayerStat(derivedStats, playerId, statType) ??
         getPlayerGameStat(player, statType)
       const startGameStat =
@@ -4451,7 +4428,9 @@ export const resolveQuestionForEvent = (
       for (const id of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(id))
         const currentGameStat =
-          getOfficialCumulativePlayerStat(event, Number(id), statType) ??
+          (USE_OFFICIAL_CUMULATIVE_RESOLUTION
+            ? getOfficialCumulativePlayerStat(event, Number(id), statType)
+            : null) ??
           getDerivedPlayerStat(derivedStats, Number(id), statType) ??
           getPlayerGameStat(player, statType)
         const startGameStat = startPlayerGameStats?.[String(id)]

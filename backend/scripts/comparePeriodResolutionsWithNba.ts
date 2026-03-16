@@ -156,7 +156,60 @@ type CompareResult = {
   detail: string
   engineResolvedValue: string
   officialQuarterValue: string
+  linkedEventId: number | null
+  linkedEventType: string | null
+  linkedEventSummary: string
+  linkedEventBoxScoreSummary: string
+  nearbySnapshotSummary: string
   mismatch: boolean
+}
+
+type StoredEventDoc = {
+  eventId?: number | null
+  type?: string | null
+  gameState?: {
+    period?: number | null
+    clockMs?: number | null
+    scoreHome?: number | null
+    scoreAway?: number | null
+    boxScore?: {
+      gameStatus?: number | string | null
+      gameStatusText?: string | null
+      homeTeam?: {
+        teamTricode?: string | null
+        score?: number | string | null
+      } | null
+      awayTeam?: {
+        teamTricode?: string | null
+        score?: number | string | null
+      } | null
+    } | null
+  } | null
+}
+
+type StoredBoxScoreSnapshot = {
+  actionNumber?: number | null
+  period?: number | null
+  clockMs?: number | null
+  scoreHome?: number | null
+  scoreAway?: number | null
+  boxScore?: {
+    gameStatus?: number | string | null
+    gameStatusText?: string | null
+    homeTeam?: {
+      teamTricode?: string | null
+      score?: number | string | null
+    } | null
+    awayTeam?: {
+      teamTricode?: string | null
+      score?: number | string | null
+    } | null
+  } | null
+}
+
+type PerGameDebugData = {
+  eventsById: Map<number, StoredEventDoc>
+  snapshots: (StoredBoxScoreSnapshot & { actionNumber: number })[]
 }
 
 const NBA_JSON_HEADERS: Record<string, string> = {
@@ -404,6 +457,50 @@ const getOfficialStatValue = (
   return null
 }
 
+const getOfficialCumulativeTeamStatThroughPeriod = (
+  officialQuarterDataByPeriod: Map<number, OfficialQuarterData>,
+  period: number,
+  teamCode: string,
+  stat: StatKey
+): number | null => {
+  let total = 0
+  let found = false
+  for (let currentPeriod = 1; currentPeriod <= period; currentPeriod += 1) {
+    const quarter = officialQuarterDataByPeriod.get(currentPeriod)
+    if (!quarter) continue
+    const value = getOfficialStatValue(
+      quarter.teamStats.get(teamCode) ?? null,
+      stat
+    )
+    if (value === null) continue
+    total += value
+    found = true
+  }
+  return found ? total : null
+}
+
+const getOfficialCumulativePlayerStatThroughPeriod = (
+  officialQuarterDataByPeriod: Map<number, OfficialQuarterData>,
+  period: number,
+  playerId: number,
+  stat: StatKey
+): number | null => {
+  let total = 0
+  let found = false
+  for (let currentPeriod = 1; currentPeriod <= period; currentPeriod += 1) {
+    const quarter = officialQuarterDataByPeriod.get(currentPeriod)
+    if (!quarter) continue
+    const value = getOfficialStatValue(
+      quarter.playerStats.get(playerId) ?? null,
+      stat
+    )
+    if (value === null) continue
+    total += value
+    found = true
+  }
+  return found ? total : null
+}
+
 const isFinalStatusFromActions = (actions: RawAction[]): boolean => {
   if (!actions.length) return false
   const last = actions[actions.length - 1]
@@ -562,7 +659,8 @@ const compareQuestion = (
   actions: RawAction[],
   officialQuarterDataByPeriod: Map<number, OfficialQuarterData>,
   sourceBoxScoreUrl: string,
-  sourceGamePageBaseUrl: string
+  sourceGamePageBaseUrl: string,
+  debugData: PerGameDebugData
 ): CompareResult | null => {
   const context = question.resolutionContext
   if (!context || typeof context.type !== 'string') return null
@@ -598,6 +696,7 @@ const compareQuestion = (
   const sourceUrl = `https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_${nbaGameId}.json`
   const sourceGamePageUrl = `${sourceGamePageBaseUrl}?period=Q${startPeriod}`
   const officialQuarter = officialQuarterDataByPeriod.get(startPeriod) ?? null
+  const linkedEvent = debugData.eventsById.get(endEventId) ?? null
 
   const homeCode = normalizeCode(context.homeTricode)
   const awayCode = normalizeCode(context.awayTricode)
@@ -609,38 +708,60 @@ const compareQuestion = (
     const minTeamStat = toNumber(context.minTeamStat)
     if (!teamCode || startTeamStat === null || minTeamStat === null) return null
     const pbpDelta = statFromAccumulator(accumulator, statType, teamCode)
-    const deltaFromOfficial = getOfficialStatValue(
-      officialQuarter?.teamStats.get(teamCode) ?? null,
-      statType
-    )
-    const delta = deltaFromOfficial ?? pbpDelta
+    const endCumulativeFromOfficial =
+      getOfficialCumulativeTeamStatThroughPeriod(
+        officialQuarterDataByPeriod,
+        startPeriod,
+        teamCode,
+        statType
+      )
+    const delta =
+      endCumulativeFromOfficial !== null
+        ? Math.max(0, endCumulativeFromOfficial - startTeamStat)
+        : pbpDelta
     const final = startTeamStat + delta
     computedState = 'resolved'
     computedAnswer = final >= minTeamStat ? 'yes' : 'no'
-    const officialStat = getOfficialStatValue(
-      officialQuarter?.teamStats.get(teamCode) ?? null,
-      statType
-    )
-    if (officialStat === null) {
-      nbaValues = `team=${teamCode} official_q${startPeriod}=unavailable`
+    if (endCumulativeFromOfficial === null) {
+      nbaValues = `team=${teamCode} official_cum_through_q${startPeriod}=unavailable`
     } else {
-      nbaValues = `team=${teamCode} official_q${startPeriod}_${statType.toLowerCase()}=${officialStat}`
+      nbaValues = `team=${teamCode} official_cum_through_q${startPeriod}_${statType.toLowerCase()}=${endCumulativeFromOfficial}`
     }
     detail = `team=${teamCode} stat=${statType} start=${startTeamStat} delta=${delta} final=${final} target=${minTeamStat} pbpDelta=${pbpDelta}`
   } else if (contextType === 'TEAM_COMPARE_PERIOD') {
     if (!homeCode || !awayCode) return null
     const homePbp = statFromAccumulator(accumulator, statType, homeCode)
     const awayPbp = statFromAccumulator(accumulator, statType, awayCode)
-    const homeOfficial = getOfficialStatValue(
-      officialQuarter?.teamStats.get(homeCode) ?? null,
+    const homeOfficialCumulative = getOfficialCumulativeTeamStatThroughPeriod(
+      officialQuarterDataByPeriod,
+      startPeriod,
+      homeCode,
       statType
     )
-    const awayOfficial = getOfficialStatValue(
-      officialQuarter?.teamStats.get(awayCode) ?? null,
+    const awayOfficialCumulative = getOfficialCumulativeTeamStatThroughPeriod(
+      officialQuarterDataByPeriod,
+      startPeriod,
+      awayCode,
       statType
     )
-    const homeDelta = homeOfficial ?? homePbp
-    const awayDelta = awayOfficial ?? awayPbp
+    const startHomeRaw = context.minHomeStat
+    const startAwayRaw = context.minAwayStat
+    const startHomeStat =
+      typeof startHomeRaw === 'number' || typeof startHomeRaw === 'string'
+        ? toNumber(startHomeRaw)
+        : null
+    const startAwayStat =
+      typeof startAwayRaw === 'number' || typeof startAwayRaw === 'string'
+        ? toNumber(startAwayRaw)
+        : null
+    const homeDelta =
+      homeOfficialCumulative !== null && startHomeStat !== null
+        ? Math.max(0, homeOfficialCumulative - startHomeStat)
+        : homePbp
+    const awayDelta =
+      awayOfficialCumulative !== null && startAwayStat !== null
+        ? Math.max(0, awayOfficialCumulative - startAwayStat)
+        : awayPbp
     if (homeDelta === awayDelta) {
       computedState = 'cancelled'
       computedReason = 'TIE'
@@ -649,9 +770,9 @@ const compareQuestion = (
       computedAnswer = homeDelta > awayDelta ? homeCode : awayCode
     }
     nbaValues =
-      homeOfficial === null || awayOfficial === null
-        ? `official_q${startPeriod} unavailable for ${statType}`
-        : `official_q${startPeriod} ${homeCode}:${homeOfficial} ${awayCode}:${awayOfficial} stat=${statType}`
+      homeOfficialCumulative === null || awayOfficialCumulative === null
+        ? `official_cum_through_q${startPeriod} unavailable for ${statType}`
+        : `official_cum_through_q${startPeriod} ${homeCode}:${homeOfficialCumulative} ${awayCode}:${awayOfficialCumulative} stat=${statType}`
     detail = `home=${homeCode}:${homeDelta} away=${awayCode}:${awayDelta} stat=${statType} pbpHome=${homePbp} pbpAway=${awayPbp}`
   } else if (contextType === 'PLAYER_MILESTONE_PERIOD') {
     const playerId = toNumber(context.playerId)
@@ -660,18 +781,24 @@ const compareQuestion = (
     if (playerId === null || startGameStat === null || target === null)
       return null
     const pbpDelta = playerStatFromAccumulator(accumulator, statType, playerId)
-    const officialStat = getOfficialStatValue(
-      officialQuarter?.playerStats.get(playerId) ?? null,
-      statType
-    )
-    const delta = officialStat ?? 0
+    const endCumulativeFromOfficial =
+      getOfficialCumulativePlayerStatThroughPeriod(
+        officialQuarterDataByPeriod,
+        startPeriod,
+        playerId,
+        statType
+      )
+    const delta =
+      endCumulativeFromOfficial !== null
+        ? Math.max(0, endCumulativeFromOfficial - startGameStat)
+        : pbpDelta
     const final = startGameStat + delta
     computedState = 'resolved'
     computedAnswer = final >= startGameStat + target ? 'yes' : 'no'
     nbaValues =
-      officialStat === null
-        ? `player=${playerId} official_q${startPeriod}=unavailable`
-        : `player=${playerId} official_q${startPeriod}_${statType.toLowerCase()}=${officialStat}`
+      endCumulativeFromOfficial === null
+        ? `player=${playerId} official_cum_through_q${startPeriod}=unavailable`
+        : `player=${playerId} official_cum_through_q${startPeriod}_${statType.toLowerCase()}=${endCumulativeFromOfficial}`
     detail = `player=${playerId} stat=${statType} start=${startGameStat} delta=${delta} final=${final} targetDelta=${target} pbpDelta=${pbpDelta}`
   } else if (contextType === 'PLAYER_COMPARE_PERIOD') {
     const playerIds = Array.isArray(context.playerIds)
@@ -691,13 +818,17 @@ const compareQuestion = (
         statType,
         playerId
       )
-      const officialStat = getOfficialStatValue(
-        officialQuarter?.playerStats.get(playerId) ?? null,
-        statType
-      )
-      const delta = officialStat ?? 0
-      const final = start + delta
-      const value = final - start
+      const endCumulativeFromOfficial =
+        getOfficialCumulativePlayerStatThroughPeriod(
+          officialQuarterDataByPeriod,
+          startPeriod,
+          playerId,
+          statType
+        )
+      const value =
+        endCumulativeFromOfficial !== null
+          ? Math.max(0, endCumulativeFromOfficial - start)
+          : pbpDelta
       values.push(`${playerId}:${value}(pbp=${pbpDelta})`)
       if (bestValue === null || value > bestValue) {
         bestValue = value
@@ -716,15 +847,18 @@ const compareQuestion = (
       computedAnswer = String(bestId)
     }
     const officialValues = playerIds.map((playerId) => {
-      const officialStat = getOfficialStatValue(
-        officialQuarter?.playerStats.get(playerId) ?? null,
-        statType
-      )
-      return officialStat === null
-        ? `${playerId}:0(unavailable)`
-        : `${playerId}:${officialStat}`
+      const endCumulativeFromOfficial =
+        getOfficialCumulativePlayerStatThroughPeriod(
+          officialQuarterDataByPeriod,
+          startPeriod,
+          playerId,
+          statType
+        )
+      return endCumulativeFromOfficial === null
+        ? `${playerId}:unavailable`
+        : `${playerId}:${endCumulativeFromOfficial}`
     })
-    nbaValues = `official_q${startPeriod} ${officialValues.join(', ')} stat=${statType}`
+    nbaValues = `official_cum_through_q${startPeriod} ${officialValues.join(', ')} stat=${statType}`
     detail = `stat=${statType} ${values.join(',')}`
   } else if (contextType === 'LEADER_END_OF_PERIOD') {
     const startHome = toNumber(context.startScoreHome) ?? 0
@@ -808,6 +942,68 @@ const compareQuestion = (
     (computedState === 'resolved' && !answerMatches) ||
     (computedState === 'cancelled' && !reasonMatches)
 
+  const formatClock = (clockMs: number | null): string => {
+    if (clockMs === null || !Number.isFinite(clockMs)) return '—'
+    const totalSeconds = Math.max(0, Math.round(clockMs / 1000))
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+    return `${minutes}:${String(seconds).padStart(2, '0')}`
+  }
+
+  const summarizeBoxScore = (
+    boxScore:
+      | {
+          gameStatus?: number | string | null
+          gameStatusText?: string | null
+          homeTeam?: {
+            teamTricode?: string | null
+            score?: number | string | null
+          } | null
+          awayTeam?: {
+            teamTricode?: string | null
+            score?: number | string | null
+          } | null
+        }
+      | null
+      | undefined
+  ): string => {
+    if (!boxScore) return 'none'
+    const homeCodeValue = normalizeCode(boxScore.homeTeam?.teamTricode)
+    const awayCodeValue = normalizeCode(boxScore.awayTeam?.teamTricode)
+    const homeScoreValue = toNumber(boxScore.homeTeam?.score) ?? 0
+    const awayScoreValue = toNumber(boxScore.awayTeam?.score) ?? 0
+    const statusValue =
+      boxScore.gameStatusText ??
+      (boxScore.gameStatus !== undefined && boxScore.gameStatus !== null
+        ? String(boxScore.gameStatus)
+        : '—')
+    return `${awayCodeValue ?? 'AWAY'} ${awayScoreValue} @ ${homeCodeValue ?? 'HOME'} ${homeScoreValue} • status=${statusValue}`
+  }
+
+  const linkedEventSummary = linkedEvent
+    ? `event=${endEventId} type=${String(linkedEvent.type ?? '—')} period=${toNumber(linkedEvent.gameState?.period) ?? '—'} clock=${formatClock(toNumber(linkedEvent.gameState?.clockMs))} score=${toNumber(linkedEvent.gameState?.scoreAway) ?? '—'}-${toNumber(linkedEvent.gameState?.scoreHome) ?? '—'}`
+    : `event=${endEventId} missing_in_firestore_events`
+  const linkedEventBoxScoreSummary = summarizeBoxScore(
+    linkedEvent?.gameState?.boxScore ?? null
+  )
+
+  const nearby = debugData.snapshots
+    .filter((snapshot) => Math.abs(snapshot.actionNumber - endEventId) <= 3)
+    .sort((a, b) => a.actionNumber - b.actionNumber)
+  const nearbySnapshotSummary = nearby.length
+    ? nearby
+        .map((snapshot) => {
+          const delta = snapshot.actionNumber - endEventId
+          const marker =
+            delta === 0 ? 'AT' : delta < 0 ? `-${Math.abs(delta)}` : `+${delta}`
+          const baseScore = `${snapshot.scoreAway ?? '—'}-${snapshot.scoreHome ?? '—'}`
+          const periodClock = `P${snapshot.period ?? '—'} ${formatClock(toNumber(snapshot.clockMs))}`
+          const boxScoreSummary = summarizeBoxScore(snapshot.boxScore ?? null)
+          return `${marker}@${snapshot.actionNumber} ${periodClock} score=${baseScore} box=${boxScoreSummary}`
+        })
+        .join(' || ')
+    : 'none_within_±3'
+
   return {
     gameId,
     nbaGameId,
@@ -835,6 +1031,14 @@ const compareQuestion = (
         ? `resolved:${storedAnswer ?? 'null'}`
         : `cancelled:${storedReason ?? 'null'}`,
     officialQuarterValue: nbaValues,
+    linkedEventId: endEventId,
+    linkedEventType:
+      linkedEvent && typeof linkedEvent.type === 'string'
+        ? linkedEvent.type
+        : null,
+    linkedEventSummary,
+    linkedEventBoxScoreSummary,
+    nearbySnapshotSummary,
     mismatch,
   }
 }
@@ -846,23 +1050,37 @@ const main = async () => {
   const htmlArg = process.argv.find((arg) => arg.startsWith('--html-out='))
   const apply = process.argv.includes('--apply')
   const htmlOutPath = htmlArg ? htmlArg.slice('--html-out='.length) : null
+  const gameIdArgs = process.argv
+    .filter((arg) => arg.startsWith('--game-id='))
+    .map((arg) => arg.slice('--game-id='.length))
+    .filter((value) => value.length > 0)
   const limit =
     Number.isFinite(gameCount) && gameCount > 0 ? Math.min(gameCount, 20) : 5
 
-  const gamesSnap = await db
-    .collection('games')
-    .orderBy('startTime', 'desc')
-    .limit(limit * 25)
-    .get()
-
-  const candidates = gamesSnap.docs
-    .map((doc) => ({ id: doc.id, data: doc.data() as GameDoc }))
-    .filter(({ data }) => data.state === 'resolved' && !!data.nbaGameId)
-
   const selected: { id: string; data: GameDoc }[] = []
-  for (const candidate of candidates) {
-    if (selected.length >= limit) break
-    selected.push(candidate)
+  if (gameIdArgs.length > 0) {
+    for (const gameId of gameIdArgs) {
+      const snap = await db.collection('games').doc(gameId).get()
+      if (!snap.exists) continue
+      const data = snap.data() as GameDoc
+      if (data.state !== 'resolved' || !data.nbaGameId) continue
+      selected.push({ id: gameId, data })
+    }
+  } else {
+    const gamesSnap = await db
+      .collection('games')
+      .orderBy('startTime', 'desc')
+      .limit(limit * 25)
+      .get()
+
+    const candidates = gamesSnap.docs
+      .map((doc) => ({ id: doc.id, data: doc.data() as GameDoc }))
+      .filter(({ data }) => data.state === 'resolved' && !!data.nbaGameId)
+
+    for (const candidate of candidates) {
+      if (selected.length >= limit) break
+      selected.push(candidate)
+    }
   }
 
   const mismatches: CompareResult[] = []
@@ -897,17 +1115,48 @@ const main = async () => {
       .where('windowType', '==', 'PERIOD')
       .where('state', 'in', ['resolved', 'cancelled'])
       .get()
+    const [eventsSnap, snapshotsSnap] = await Promise.all([
+      db
+        .collection('games')
+        .doc(game.id)
+        .collection('events')
+        .orderBy('eventId', 'asc')
+        .get(),
+      db
+        .collection('games')
+        .doc(game.id)
+        .collection('boxScoreSnapshots')
+        .orderBy('actionNumber', 'asc')
+        .get(),
+    ])
+    const eventsById = new Map<number, StoredEventDoc>()
+    for (const doc of eventsSnap.docs) {
+      const data = doc.data() as StoredEventDoc
+      const eventId = toNumber(data.eventId)
+      if (eventId === null) continue
+      eventsById.set(eventId, data)
+    }
+    const snapshots = snapshotsSnap.docs
+      .map((doc) => doc.data() as StoredBoxScoreSnapshot)
+      .flatMap((entry) => {
+        const actionNumber = toNumber(entry.actionNumber)
+        if (actionNumber === null) return []
+        return [{ ...entry, actionNumber }]
+      })
 
-    const periodsNeeded = new Set<number>()
+    const startPeriods = new Set<number>()
     for (const doc of questionsSnap.docs) {
       const question = doc.data() as QuestionDoc
       const startPeriod = toNumber(question.resolutionContext?.startPeriod)
-      if (startPeriod !== null && startPeriod >= 1 && startPeriod <= 4) {
-        periodsNeeded.add(startPeriod)
+      if (startPeriod !== null && startPeriod >= 1 && startPeriod <= 10) {
+        startPeriods.add(startPeriod)
       }
     }
+    const maxNeededPeriod = startPeriods.size
+      ? Math.max(...Array.from(startPeriods))
+      : 0
     const officialQuarterDataByPeriod = new Map<number, OfficialQuarterData>()
-    for (const period of periodsNeeded) {
+    for (let period = 1; period <= maxNeededPeriod; period += 1) {
       const periodUrl = `${gamePageUrl}?period=Q${period}`
       try {
         const html = await fetchHtml(periodUrl)
@@ -949,7 +1198,8 @@ const main = async () => {
         actions,
         officialQuarterDataByPeriod,
         boxScoreUrl,
-        gamePageUrl
+        gamePageUrl,
+        { eventsById, snapshots }
       )
       if (!comparison) continue
       comparisons.push(comparison)
@@ -1057,6 +1307,9 @@ const main = async () => {
         <th>NBA.com Quarter Values</th>
         <th>Official Quarter Value</th>
         <th>Detail</th>
+        <th>Linked Event</th>
+        <th>Event Box Score</th>
+        <th>Nearby Stored Snapshots</th>
         <th>Source</th>
         <th>Mismatch</th>
       </tr>
@@ -1074,6 +1327,9 @@ const main = async () => {
   <td class="mono">${escapeHtml(row.nbaValues)}</td>
   <td class="mono">${escapeHtml(row.officialQuarterValue)}</td>
   <td class="mono">${escapeHtml(row.detail)}</td>
+  <td class="mono">${escapeHtml(row.linkedEventSummary)}</td>
+  <td class="mono">${escapeHtml(row.linkedEventBoxScoreSummary)}</td>
+  <td class="mono">${escapeHtml(row.nearbySnapshotSummary)}</td>
   <td class="mono">
     <a href="${escapeHtml(row.sourceGamePageUrl)}" target="_blank" rel="noopener noreferrer">NBA Box Score Page</a><br/>
     <a href="${escapeHtml(row.sourceBoxScoreUrl)}" target="_blank" rel="noopener noreferrer">Box Score JSON</a><br/>
