@@ -1,4 +1,5 @@
 import https from 'https'
+import { createHash } from 'crypto'
 import { admin, db } from '../firebase'
 import { trackEvent } from './mixpanel'
 import { buildQuestionResolvedProps } from './questionAnalytics'
@@ -40,10 +41,20 @@ const NBA_HTML_TIMEOUT_MS = Number(process.env.NBA_HTML_TIMEOUT_MS ?? 120_000)
 const ENABLE_OFFICIAL_CUMULATIVE_FETCH =
   process.env.NBA_ENABLE_OFFICIAL_CUMULATIVE_FETCH !== '0'
 const LOG_OFFICIAL_COMPARE = process.env.NBA_LOG_OFFICIAL_COMPARE !== '0'
+const USE_OFFICIAL_CUMULATIVE_RESOLUTION =
+  process.env.NBA_USE_OFFICIAL_CUMULATIVE_RESOLUTION === '1'
+const ENTITYSPORT_TOKEN = process.env.ENTITYSPORT_TOKEN ?? ''
+const ENTITYSPORT_TIMEOUT_MS = 12_000
+const ENTITYSPORT_MAX_PAYLOAD_BYTES = 850_000
 
 type CacheEntry = {
   etag?: string
   lastModified?: string
+}
+
+type ResolvableQuestionDoc = Parameters<typeof resolveQuestionForEvent>[0] & {
+  templateId?: string | null
+  engineTag?: string | null
 }
 
 const NBA_HTTP_CACHE = new Map<string, CacheEntry>()
@@ -163,6 +174,306 @@ const asObject = (
 const asArray = (value: JsonValue | undefined | null): JsonValue[] | null => {
   if (!value || !Array.isArray(value)) return null
   return value
+}
+
+type EntitySportFetchResult = {
+  url: string
+  durationMs: number
+  statusCode: number | null
+  payload: JsonValue | null
+  payloadBytes: number
+  payloadSha1: string | null
+  payloadOmitted: boolean
+  payloadPreview: string | null
+  error: string | null
+}
+
+type EntitySportFetchAttempt = EntitySportFetchResult & {
+  attemptedUrlIndex: number
+}
+
+const isNonEmptyString = (value: JsonValue | undefined): value is string =>
+  typeof value === 'string' && value.trim().length > 0
+
+const readEntitySportMatchId = (
+  game: Record<string, JsonValue>,
+  nbaGameId: string
+): string | null => {
+  const directCandidates: (JsonValue | undefined)[] = [
+    game.entitySportMatchId,
+    game.entitysportMatchId,
+    game.entitySportGameId,
+    game.entitysportGameId,
+    game.entitySportId,
+    game.entitysportId,
+  ]
+  for (const candidate of directCandidates) {
+    if (isNonEmptyString(candidate)) return candidate.trim()
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return String(candidate)
+    }
+  }
+  return nbaGameId || null
+}
+
+const buildEntitySportPbpUrls = (token: string, matchId: string): string[] => {
+  const t = encodeURIComponent(token)
+  const m = encodeURIComponent(matchId)
+  return [
+    `https://basketballapi.entitysport.com/matches/${m}/info?token=${t}`,
+    `https://basketballapi.entitysport.com/matches/${m}/live?token=${t}`,
+    `https://basketballapi.entitysport.com/matches/${m}/scorecard?token=${t}`,
+  ]
+}
+
+const buildEntitySportBoxScoreUrls = (
+  token: string,
+  matchId: string
+): string[] => {
+  const t = encodeURIComponent(token)
+  const m = encodeURIComponent(matchId)
+  return [
+    `https://basketballapi.entitysport.com/matches/${m}/stats?token=${t}`,
+    `https://basketballapi.entitysport.com/matches/${m}/scorecard?token=${t}`,
+    `https://basketballapi.entitysport.com/matches/${m}/live?token=${t}`,
+  ]
+}
+
+const fetchEntitySportJson = async (
+  url: string
+): Promise<EntitySportFetchResult> => {
+  const startedAt = Date.now()
+  return new Promise((resolve) => {
+    const req = https.get(url, { headers: NBA_JSON_HEADERS }, (res) => {
+      const statusCode =
+        typeof res.statusCode === 'number' ? res.statusCode : null
+      let raw = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => {
+        raw += chunk
+      })
+      res.on('end', () => {
+        const durationMs = Date.now() - startedAt
+        if (statusCode !== null && statusCode >= 400) {
+          resolve({
+            url,
+            durationMs,
+            statusCode,
+            payload: null,
+            payloadBytes: raw.length,
+            payloadSha1:
+              raw.length > 0
+                ? createHash('sha1').update(raw).digest('hex')
+                : null,
+            payloadOmitted: true,
+            payloadPreview: raw.slice(0, 512),
+            error: `status_${statusCode}`,
+          })
+          return
+        }
+        let parsed: JsonValue | null = null
+        try {
+          parsed = JSON.parse(raw) as JsonValue
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          resolve({
+            url,
+            durationMs,
+            statusCode,
+            payload: null,
+            payloadBytes: raw.length,
+            payloadSha1:
+              raw.length > 0
+                ? createHash('sha1').update(raw).digest('hex')
+                : null,
+            payloadOmitted: true,
+            payloadPreview: raw.slice(0, 512),
+            error: `parse_error:${message}`,
+          })
+          return
+        }
+        const payloadBytes = raw.length
+        const shouldOmitPayload = payloadBytes > ENTITYSPORT_MAX_PAYLOAD_BYTES
+        resolve({
+          url,
+          durationMs,
+          statusCode,
+          payload: shouldOmitPayload ? null : parsed,
+          payloadBytes,
+          payloadSha1:
+            payloadBytes > 0
+              ? createHash('sha1').update(raw).digest('hex')
+              : null,
+          payloadOmitted: shouldOmitPayload,
+          payloadPreview: shouldOmitPayload ? raw.slice(0, 1024) : null,
+          error: null,
+        })
+      })
+    })
+    req.setTimeout(ENTITYSPORT_TIMEOUT_MS, () => {
+      req.destroy(new Error(`timeout_${ENTITYSPORT_TIMEOUT_MS}`))
+    })
+    req.on('error', (error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      resolve({
+        url,
+        durationMs: Date.now() - startedAt,
+        statusCode: null,
+        payload: null,
+        payloadBytes: 0,
+        payloadSha1: null,
+        payloadOmitted: true,
+        payloadPreview: null,
+        error: `request_error:${message}`,
+      })
+    })
+  })
+}
+
+const isEntitySportPayloadOk = (payload: JsonValue | null): boolean => {
+  const payloadObject = asObject(payload)
+  if (!payloadObject) return false
+  const statusRaw = payloadObject.status
+  return typeof statusRaw === 'string' && statusRaw.toLowerCase() === 'ok'
+}
+
+const fetchEntitySportFirstSuccessful = async (
+  urls: string[]
+): Promise<{
+  selected: EntitySportFetchResult
+  attempts: EntitySportFetchAttempt[]
+}> => {
+  const attempts: EntitySportFetchAttempt[] = []
+  for (let i = 0; i < urls.length; i += 1) {
+    const url = urls[i]
+    const result = await fetchEntitySportJson(url)
+    const attempt: EntitySportFetchAttempt = {
+      ...result,
+      attemptedUrlIndex: i,
+    }
+    attempts.push(attempt)
+    if (!result.error && isEntitySportPayloadOk(result.payload)) {
+      return { selected: result, attempts }
+    }
+  }
+  const fallback =
+    attempts[attempts.length - 1] ??
+    ({
+      url: '',
+      durationMs: 0,
+      statusCode: null,
+      payload: null,
+      payloadBytes: 0,
+      payloadSha1: null,
+      payloadOmitted: true,
+      payloadPreview: null,
+      error: 'no_attempts',
+    } satisfies EntitySportFetchResult)
+  return { selected: fallback, attempts }
+}
+
+const extractEntitySportEventCount = (
+  payload: JsonValue | null
+): number | null => {
+  if (!payload) return null
+  const paths: string[][] = [
+    ['response', 'items'],
+    ['response', 'events'],
+    ['response', 'playByPlay'],
+    ['response', 'playbyplay'],
+    ['response', 'actions'],
+    ['response', 'ball_by_ball'],
+    ['response'],
+    ['items'],
+    ['events'],
+    ['playByPlay'],
+    ['playbyplay'],
+    ['actions'],
+  ]
+  for (const path of paths) {
+    const candidate = readJsonPath(payload, path)
+    const arr = asArray(candidate)
+    if (arr) return arr.length
+  }
+  return null
+}
+
+const captureEntitySportShadowForAction = async ({
+  gameId,
+  nbaGameId,
+  matchId,
+  anchorActionNumber,
+  anchorPeriod,
+  anchorClock,
+}: {
+  gameId: string
+  nbaGameId: string
+  matchId: string
+  anchorActionNumber: number
+  anchorPeriod: number | null
+  anchorClock: string | null
+}) => {
+  if (!isNonEmptyString(ENTITYSPORT_TOKEN)) return
+  try {
+    const [pbpFetch, boxFetch] = await Promise.all([
+      fetchEntitySportFirstSuccessful(
+        buildEntitySportPbpUrls(ENTITYSPORT_TOKEN, matchId)
+      ),
+      fetchEntitySportFirstSuccessful(
+        buildEntitySportBoxScoreUrls(ENTITYSPORT_TOKEN, matchId)
+      ),
+    ])
+    const pbpResult = pbpFetch.selected
+    const boxScoreResult = boxFetch.selected
+    const collectionRef = db.collection(`games/${gameId}/entitySportShadow`)
+    const fetchedAt = admin.firestore.FieldValue.serverTimestamp()
+    const commonMeta = {
+      source: 'entitysport',
+      nbaGameId,
+      entitySportMatchId: matchId,
+      anchorActionNumber,
+      anchorPeriod,
+      anchorClock,
+      fetchedAt,
+    }
+
+    await Promise.all([
+      collectionRef.doc(`pbp_${anchorActionNumber}`).set(
+        {
+          ...commonMeta,
+          kind: 'play_by_play',
+          ...pbpResult,
+          attempts: pbpFetch.attempts,
+          eventCount: extractEntitySportEventCount(pbpResult.payload),
+        },
+        { merge: true }
+      ),
+      collectionRef.doc(`boxscore_${anchorActionNumber}`).set(
+        {
+          ...commonMeta,
+          kind: 'box_score',
+          ...boxScoreResult,
+          attempts: boxFetch.attempts,
+        },
+        { merge: true }
+      ),
+    ])
+
+    if (pbpResult.error || boxScoreResult.error) {
+      console.warn(
+        `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${matchId} action=${anchorActionNumber} pbpError=${pbpResult.error ?? 'none'} boxError=${boxScoreResult.error ?? 'none'}`
+      )
+      return
+    }
+    console.log(
+      `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${matchId} action=${anchorActionNumber} pbpMs=${pbpResult.durationMs} boxMs=${boxScoreResult.durationMs} pbpEvents=${extractEntitySportEventCount(pbpResult.payload) ?? -1}`
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(
+      `[entitysport] shadow fetch non_blocking_error game=${gameId} nbaGameId=${nbaGameId} matchId=${matchId} action=${anchorActionNumber} error=${message}`
+    )
+  }
 }
 
 const toNumber = (value: JsonValue | undefined | null): number | null => {
@@ -832,6 +1143,106 @@ const applyDerivedStatsForEvent = (
     if (shooter) {
       shooter.points += 1
       shooter.freeThrowsMade += 1
+    }
+  }
+}
+
+const readBoxStat = (
+  stats: { [key: string]: JsonValue } | null | undefined,
+  keys: string[]
+) => {
+  if (!stats) return null
+  for (const key of keys) {
+    const raw = stats[key]
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+    if (typeof raw === 'string' && raw.trim().length) {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed)) return parsed
+    }
+  }
+  return null
+}
+
+const reconcileDerivedWithBoxScore = (
+  derivedStats: DerivedStatsSnapshot,
+  boxScore: BoxScore | null
+) => {
+  if (!boxScore) return
+  const teams = [boxScore.homeTeam, boxScore.awayTeam]
+  for (const team of teams) {
+    if (!team) continue
+    const tricodeRaw = team.teamTricode
+    const tricode =
+      typeof tricodeRaw === 'string' ? tricodeRaw.trim().toUpperCase() : null
+    if (!tricode) continue
+    const line = getOrCreateTeamDerived(derivedStats, tricode)
+    if (!line) continue
+    const stats =
+      team.statistics && typeof team.statistics === 'object'
+        ? (team.statistics as { [key: string]: JsonValue })
+        : null
+    const teamScore =
+      typeof team.score === 'number'
+        ? team.score
+        : typeof team.score === 'string'
+          ? Number(team.score)
+          : null
+    const points =
+      readBoxStat(stats, ['points']) ??
+      (Number.isFinite(teamScore) ? Number(teamScore) : null)
+    const assists = readBoxStat(stats, ['assists'])
+    const rebounds = readBoxStat(stats, ['reboundsTotal', 'rebounds'])
+    const steals = readBoxStat(stats, ['steals'])
+    const threes = readBoxStat(stats, ['threePointersMade', 'fg3m'])
+    const blocks = readBoxStat(stats, ['blocks'])
+    const freeThrowsMade = readBoxStat(stats, ['freeThrowsMade', 'ftm'])
+    if (points !== null) line.points = Math.max(line.points, points)
+    if (assists !== null) line.assists = Math.max(line.assists, assists)
+    if (rebounds !== null) line.rebounds = Math.max(line.rebounds, rebounds)
+    if (steals !== null) line.steals = Math.max(line.steals, steals)
+    if (threes !== null) line.threes = Math.max(line.threes, threes)
+    if (blocks !== null) line.blocks = Math.max(line.blocks, blocks)
+    if (freeThrowsMade !== null) {
+      line.freeThrowsMade = Math.max(line.freeThrowsMade, freeThrowsMade)
+    }
+
+    const players = Array.isArray(team.players) ? team.players : []
+    for (const player of players) {
+      const playerId =
+        typeof player?.personId === 'number'
+          ? player.personId
+          : typeof player?.playerId === 'number'
+            ? player.playerId
+            : null
+      if (!playerId || !Number.isFinite(playerId)) continue
+      const playerLine = getOrCreatePlayerDerived(derivedStats, playerId)
+      if (!playerLine) continue
+      const playerStats =
+        player.statistics && typeof player.statistics === 'object'
+          ? (player.statistics as { [key: string]: JsonValue })
+          : null
+      const pPoints = readBoxStat(playerStats, ['points'])
+      const pAssists = readBoxStat(playerStats, ['assists'])
+      const pRebounds = readBoxStat(playerStats, ['reboundsTotal', 'rebounds'])
+      const pSteals = readBoxStat(playerStats, ['steals'])
+      const pThrees = readBoxStat(playerStats, ['threePointersMade', 'fg3m'])
+      const pBlocks = readBoxStat(playerStats, ['blocks'])
+      const pFtm = readBoxStat(playerStats, ['freeThrowsMade', 'ftm'])
+      if (pPoints !== null)
+        playerLine.points = Math.max(playerLine.points, pPoints)
+      if (pAssists !== null)
+        playerLine.assists = Math.max(playerLine.assists, pAssists)
+      if (pRebounds !== null)
+        playerLine.rebounds = Math.max(playerLine.rebounds, pRebounds)
+      if (pSteals !== null)
+        playerLine.steals = Math.max(playerLine.steals, pSteals)
+      if (pThrees !== null)
+        playerLine.threes = Math.max(playerLine.threes, pThrees)
+      if (pBlocks !== null)
+        playerLine.blocks = Math.max(playerLine.blocks, pBlocks)
+      if (pFtm !== null) {
+        playerLine.freeThrowsMade = Math.max(playerLine.freeThrowsMade, pFtm)
+      }
     }
   }
 }
@@ -1514,6 +1925,158 @@ const logOfficialCompare = (params: {
   )
 }
 
+const getResolutionSource = (params: {
+  question: ResolvableQuestionDoc
+  event: EngineEvent
+  boxScore: BoxScore | null
+  derivedStats?: DerivedStatsSnapshot
+}): 'event' | 'derived' | 'boxscore' | 'official' | 'unknown' => {
+  const context = params.question.resolutionContext
+  const type = typeof context?.type === 'string' ? context.type : ''
+  if (!type) return 'unknown'
+
+  if (
+    type === 'TOTAL_POINTS_NEXT_N' ||
+    type === 'TEAM_POINTS_NEXT_N' ||
+    type === 'TEAM_POINTS_REST_PERIOD' ||
+    type === 'TEAM_POINTS_THIS_PERIOD' ||
+    type === 'BOTH_TEAMS_10_REST_PERIOD' ||
+    type === 'LEADER_END_OF_PERIOD'
+  ) {
+    return 'event'
+  }
+
+  const statType =
+    typeof context?.statType === 'string' ? context.statType : 'POINTS'
+  if (type === 'TEAM_STAT_THIS_PERIOD' || type === 'TEAM_COMPARE_PERIOD') {
+    const homeTricode =
+      typeof context?.homeTricode === 'string' ? context.homeTricode : null
+    const awayTricode =
+      typeof context?.awayTricode === 'string' ? context.awayTricode : null
+    const teamTricode =
+      typeof context?.teamTricode === 'string' ? context.teamTricode : null
+
+    const hasOfficial =
+      USE_OFFICIAL_CUMULATIVE_RESOLUTION &&
+      (type === 'TEAM_COMPARE_PERIOD'
+        ? getOfficialTeamStat(
+            params.event.context?.officialCumulativeStats ?? null,
+            homeTricode,
+            statType
+          ) !== null &&
+          getOfficialTeamStat(
+            params.event.context?.officialCumulativeStats ?? null,
+            awayTricode,
+            statType
+          ) !== null
+        : getOfficialTeamStat(
+            params.event.context?.officialCumulativeStats ?? null,
+            teamTricode,
+            statType
+          ) !== null)
+    if (hasOfficial) return 'official'
+
+    const hasDerived =
+      type === 'TEAM_COMPARE_PERIOD'
+        ? getDerivedTeamStat(params.derivedStats, homeTricode, statType) !==
+            null &&
+          getDerivedTeamStat(params.derivedStats, awayTricode, statType) !==
+            null
+        : getDerivedTeamStat(params.derivedStats, teamTricode, statType) !==
+          null
+    if (hasDerived) return 'derived'
+
+    const hasBoxScore =
+      type === 'TEAM_COMPARE_PERIOD'
+        ? getBoxScoreTeamStat(params.boxScore, homeTricode, statType) !==
+            null &&
+          getBoxScoreTeamStat(params.boxScore, awayTricode, statType) !== null
+        : getBoxScoreTeamStat(params.boxScore, teamTricode, statType) !== null
+    return hasBoxScore ? 'boxscore' : 'unknown'
+  }
+
+  if (
+    type === 'PLAYER_MILESTONE_PERIOD' ||
+    type === 'PLAYER_COMPARE_PERIOD' ||
+    type === 'PLAYER_COMPARE_NEXT_N'
+  ) {
+    const playerId =
+      typeof context?.playerId === 'number' && Number.isFinite(context.playerId)
+        ? context.playerId
+        : null
+    const playerIds = getPlayerIdsFromContext(context?.playerIds)
+
+    const hasOfficial =
+      USE_OFFICIAL_CUMULATIVE_RESOLUTION &&
+      (playerId !== null
+        ? getOfficialPlayerStat(
+            params.event.context?.officialCumulativeStats ?? null,
+            playerId,
+            statType
+          ) !== null
+        : playerIds.length > 0 &&
+          playerIds.every(
+            (id) =>
+              getOfficialPlayerStat(
+                params.event.context?.officialCumulativeStats ?? null,
+                id,
+                statType
+              ) !== null
+          ))
+    if (hasOfficial) return 'official'
+
+    const hasDerived =
+      playerId !== null
+        ? getDerivedPlayerStat(params.derivedStats, playerId, statType) !== null
+        : playerIds.length > 0 &&
+          playerIds.every(
+            (id) =>
+              getDerivedPlayerStat(params.derivedStats, id, statType) !== null
+          )
+    if (hasDerived) return 'derived'
+
+    const hasBoxScore =
+      playerId !== null
+        ? getBoxScorePlayerStat(params.boxScore, playerId, statType) !== null
+        : playerIds.length > 0 &&
+          playerIds.every(
+            (id) =>
+              getBoxScorePlayerStat(params.boxScore, id, statType) !== null
+          )
+    return hasBoxScore ? 'boxscore' : 'unknown'
+  }
+
+  if (type === 'MADE_3_COUNT_NEXT_N') {
+    const homeTricode =
+      typeof context?.homeTricode === 'string' ? context.homeTricode : null
+    const awayTricode =
+      typeof context?.awayTricode === 'string' ? context.awayTricode : null
+    const hasOfficial =
+      USE_OFFICIAL_CUMULATIVE_RESOLUTION &&
+      getOfficialTeamStat(
+        params.event.context?.officialCumulativeStats ?? null,
+        homeTricode,
+        'THREES'
+      ) !== null &&
+      getOfficialTeamStat(
+        params.event.context?.officialCumulativeStats ?? null,
+        awayTricode,
+        'THREES'
+      ) !== null
+    if (hasOfficial) return 'official'
+    const hasDerived =
+      getDerivedTeamStat(params.derivedStats, homeTricode, 'THREES') !== null &&
+      getDerivedTeamStat(params.derivedStats, awayTricode, 'THREES') !== null
+    if (hasDerived) return 'derived'
+    const hasBoxScore =
+      getBoxScoreTeamStat(params.boxScore, homeTricode, 'THREES') !== null &&
+      getBoxScoreTeamStat(params.boxScore, awayTricode, 'THREES') !== null
+    return hasBoxScore ? 'boxscore' : 'unknown'
+  }
+
+  return 'event'
+}
+
 const resolveOpenQuestionsForEvent = async (
   gameId: string,
   event: EngineEvent,
@@ -1542,7 +2105,7 @@ const resolveOpenQuestionsForEvent = async (
 
   let resolvedCount = 0
   for (const doc of docs) {
-    const data = doc.data() as any
+    const data = doc.data() as ResolvableQuestionDoc
     const decision = resolveQuestionForEvent(
       data,
       event,
@@ -1550,6 +2113,12 @@ const resolveOpenQuestionsForEvent = async (
       derivedStats
     )
     if (!decision) continue
+    const resolutionSource = getResolutionSource({
+      question: data,
+      event,
+      boxScore,
+      derivedStats,
+    })
     logOfficialCompare({
       phase: 'resolution',
       gameId,
@@ -1571,6 +2140,8 @@ const resolveOpenQuestionsForEvent = async (
         {
           state: 'resolved',
           answer: decision.answer ?? null,
+          resolvedEventId: event.eventId,
+          resolutionSource,
           resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -1582,6 +2153,8 @@ const resolveOpenQuestionsForEvent = async (
         {
           state: 'cancelled',
           cancelReason: decision.reason || 'VOID',
+          resolvedEventId: event.eventId,
+          resolutionSource,
           closedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -1629,7 +2202,8 @@ const resolveOpenQuestionsForEvent = async (
 const resolveQuestionsAtGameEnd = async (
   gameId: string,
   lastActionNumber: number,
-  boxScore: BoxScore | null
+  boxScore: BoxScore | null,
+  derivedStats?: DerivedStatsSnapshot
 ) => {
   const syntheticEvent: EngineEvent = {
     eventId: Math.max(0, lastActionNumber + 1),
@@ -1672,7 +2246,8 @@ const resolveQuestionsAtGameEnd = async (
     gameId,
     syntheticEvent,
     boxScore,
-    ['NEXT_EVENT', 'NEXT_N_MIN', 'PERIOD', 'GAME']
+    ['NEXT_EVENT', 'NEXT_N_MIN', 'PERIOD', 'GAME'],
+    derivedStats
   )
   if (resolved > 0) {
     console.log(
@@ -1996,7 +2571,12 @@ export const syncNbaLiveEvents = async () => {
         { merge: true }
       )
       if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
-        await resolveQuestionsAtGameEnd(gameId, lastActionNumber, boxScore)
+        await resolveQuestionsAtGameEnd(
+          gameId,
+          lastActionNumber,
+          boxScore,
+          derivedStats
+        )
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
@@ -2067,7 +2647,12 @@ export const syncNbaLiveEvents = async () => {
         { merge: true }
       )
       if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
-        await resolveQuestionsAtGameEnd(gameId, lastActionNumber, boxScore)
+        await resolveQuestionsAtGameEnd(
+          gameId,
+          lastActionNumber,
+          boxScore,
+          derivedStats
+        )
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
       }
@@ -2079,6 +2664,33 @@ export const syncNbaLiveEvents = async () => {
       typeof latestFetchedAction?.actionNumber === 'number'
         ? latestFetchedAction.actionNumber
         : 0
+    if (latestFetchedActionNumber > 0) {
+      const gameRecord =
+        game && typeof game === 'object' && !Array.isArray(game)
+          ? (game as Record<string, JsonValue>)
+          : null
+      const entitySportMatchId = gameRecord
+        ? readEntitySportMatchId(gameRecord, nbaGameId)
+        : nbaGameId
+      if (entitySportMatchId) {
+        const anchorPeriod =
+          typeof latestFetchedAction?.period === 'number'
+            ? latestFetchedAction.period
+            : null
+        const anchorClock =
+          typeof latestFetchedAction?.clock === 'string'
+            ? latestFetchedAction.clock
+            : null
+        void captureEntitySportShadowForAction({
+          gameId,
+          nbaGameId,
+          matchId: entitySportMatchId,
+          anchorActionNumber: latestFetchedActionNumber,
+          anchorPeriod,
+          anchorClock,
+        })
+      }
+    }
     if (latestFetchedActionNumber > 0) {
       await persistBoxScoreSnapshot(gameId, latestFetchedActionNumber, boxScore)
     }
@@ -2170,6 +2782,7 @@ export const syncNbaLiveEvents = async () => {
         }
 
         applyDerivedStatsForEvent(previewDerivedStats, eventType, eventContext)
+        reconcileDerivedWithBoxScore(previewDerivedStats, gameState.boxScore)
         eventPayload.derivedStatsSnapshot =
           cloneDerivedStatsSnapshot(previewDerivedStats)
 
@@ -2186,6 +2799,10 @@ export const syncNbaLiveEvents = async () => {
           derivedStats,
           eventPayload.type,
           eventPayload.context
+        )
+        reconcileDerivedWithBoxScore(
+          derivedStats,
+          eventPayload.gameState.boxScore
         )
         const eventForEngine: EngineEvent = eventPayload
         const eventPeriod = eventPayload.gameState?.period
@@ -2308,11 +2925,21 @@ export const syncNbaLiveEvents = async () => {
       )
     }
     if (latestActionObj && isGameEndAction(latestActionObj)) {
-      await resolveQuestionsAtGameEnd(gameId, latestAction, boxScore)
+      await resolveQuestionsAtGameEnd(
+        gameId,
+        latestAction,
+        boxScore,
+        derivedStats
+      )
       console.log(`[nba] live sync game=${gameId} action=game_end auto-end`)
       await endGameById(gameId)
     } else if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
-      await resolveQuestionsAtGameEnd(gameId, latestAction, boxScore)
+      await resolveQuestionsAtGameEnd(
+        gameId,
+        latestAction,
+        boxScore,
+        derivedStats
+      )
       console.log(`[nba] live sync game=${gameId} status=final auto-end`)
       await endGameById(gameId)
     }

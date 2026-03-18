@@ -178,10 +178,28 @@ type StoredEventDoc = {
       homeTeam?: {
         teamTricode?: string | null
         score?: number | string | null
+        statistics?: {
+          points?: number | string | null
+          assists?: number | string | null
+          reboundsTotal?: number | string | null
+          rebounds?: number | string | null
+          steals?: number | string | null
+          threePointersMade?: number | string | null
+          fg3m?: number | string | null
+        } | null
       } | null
       awayTeam?: {
         teamTricode?: string | null
         score?: number | string | null
+        statistics?: {
+          points?: number | string | null
+          assists?: number | string | null
+          reboundsTotal?: number | string | null
+          rebounds?: number | string | null
+          steals?: number | string | null
+          threePointersMade?: number | string | null
+          fg3m?: number | string | null
+        } | null
       } | null
     } | null
   } | null
@@ -199,10 +217,28 @@ type StoredBoxScoreSnapshot = {
     homeTeam?: {
       teamTricode?: string | null
       score?: number | string | null
+      statistics?: {
+        points?: number | string | null
+        assists?: number | string | null
+        reboundsTotal?: number | string | null
+        rebounds?: number | string | null
+        steals?: number | string | null
+        threePointersMade?: number | string | null
+        fg3m?: number | string | null
+      } | null
     } | null
     awayTeam?: {
       teamTricode?: string | null
       score?: number | string | null
+      statistics?: {
+        points?: number | string | null
+        assists?: number | string | null
+        reboundsTotal?: number | string | null
+        rebounds?: number | string | null
+        steals?: number | string | null
+        threePointersMade?: number | string | null
+        fg3m?: number | string | null
+      } | null
     } | null
   } | null
 }
@@ -501,6 +537,52 @@ const getOfficialCumulativePlayerStatThroughPeriod = (
   return found ? total : null
 }
 
+const getStoredEventTeamStat = (
+  event: StoredEventDoc | null,
+  teamCode: string,
+  stat: StatKey
+): number | null => {
+  if (!event?.gameState?.boxScore) return null
+  const box = event.gameState.boxScore
+  const homeCode = normalizeCode(box.homeTeam?.teamTricode)
+  const awayCode = normalizeCode(box.awayTeam?.teamTricode)
+  const normalizedTeam = normalizeCode(teamCode)
+  if (!normalizedTeam) return null
+  const team =
+    homeCode === normalizedTeam
+      ? box.homeTeam
+      : awayCode === normalizedTeam
+        ? box.awayTeam
+        : null
+  if (!team) return null
+  const stats = team.statistics
+  if (!stats) return null
+  if (stat === 'POINTS') {
+    const score = toNumber(team.score)
+    if (score !== null) return score
+    return toNumber((stats as { points?: number | string }).points)
+  }
+  if (stat === 'ASSISTS')
+    return toNumber((stats as { assists?: number | string }).assists)
+  if (stat === 'REBOUNDS')
+    return toNumber(
+      (stats as { reboundsTotal?: number | string; rebounds?: number | string })
+        .reboundsTotal ?? (stats as { rebounds?: number | string }).rebounds
+    )
+  if (stat === 'STEALS')
+    return toNumber((stats as { steals?: number | string }).steals)
+  if (stat === 'THREES')
+    return toNumber(
+      (
+        stats as {
+          threePointersMade?: number | string
+          fg3m?: number | string
+        }
+      ).threePointersMade ?? (stats as { fg3m?: number | string }).fg3m
+    )
+  return null
+}
+
 const isFinalStatusFromActions = (actions: RawAction[]): boolean => {
   if (!actions.length) return false
   const last = actions[actions.length - 1]
@@ -715,14 +797,24 @@ const compareQuestion = (
         teamCode,
         statType
       )
+    const endCumulativeFromEvent =
+      statType === 'REBOUNDS'
+        ? getStoredEventTeamStat(linkedEvent, teamCode, statType)
+        : null
+    const endCumulative =
+      endCumulativeFromEvent !== null
+        ? endCumulativeFromEvent
+        : endCumulativeFromOfficial
     const delta =
-      endCumulativeFromOfficial !== null
-        ? Math.max(0, endCumulativeFromOfficial - startTeamStat)
+      endCumulative !== null
+        ? Math.max(0, endCumulative - startTeamStat)
         : pbpDelta
     const final = startTeamStat + delta
     computedState = 'resolved'
     computedAnswer = final >= minTeamStat ? 'yes' : 'no'
-    if (endCumulativeFromOfficial === null) {
+    if (endCumulativeFromEvent !== null) {
+      nbaValues = `team=${teamCode} event_boxscore_${statType.toLowerCase()}=${endCumulativeFromEvent}`
+    } else if (endCumulativeFromOfficial === null) {
       nbaValues = `team=${teamCode} official_cum_through_q${startPeriod}=unavailable`
     } else {
       nbaValues = `team=${teamCode} official_cum_through_q${startPeriod}_${statType.toLowerCase()}=${endCumulativeFromOfficial}`
@@ -744,6 +836,22 @@ const compareQuestion = (
       awayCode,
       statType
     )
+    const homeEventCumulative =
+      statType === 'REBOUNDS'
+        ? getStoredEventTeamStat(linkedEvent, homeCode, statType)
+        : null
+    const awayEventCumulative =
+      statType === 'REBOUNDS'
+        ? getStoredEventTeamStat(linkedEvent, awayCode, statType)
+        : null
+    const homeCumulative =
+      homeEventCumulative !== null
+        ? homeEventCumulative
+        : homeOfficialCumulative
+    const awayCumulative =
+      awayEventCumulative !== null
+        ? awayEventCumulative
+        : awayOfficialCumulative
     const startHomeRaw = context.minHomeStat
     const startAwayRaw = context.minAwayStat
     const startHomeStat =
@@ -755,12 +863,12 @@ const compareQuestion = (
         ? toNumber(startAwayRaw)
         : null
     const homeDelta =
-      homeOfficialCumulative !== null && startHomeStat !== null
-        ? Math.max(0, homeOfficialCumulative - startHomeStat)
+      homeCumulative !== null && startHomeStat !== null
+        ? Math.max(0, homeCumulative - startHomeStat)
         : homePbp
     const awayDelta =
-      awayOfficialCumulative !== null && startAwayStat !== null
-        ? Math.max(0, awayOfficialCumulative - startAwayStat)
+      awayCumulative !== null && startAwayStat !== null
+        ? Math.max(0, awayCumulative - startAwayStat)
         : awayPbp
     if (homeDelta === awayDelta) {
       computedState = 'cancelled'
@@ -769,10 +877,14 @@ const compareQuestion = (
       computedState = 'resolved'
       computedAnswer = homeDelta > awayDelta ? homeCode : awayCode
     }
-    nbaValues =
-      homeOfficialCumulative === null || awayOfficialCumulative === null
-        ? `official_cum_through_q${startPeriod} unavailable for ${statType}`
-        : `official_cum_through_q${startPeriod} ${homeCode}:${homeOfficialCumulative} ${awayCode}:${awayOfficialCumulative} stat=${statType}`
+    if (homeEventCumulative !== null && awayEventCumulative !== null) {
+      nbaValues = `event_boxscore ${homeCode}:${homeEventCumulative} ${awayCode}:${awayEventCumulative} stat=${statType}`
+    } else {
+      nbaValues =
+        homeOfficialCumulative === null || awayOfficialCumulative === null
+          ? `official_cum_through_q${startPeriod} unavailable for ${statType}`
+          : `official_cum_through_q${startPeriod} ${homeCode}:${homeOfficialCumulative} ${awayCode}:${awayOfficialCumulative} stat=${statType}`
+    }
     detail = `home=${homeCode}:${homeDelta} away=${awayCode}:${awayDelta} stat=${statType} pbpHome=${homePbp} pbpAway=${awayPbp}`
   } else if (contextType === 'PLAYER_MILESTONE_PERIOD') {
     const playerId = toNumber(context.playerId)
