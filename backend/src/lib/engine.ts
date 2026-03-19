@@ -4121,6 +4121,7 @@ export const resolveQuestionForEvent = (
         (event.type === EventType.PERIOD_END &&
           currentPeriod >= startPeriod &&
           (hasDerivedStats || hasOfficialPeriodSnapshot))))
+  const deferPeriodFinalization = periodFinished && !gameEnded
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
   const awayScore = getCurrentScore(event, boxScore, 'AWAY')
@@ -4163,9 +4164,14 @@ export const resolveQuestionForEvent = (
         (USE_OFFICIAL_CUMULATIVE_RESOLUTION
           ? getOfficialCumulativeTeamStat(event, tricode, statType)
           : null) ??
-        getDerivedTeamStat(derivedStats, tricode, statType) ??
-        getComparableTeamValue(event, boxScore, teamSide, statType)
+        getComparableTeamValue(event, boxScore, teamSide, statType) ??
+        getDerivedTeamStat(derivedStats, tricode, statType)
       const minTeamStat = asNumber(context.minTeamStat)
+      if (minTeamStat === null || current === null) {
+        if (periodStatsReady && deferPeriodFinalization) return null
+        if (periodStatsReady) return { state: 'cancelled', answer: null }
+        return null
+      }
       if (minTeamStat !== null && current !== null && current >= minTeamStat)
         return { state: 'resolved', answer: 'yes' }
       if (periodStatsReady) return { state: 'resolved', answer: 'no' }
@@ -4254,6 +4260,7 @@ export const resolveQuestionForEvent = (
         startHomeThrees === null ||
         startAwayThrees === null
       ) {
+        if (periodFinished && deferPeriodFinalization) return null
         if (periodFinished) return { state: 'cancelled', answer: null }
         return null
       }
@@ -4318,12 +4325,12 @@ export const resolveQuestionForEvent = (
               statType
             )
           : null) ??
+        getComparableTeamValue(event, boxScore, 'HOME', statType) ??
         getDerivedTeamStat(
           derivedStats,
           asString(context.homeTricode),
           statType
-        ) ??
-        getComparableTeamValue(event, boxScore, 'HOME', statType)
+        )
       const awayStat =
         (USE_OFFICIAL_CUMULATIVE_RESOLUTION
           ? getOfficialCumulativeTeamStat(
@@ -4332,12 +4339,12 @@ export const resolveQuestionForEvent = (
               statType
             )
           : null) ??
+        getComparableTeamValue(event, boxScore, 'AWAY', statType) ??
         getDerivedTeamStat(
           derivedStats,
           asString(context.awayTricode),
           statType
-        ) ??
-        getComparableTeamValue(event, boxScore, 'AWAY', statType)
+        )
       const minHomeStat = asNumber(context.minHomeStat)
       const minAwayStat = asNumber(context.minAwayStat)
       if (
@@ -4346,7 +4353,9 @@ export const resolveQuestionForEvent = (
         minHomeStat === null ||
         minAwayStat === null
       )
-        return { state: 'cancelled', answer: null }
+        return periodFinished && deferPeriodFinalization
+          ? null
+          : { state: 'cancelled', answer: null }
       const homeDelta = homeStat - minHomeStat
       const awayDelta = awayStat - minAwayStat
       if (homeDelta === awayDelta)
@@ -4394,8 +4403,8 @@ export const resolveQuestionForEvent = (
         (USE_OFFICIAL_CUMULATIVE_RESOLUTION
           ? getOfficialCumulativePlayerStat(event, playerId, statType)
           : null) ??
-        getDerivedPlayerStat(derivedStats, playerId, statType) ??
-        getPlayerGameStat(player, statType)
+        getPlayerGameStat(player, statType) ??
+        getDerivedPlayerStat(derivedStats, playerId, statType)
       const startGameStat =
         asNumber(context.startGameStat) ?? asNumber(context.initialValue)
       const deltaStat =
@@ -4410,6 +4419,7 @@ export const resolveQuestionForEvent = (
         return { state: 'resolved', answer: 'yes' }
       if (periodStatsReady) {
         if (deltaStat !== null) return { state: 'resolved', answer: 'no' }
+        if (deferPeriodFinalization) return null
         return { state: 'cancelled', answer: null }
       }
       return null
@@ -4431,8 +4441,8 @@ export const resolveQuestionForEvent = (
           (USE_OFFICIAL_CUMULATIVE_RESOLUTION
             ? getOfficialCumulativePlayerStat(event, Number(id), statType)
             : null) ??
-          getDerivedPlayerStat(derivedStats, Number(id), statType) ??
-          getPlayerGameStat(player, statType)
+          getPlayerGameStat(player, statType) ??
+          getDerivedPlayerStat(derivedStats, Number(id), statType)
         const startGameStat = startPlayerGameStats?.[String(id)]
         const deltaStat =
           currentGameStat !== null &&
@@ -4452,7 +4462,9 @@ export const resolveQuestionForEvent = (
         }
       }
       if (!bestId || bestValue === null)
-        return { state: 'cancelled', answer: null }
+        return deferPeriodFinalization
+          ? null
+          : { state: 'cancelled', answer: null }
       if (tie) return { state: 'cancelled', answer: null, reason: 'TIE' }
       return { state: 'resolved', answer: bestId }
     }

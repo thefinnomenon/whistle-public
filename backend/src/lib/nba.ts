@@ -192,6 +192,18 @@ type EntitySportFetchAttempt = EntitySportFetchResult & {
   attemptedUrlIndex: number
 }
 
+type EntitySportMatchSummary = {
+  mid: string
+  homeAbbr: string
+  awayAbbr: string
+  timestampStartMs: number | null
+}
+
+const ENTITYSPORT_MATCHES_BY_DATE_CACHE = new Map<
+  string,
+  EntitySportMatchSummary[]
+>()
+
 const isNonEmptyString = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.trim().length > 0
 
@@ -224,6 +236,129 @@ const buildEntitySportPbpUrls = (token: string, matchId: string): string[] => {
     `https://basketballapi.entitysport.com/matches/${m}/live?token=${t}`,
     `https://basketballapi.entitysport.com/matches/${m}/scorecard?token=${t}`,
   ]
+}
+
+const buildEntitySportMatchesByDateUrl = (token: string, dateYmd: string) => {
+  const t = encodeURIComponent(token)
+  const d = encodeURIComponent(dateYmd)
+  return `https://basketballapi.entitysport.com/matches?token=${t}&date=${d}`
+}
+
+const normalizeEntitySportTeamAbbr = (value: JsonValue | undefined): string =>
+  isNonEmptyString(value) ? value.trim().toUpperCase() : ''
+
+const toDateYmdUtc = (date: Date): string => date.toISOString().slice(0, 10)
+
+const shiftDateYmdUtc = (dateYmd: string, dayDelta: number): string => {
+  const base = new Date(`${dateYmd}T00:00:00.000Z`)
+  base.setUTCDate(base.getUTCDate() + dayDelta)
+  return toDateYmdUtc(base)
+}
+
+const extractEntitySportMatches = (
+  payload: JsonValue | null
+): EntitySportMatchSummary[] => {
+  const items = asArray(readJsonPath(payload, ['response', 'items']))
+  if (!items) return []
+  const matches: EntitySportMatchSummary[] = []
+  for (const item of items) {
+    const obj = asObject(item)
+    if (!obj) continue
+    const midRaw = obj.mid
+    const mid =
+      typeof midRaw === 'number' && Number.isFinite(midRaw)
+        ? String(midRaw)
+        : isNonEmptyString(midRaw)
+          ? midRaw.trim()
+          : ''
+    if (!mid) continue
+    const teamsObj = asObject(obj.teams)
+    const homeObj = asObject(teamsObj?.home ?? null)
+    const awayObj = asObject(teamsObj?.away ?? null)
+    const homeAbbr = normalizeEntitySportTeamAbbr(homeObj?.abbr)
+    const awayAbbr = normalizeEntitySportTeamAbbr(awayObj?.abbr)
+    const tsRaw = obj.timestampstart
+    const timestampStartMs =
+      typeof tsRaw === 'number' && Number.isFinite(tsRaw)
+        ? tsRaw * 1000
+        : isNonEmptyString(tsRaw)
+          ? Number.isFinite(Number(tsRaw))
+            ? Number(tsRaw) * 1000
+            : null
+          : null
+    matches.push({
+      mid,
+      homeAbbr,
+      awayAbbr,
+      timestampStartMs,
+    })
+  }
+  return matches
+}
+
+const fetchEntitySportMatchesForDate = async (
+  dateYmd: string
+): Promise<EntitySportMatchSummary[]> => {
+  const cached = ENTITYSPORT_MATCHES_BY_DATE_CACHE.get(dateYmd)
+  if (cached) return cached
+  const result = await fetchEntitySportJson(
+    buildEntitySportMatchesByDateUrl(ENTITYSPORT_TOKEN, dateYmd)
+  )
+  if (result.error || !isEntitySportPayloadOk(result.payload)) {
+    console.warn(
+      `[entitysport] matches_by_date fetch failed date=${dateYmd} error=${result.error ?? 'non_ok_status'}`
+    )
+    ENTITYSPORT_MATCHES_BY_DATE_CACHE.set(dateYmd, [])
+    return []
+  }
+  const matches = extractEntitySportMatches(result.payload)
+  ENTITYSPORT_MATCHES_BY_DATE_CACHE.set(dateYmd, matches)
+  return matches
+}
+
+const resolveEntitySportMatchId = async ({
+  homeTeam,
+  awayTeam,
+  startTimeMs,
+  fallbackMatchId,
+}: {
+  homeTeam: string | null
+  awayTeam: string | null
+  startTimeMs: number | null
+  fallbackMatchId: string | null
+}): Promise<string | null> => {
+  if (!homeTeam || !awayTeam || startTimeMs === null) return fallbackMatchId
+  const home = normalizeTeamCode(homeTeam)
+  const away = normalizeTeamCode(awayTeam)
+  const startDate = new Date(startTimeMs)
+  if (Number.isNaN(startDate.getTime())) return fallbackMatchId
+  const ymd = toDateYmdUtc(startDate)
+  const candidateDates = [
+    shiftDateYmdUtc(ymd, -1),
+    ymd,
+    shiftDateYmdUtc(ymd, 1),
+  ]
+
+  let best: { mid: string; diffMs: number } | null = null
+  for (const dateYmd of candidateDates) {
+    const matches = await fetchEntitySportMatchesForDate(dateYmd)
+    for (const match of matches) {
+      if (match.homeAbbr !== home || match.awayAbbr !== away) continue
+      const diffMs =
+        match.timestampStartMs === null
+          ? Number.POSITIVE_INFINITY
+          : Math.abs(match.timestampStartMs - startTimeMs)
+      if (!best || diffMs < best.diffMs) {
+        best = { mid: match.mid, diffMs }
+      }
+    }
+  }
+
+  if (!best) return fallbackMatchId
+  if (!Number.isFinite(best.diffMs) || best.diffMs > 8 * 60 * 60 * 1000) {
+    return fallbackMatchId
+  }
+  return best.mid
 }
 
 const buildEntitySportBoxScoreUrls = (
@@ -402,6 +537,10 @@ const captureEntitySportShadowForAction = async ({
   gameId,
   nbaGameId,
   matchId,
+  homeTeam,
+  awayTeam,
+  startTimeMs,
+  persistResolvedMatchId,
   anchorActionNumber,
   anchorPeriod,
   anchorClock,
@@ -409,18 +548,36 @@ const captureEntitySportShadowForAction = async ({
   gameId: string
   nbaGameId: string
   matchId: string
+  homeTeam: string | null
+  awayTeam: string | null
+  startTimeMs: number | null
+  persistResolvedMatchId: (matchId: string) => Promise<void>
   anchorActionNumber: number
   anchorPeriod: number | null
   anchorClock: string | null
 }) => {
   if (!isNonEmptyString(ENTITYSPORT_TOKEN)) return
   try {
+    const resolvedMatchId = await resolveEntitySportMatchId({
+      homeTeam,
+      awayTeam,
+      startTimeMs,
+      fallbackMatchId: matchId,
+    })
+    if (!resolvedMatchId) return
+    if (resolvedMatchId !== matchId) {
+      await persistResolvedMatchId(resolvedMatchId)
+      console.log(
+        `[entitysport] mapped_match_id game=${gameId} nbaGameId=${nbaGameId} oldMatchId=${matchId} newMatchId=${resolvedMatchId}`
+      )
+    }
+
     const [pbpFetch, boxFetch] = await Promise.all([
       fetchEntitySportFirstSuccessful(
-        buildEntitySportPbpUrls(ENTITYSPORT_TOKEN, matchId)
+        buildEntitySportPbpUrls(ENTITYSPORT_TOKEN, resolvedMatchId)
       ),
       fetchEntitySportFirstSuccessful(
-        buildEntitySportBoxScoreUrls(ENTITYSPORT_TOKEN, matchId)
+        buildEntitySportBoxScoreUrls(ENTITYSPORT_TOKEN, resolvedMatchId)
       ),
     ])
     const pbpResult = pbpFetch.selected
@@ -430,7 +587,7 @@ const captureEntitySportShadowForAction = async ({
     const commonMeta = {
       source: 'entitysport',
       nbaGameId,
-      entitySportMatchId: matchId,
+      entitySportMatchId: resolvedMatchId,
       anchorActionNumber,
       anchorPeriod,
       anchorClock,
@@ -461,12 +618,12 @@ const captureEntitySportShadowForAction = async ({
 
     if (pbpResult.error || boxScoreResult.error) {
       console.warn(
-        `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${matchId} action=${anchorActionNumber} pbpError=${pbpResult.error ?? 'none'} boxError=${boxScoreResult.error ?? 'none'}`
+        `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${resolvedMatchId} action=${anchorActionNumber} pbpError=${pbpResult.error ?? 'none'} boxError=${boxScoreResult.error ?? 'none'}`
       )
       return
     }
     console.log(
-      `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${matchId} action=${anchorActionNumber} pbpMs=${pbpResult.durationMs} boxMs=${boxScoreResult.durationMs} pbpEvents=${extractEntitySportEventCount(pbpResult.payload) ?? -1}`
+      `[entitysport] shadow fetch game=${gameId} nbaGameId=${nbaGameId} matchId=${resolvedMatchId} action=${anchorActionNumber} pbpMs=${pbpResult.durationMs} boxMs=${boxScoreResult.durationMs} pbpEvents=${extractEntitySportEventCount(pbpResult.payload) ?? -1}`
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -2673,6 +2830,14 @@ export const syncNbaLiveEvents = async () => {
         ? readEntitySportMatchId(gameRecord, nbaGameId)
         : nbaGameId
       if (entitySportMatchId) {
+        const startTimeMs =
+          typeof game?.startTime?.toMillis === 'function'
+            ? game.startTime.toMillis()
+            : typeof game?.startTime === 'string'
+              ? Number.isFinite(new Date(game.startTime).getTime())
+                ? new Date(game.startTime).getTime()
+                : null
+              : null
         const anchorPeriod =
           typeof latestFetchedAction?.period === 'number'
             ? latestFetchedAction.period
@@ -2685,6 +2850,24 @@ export const syncNbaLiveEvents = async () => {
           gameId,
           nbaGameId,
           matchId: entitySportMatchId,
+          homeTeam:
+            typeof game?.homeTeam === 'string'
+              ? normalizeTeamCode(game.homeTeam)
+              : null,
+          awayTeam:
+            typeof game?.awayTeam === 'string'
+              ? normalizeTeamCode(game.awayTeam)
+              : null,
+          startTimeMs,
+          persistResolvedMatchId: async (resolvedMatchId: string) => {
+            await doc.ref.set(
+              {
+                entitySportMatchId: resolvedMatchId,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            )
+          },
           anchorActionNumber: latestFetchedActionNumber,
           anchorPeriod,
           anchorClock,
