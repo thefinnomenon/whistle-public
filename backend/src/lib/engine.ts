@@ -4110,7 +4110,6 @@ export const resolveQuestionForEvent = (
     typeof event.context.raw === 'object' &&
     (event.context.raw as { officialPeriodSnapshot?: unknown })
       .officialPeriodSnapshot === '1'
-  const hasDerivedStats = Boolean(derivedStats)
   // Stat-based period resolutions should resolve at period boundary only when we
   // know the period snapshot is authoritative. Otherwise wait for next period.
   const periodStatsReady =
@@ -4120,7 +4119,7 @@ export const resolveQuestionForEvent = (
       (currentPeriod > startPeriod ||
         (event.type === EventType.PERIOD_END &&
           currentPeriod >= startPeriod &&
-          (hasDerivedStats || hasOfficialPeriodSnapshot))))
+          hasOfficialPeriodSnapshot)))
   const deferPeriodFinalization = periodFinished && !gameEnded
 
   const homeScore = getCurrentScore(event, boxScore, 'HOME')
@@ -4158,7 +4157,11 @@ export const resolveQuestionForEvent = (
       const teamSide =
         resolveTeamSideByTricode(boxScore, tricode) ??
         (teamContext === 'HOME' || teamContext === 'AWAY' ? teamContext : null)
-      if (!teamSide) return { state: 'cancelled', answer: null }
+      if (!teamSide) {
+        if (periodFinished && deferPeriodFinalization) return null
+        if (periodFinished) return { state: 'cancelled', answer: null }
+        return null
+      }
       const statType = asString(context.statType) ?? ''
       const current =
         (USE_OFFICIAL_CUMULATIVE_RESOLUTION
@@ -4373,28 +4376,7 @@ export const resolveQuestionForEvent = (
       const playerId = asNumber(context.playerId) ?? 0
       const period = asNumber(context.endPeriod) ?? startPeriod ?? currentPeriod
       const statType = asString(context.statType) ?? 'POINTS'
-      const eventPlayerId = getEventPlayerId(event)
-      if (
-        playerId &&
-        statType === 'THREES' &&
-        event.type === EventType.MADE_3 &&
-        eventPlayerId === playerId
-      ) {
-        return { state: 'resolved', answer: 'yes' }
-      }
-      if (
-        playerId &&
-        statType === 'STEALS' &&
-        event.type === EventType.STEAL &&
-        eventPlayerId === playerId
-      ) {
-        return { state: 'resolved', answer: 'yes' }
-      }
       if (!playerId || !period) {
-        if (statType === 'THREES' && event.type === EventType.MADE_3)
-          return { state: 'resolved', answer: 'yes' }
-        if (statType === 'STEALS' && event.type === EventType.STEAL)
-          return { state: 'resolved', answer: 'yes' }
         if (periodStatsReady) return { state: 'resolved', answer: 'no' }
         return null
       }

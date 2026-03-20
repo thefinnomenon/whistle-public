@@ -172,32 +172,47 @@ const main = async () => {
   const gameLimit =
     Number.isFinite(argCount) && argCount > 0 ? Math.min(argCount, 25) : 5
   const apply = process.argv.includes('--apply')
+  const gameIdArgs = process.argv
+    .filter((arg) => arg.startsWith('--game-id='))
+    .map((arg) => arg.slice('--game-id='.length))
+    .filter((value) => value.trim().length > 0)
 
-  const gamesSnap = await db
-    .collection('games')
-    .orderBy('startTime', 'desc')
-    .limit(gameLimit * 30)
-    .get()
-
-  const candidates = gamesSnap.docs
-    .map((doc) => ({ id: doc.id, data: doc.data() as GameDoc }))
-    .filter(({ data }) => data.state === 'resolved' && !!data.nbaGameId)
-
-  const selected: { id: string; data: GameDoc }[] = []
-  for (const game of candidates) {
-    if (selected.length >= gameLimit) break
-    const lastEventSnap = await db
+  let selected: { id: string; data: GameDoc }[] = []
+  if (gameIdArgs.length > 0) {
+    const gameDocs = await Promise.all(
+      gameIdArgs.map((gameId) => db.collection('games').doc(gameId).get())
+    )
+    selected = gameDocs
+      .filter((doc) => doc.exists)
+      .map((doc) => ({ id: doc.id, data: doc.data() as GameDoc }))
+      .filter(({ data }) => data.state === 'resolved' && !!data.nbaGameId)
+  } else {
+    const gamesSnap = await db
       .collection('games')
-      .doc(game.id)
-      .collection('events')
-      .orderBy('eventId', 'desc')
-      .limit(1)
+      .orderBy('startTime', 'desc')
+      .limit(gameLimit * 30)
       .get()
-    const lastEvent = lastEventSnap.empty
-      ? null
-      : (lastEventSnap.docs[0].data() as EngineEvent)
-    if (!isFinalStatus(lastEvent)) continue
-    selected.push(game)
+
+    const candidates = gamesSnap.docs
+      .map((doc) => ({ id: doc.id, data: doc.data() as GameDoc }))
+      .filter(({ data }) => data.state === 'resolved' && !!data.nbaGameId)
+
+    selected = []
+    for (const game of candidates) {
+      if (selected.length >= gameLimit) break
+      const lastEventSnap = await db
+        .collection('games')
+        .doc(game.id)
+        .collection('events')
+        .orderBy('eventId', 'desc')
+        .limit(1)
+        .get()
+      const lastEvent = lastEventSnap.empty
+        ? null
+        : (lastEventSnap.docs[0].data() as EngineEvent)
+      if (!isFinalStatus(lastEvent)) continue
+      selected.push(game)
+    }
   }
 
   if (!selected.length) {
