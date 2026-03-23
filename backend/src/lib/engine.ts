@@ -4163,17 +4163,34 @@ export const resolveQuestionForEvent = (
         return null
       }
       const statType = asString(context.statType) ?? ''
-      const current =
-        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
-          ? getOfficialCumulativeTeamStat(event, tricode, statType)
-          : null) ??
-        getComparableTeamValue(event, boxScore, teamSide, statType) ??
-        getDerivedTeamStat(derivedStats, tricode, statType)
+      const officialCurrent = USE_OFFICIAL_CUMULATIVE_RESOLUTION
+        ? getOfficialCumulativeTeamStat(event, tricode, statType)
+        : null
+      const boxScoreCurrent = getComparableTeamValue(
+        event,
+        boxScore,
+        teamSide,
+        statType
+      )
+      const derivedCurrent = getDerivedTeamStat(derivedStats, tricode, statType)
+      const current = officialCurrent ?? boxScoreCurrent ?? derivedCurrent
+      const currentSource: 'official' | 'boxscore' | 'derived' | 'none' =
+        officialCurrent !== null
+          ? 'official'
+          : boxScoreCurrent !== null
+            ? 'boxscore'
+            : derivedCurrent !== null
+              ? 'derived'
+              : 'none'
       const minTeamStat = asNumber(context.minTeamStat)
       if (minTeamStat === null || current === null) {
         if (periodStatsReady && deferPeriodFinalization) return null
         if (periodStatsReady) return { state: 'cancelled', answer: null }
         return null
+      }
+      if (periodStatsReady && currentSource === 'derived') {
+        if (!gameEnded) return null
+        return { state: 'cancelled', answer: null }
       }
       if (minTeamStat !== null && current !== null && current >= minTeamStat)
         return { state: 'resolved', answer: 'yes' }
@@ -4320,34 +4337,50 @@ export const resolveQuestionForEvent = (
     case 'TEAM_COMPARE_PERIOD': {
       if (!periodStatsReady) return null
       const statType = asString(context.statType) ?? ''
-      const homeStat =
-        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
-          ? getOfficialCumulativeTeamStat(
-              event,
-              asString(context.homeTricode),
-              statType
-            )
-          : null) ??
-        getComparableTeamValue(event, boxScore, 'HOME', statType) ??
-        getDerivedTeamStat(
-          derivedStats,
-          asString(context.homeTricode),
-          statType
-        )
-      const awayStat =
-        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
-          ? getOfficialCumulativeTeamStat(
-              event,
-              asString(context.awayTricode),
-              statType
-            )
-          : null) ??
-        getComparableTeamValue(event, boxScore, 'AWAY', statType) ??
-        getDerivedTeamStat(
-          derivedStats,
-          asString(context.awayTricode),
-          statType
-        )
+      const homeOfficial = USE_OFFICIAL_CUMULATIVE_RESOLUTION
+        ? getOfficialCumulativeTeamStat(
+            event,
+            asString(context.homeTricode),
+            statType
+          )
+        : null
+      const homeBox = getComparableTeamValue(event, boxScore, 'HOME', statType)
+      const homeDerived = getDerivedTeamStat(
+        derivedStats,
+        asString(context.homeTricode),
+        statType
+      )
+      const homeStat = homeOfficial ?? homeBox ?? homeDerived
+      const homeSource: 'official' | 'boxscore' | 'derived' | 'none' =
+        homeOfficial !== null
+          ? 'official'
+          : homeBox !== null
+            ? 'boxscore'
+            : homeDerived !== null
+              ? 'derived'
+              : 'none'
+      const awayOfficial = USE_OFFICIAL_CUMULATIVE_RESOLUTION
+        ? getOfficialCumulativeTeamStat(
+            event,
+            asString(context.awayTricode),
+            statType
+          )
+        : null
+      const awayBox = getComparableTeamValue(event, boxScore, 'AWAY', statType)
+      const awayDerived = getDerivedTeamStat(
+        derivedStats,
+        asString(context.awayTricode),
+        statType
+      )
+      const awayStat = awayOfficial ?? awayBox ?? awayDerived
+      const awaySource: 'official' | 'boxscore' | 'derived' | 'none' =
+        awayOfficial !== null
+          ? 'official'
+          : awayBox !== null
+            ? 'boxscore'
+            : awayDerived !== null
+              ? 'derived'
+              : 'none'
       const minHomeStat = asNumber(context.minHomeStat)
       const minAwayStat = asNumber(context.minAwayStat)
       if (
@@ -4359,6 +4392,13 @@ export const resolveQuestionForEvent = (
         return periodFinished && deferPeriodFinalization
           ? null
           : { state: 'cancelled', answer: null }
+      if (
+        (homeSource === 'derived' || awaySource === 'derived') &&
+        periodStatsReady
+      ) {
+        if (!gameEnded) return null
+        return { state: 'cancelled', answer: null }
+      }
       const homeDelta = homeStat - minHomeStat
       const awayDelta = awayStat - minAwayStat
       if (homeDelta === awayDelta)
@@ -4381,12 +4421,24 @@ export const resolveQuestionForEvent = (
         return null
       }
       const player = getPlayerFromBoxScore(boxScore, playerId)
-      const currentGameStat =
-        (USE_OFFICIAL_CUMULATIVE_RESOLUTION
-          ? getOfficialCumulativePlayerStat(event, playerId, statType)
-          : null) ??
-        getPlayerGameStat(player, statType) ??
-        getDerivedPlayerStat(derivedStats, playerId, statType)
+      const officialCurrent = USE_OFFICIAL_CUMULATIVE_RESOLUTION
+        ? getOfficialCumulativePlayerStat(event, playerId, statType)
+        : null
+      const boxCurrent = getPlayerGameStat(player, statType)
+      const derivedCurrent = getDerivedPlayerStat(
+        derivedStats,
+        playerId,
+        statType
+      )
+      const currentGameStat = officialCurrent ?? boxCurrent ?? derivedCurrent
+      const currentSource: 'official' | 'boxscore' | 'derived' | 'none' =
+        officialCurrent !== null
+          ? 'official'
+          : boxCurrent !== null
+            ? 'boxscore'
+            : derivedCurrent !== null
+              ? 'derived'
+              : 'none'
       const startGameStat =
         asNumber(context.startGameStat) ?? asNumber(context.initialValue)
       const deltaStat =
@@ -4400,6 +4452,10 @@ export const resolveQuestionForEvent = (
       if (target !== null && deltaStat !== null && deltaStat >= target)
         return { state: 'resolved', answer: 'yes' }
       if (periodStatsReady) {
+        if (currentSource === 'derived') {
+          if (!gameEnded) return null
+          return { state: 'cancelled', answer: null }
+        }
         if (deltaStat !== null) return { state: 'resolved', answer: 'no' }
         if (deferPeriodFinalization) return null
         return { state: 'cancelled', answer: null }
@@ -4417,14 +4473,28 @@ export const resolveQuestionForEvent = (
       let bestId: string | null = null
       let bestValue: number | null = null
       let tie = false
+      let usedDerivedAtFinal = false
       for (const id of playerIds) {
         const player = getPlayerFromBoxScore(boxScore, Number(id))
-        const currentGameStat =
-          (USE_OFFICIAL_CUMULATIVE_RESOLUTION
-            ? getOfficialCumulativePlayerStat(event, Number(id), statType)
-            : null) ??
-          getPlayerGameStat(player, statType) ??
-          getDerivedPlayerStat(derivedStats, Number(id), statType)
+        const officialCurrent = USE_OFFICIAL_CUMULATIVE_RESOLUTION
+          ? getOfficialCumulativePlayerStat(event, Number(id), statType)
+          : null
+        const boxCurrent = getPlayerGameStat(player, statType)
+        const derivedCurrent = getDerivedPlayerStat(
+          derivedStats,
+          Number(id),
+          statType
+        )
+        const currentGameStat = officialCurrent ?? boxCurrent ?? derivedCurrent
+        const source: 'official' | 'boxscore' | 'derived' | 'none' =
+          officialCurrent !== null
+            ? 'official'
+            : boxCurrent !== null
+              ? 'boxscore'
+              : derivedCurrent !== null
+                ? 'derived'
+                : 'none'
+        if (source === 'derived') usedDerivedAtFinal = true
         const startGameStat = startPlayerGameStats?.[String(id)]
         const deltaStat =
           currentGameStat !== null &&
@@ -4447,6 +4517,10 @@ export const resolveQuestionForEvent = (
         return deferPeriodFinalization
           ? null
           : { state: 'cancelled', answer: null }
+      if (usedDerivedAtFinal) {
+        if (!gameEnded) return null
+        return { state: 'cancelled', answer: null }
+      }
       if (tie) return { state: 'cancelled', answer: null, reason: 'TIE' }
       return { state: 'resolved', answer: bestId }
     }
