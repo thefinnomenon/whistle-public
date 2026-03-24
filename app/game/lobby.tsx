@@ -1,5 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'
 import { router, useFocusEffect } from 'expo-router'
+import { useColorScheme } from 'nativewind'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -21,6 +22,8 @@ import { getLatestGame, joinGame as joinGameAtomic } from '@/lib/firebase'
 import { NBA, NFL } from '@/logos'
 
 export default function GameLobbyScreen() {
+  const { colorScheme } = useColorScheme()
+  const iconColor = colorScheme === 'dark' ? '#ffffff' : '#000000'
   const { user } = useAuth()
   const { game, setGame } = useGame()
   const insets = useSafeAreaInsets()
@@ -204,7 +207,7 @@ export default function GameLobbyScreen() {
               <MaterialCommunityIcons
                 name="whistle-outline"
                 size={32}
-                color="black"
+                color={iconColor}
               />
               <Text className="text-4xl font-bold text-gray-900 dark:text-white">
                 {game.prizeAmount.toLocaleString('en-US', {

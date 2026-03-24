@@ -26,7 +26,7 @@ import {
 import { cn } from '@/lib/utils'
 import { NBA, NFL } from '@/logos'
 import { Ionicons, MaterialCommunityIcons, Octicons } from '@expo/vector-icons'
-import { cssInterop } from 'nativewind'
+import { cssInterop, useColorScheme } from 'nativewind'
 import { toast } from 'sonner-native'
 // This is needed since ExpoImage isn't supported by NativeWind
 cssInterop(ExpoImage, { className: 'style' })
@@ -82,6 +82,7 @@ const sameDay = (a: Date, b: Date) =>
   a.getDate() === b.getDate()
 
 export default function GamesScreen() {
+  const { colorScheme } = useColorScheme()
   const { user } = useAuth()
   const [games, setGames] = useState<Game[]>([])
   const [userGames, setUserGames] = useState<Map<string, UserGame>>(new Map())
@@ -270,6 +271,7 @@ export default function GamesScreen() {
   }
 
   const renderGame = ({ item }: { item: Game & { start?: Date } }) => {
+    const iconColor = colorScheme === 'dark' ? '#ffffff' : '#000000'
     const joined = userGames.has(item.id)
     const canEnter =
       joined &&
@@ -308,7 +310,7 @@ export default function GamesScreen() {
         <MaterialCommunityIcons
           name="whistle-outline"
           size={16}
-          color="black"
+          color={iconColor}
         />
         <Text className="text-sm font-semibold text-foreground">
           {prizeAmount.toLocaleString('en-US', {
@@ -356,7 +358,7 @@ export default function GamesScreen() {
                   <Octicons
                     name="trophy"
                     size={12}
-                    color="black"
+                    color={iconColor}
                     className="mr-1"
                   />
                   {prizeLabel}

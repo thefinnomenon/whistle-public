@@ -4,6 +4,7 @@ import {
   MaterialCommunityIcons,
 } from '@expo/vector-icons'
 import { router } from 'expo-router'
+import { useColorScheme } from 'nativewind'
 import React from 'react'
 import { Text, TouchableOpacity, View } from 'react-native'
 
@@ -13,6 +14,9 @@ type Props = {
 }
 
 export function GameInfoBar({ game, gamePlayer }: Props) {
+  const { colorScheme } = useColorScheme()
+  const iconColor = colorScheme === 'dark' ? '#ffffff' : 'slategray'
+
   const handleLeaderboard = () => {
     router.push('/game/leaderboard')
   }
@@ -28,17 +32,17 @@ export function GameInfoBar({ game, gamePlayer }: Props) {
   return (
     <View className="flex flex-row items-center justify-between h-12 border-b border-gray-300 dark:border-gray-700 px-4">
       <View className="flex flex-row items-center gap-2">
-        <Ionicons name="star" size={22} color="slategray" />
+        <Ionicons name="star" size={22} color={iconColor} />
         <Text className="text-gray-900 dark:text-white">
           {gamePlayer?.score || 0}
         </Text>
       </View>
       <View className="flex flex-row items-center gap-2">
-        <Ionicons name="people-sharp" size={24} color="slategray" />
+        <Ionicons name="people-sharp" size={24} color={iconColor} />
         <Text className="text-gray-900 dark:text-white">{playerCount}</Text>
       </View>
       <View className="flex flex-row items-center gap-2">
-        <FontAwesome5 name="coins" size={24} color="slategray" />
+        <FontAwesome5 name="coins" size={24} color={iconColor} />
         {isCash ? (
           <Text className="text-gray-900 dark:text-white">
             $
@@ -51,7 +55,7 @@ export function GameInfoBar({ game, gamePlayer }: Props) {
             <MaterialCommunityIcons
               name="whistle-outline"
               size={20}
-              color="slategray"
+              color={iconColor}
             />
             <Text className="text-gray-900 dark:text-white">
               {prizeAmount.toLocaleString('en-US', {
@@ -62,7 +66,7 @@ export function GameInfoBar({ game, gamePlayer }: Props) {
         )}
       </View>
       <TouchableOpacity onPress={handleLeaderboard}>
-        <Ionicons name="trophy-sharp" size={24} color="slategray" />
+        <Ionicons name="trophy-sharp" size={24} color={iconColor} />
       </TouchableOpacity>
     </View>
   )
