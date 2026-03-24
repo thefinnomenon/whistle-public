@@ -17,7 +17,7 @@ import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import { subscribeToGameTopic } from '@/lib/fcm'
-import { getLatestGame, updateGamePlayer, updateUserGame } from '@/lib/firebase'
+import { getLatestGame, joinGame as joinGameAtomic } from '@/lib/firebase'
 import { NBA, NFL } from '@/logos'
 
 export default function GameLobbyScreen() {
@@ -93,9 +93,13 @@ export default function GameLobbyScreen() {
     setJoining(true)
     console.log(`User ${user.id} is joining game ${game.id}`)
     try {
-      await updateUserGame(user.id, game.id, { score: 0 })
-      await updateGamePlayer(game.id, user.id, {
-        score: 0,
+      if (!user.username) {
+        throw new Error('Username is required to join a game.')
+      }
+
+      await joinGameAtomic({
+        userId: user.id,
+        gameId: game.id,
         username: user.username,
         platform: Platform.OS,
       })

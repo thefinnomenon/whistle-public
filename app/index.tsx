@@ -20,9 +20,8 @@ import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
 import {
   deleteGamePlayer,
   getGames,
+  joinGame,
   getUserGamesStream,
-  updateGamePlayer,
-  updateUserGame,
 } from '@/lib/firebase'
 import { cn } from '@/lib/utils'
 import { NBA, NFL } from '@/logos'
@@ -174,6 +173,10 @@ export default function GamesScreen() {
 
     setJoiningGameId(game.id)
     try {
+      if (!user.username) {
+        throw new Error('Username is required to join a game.')
+      }
+
       // Small delay so the loading state is visible
       await new Promise((res) => setTimeout(res, 500))
 
@@ -184,9 +187,9 @@ export default function GamesScreen() {
           minute: '2-digit',
         })
 
-      await updateUserGame(user.id, game.id, { score: 0 })
-      await updateGamePlayer(game.id, user.id, {
-        score: 0,
+      await joinGame({
+        userId: user.id,
+        gameId: game.id,
         username: user.username,
       })
       await subscribeToGameTopic(game.id)

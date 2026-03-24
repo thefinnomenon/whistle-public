@@ -195,6 +195,44 @@ export const updateUserGame = async (
   )
 }
 
+export const joinGame = async (params: {
+  userId: string
+  gameId: string
+  username: string
+  platform?: string
+}) => {
+  const { userId, gameId, username, platform } = params
+
+  if (!username) {
+    throw new Error('Username is required to join a game.')
+  }
+
+  const batch = writeBatch(db)
+  const updatedAt = serverTimestamp()
+
+  batch.set(
+    doc(db, `users/${userId}/games`, gameId),
+    {
+      score: 0,
+      updatedAt,
+    },
+    { merge: true }
+  )
+
+  batch.set(
+    doc(db, `games/${gameId}/users`, userId),
+    {
+      score: 0,
+      username,
+      ...(platform ? { platform } : {}),
+      updatedAt,
+    },
+    { merge: true }
+  )
+
+  await batch.commit()
+}
+
 export const updateUserGamePrediction = async (
   userId: string,
   gameId: string,
