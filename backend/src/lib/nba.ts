@@ -22,6 +22,7 @@ import {
   triggerBasketballQuestion,
   triggerGameStartQuestions,
 } from './engine'
+import { buildSimResult } from './simResult'
 import { sendDismissNotification } from '../lib/notifications'
 import { getSeasonProfilesById } from '../workers/seasonProfilesWorker'
 
@@ -55,6 +56,18 @@ type CacheEntry = {
 type ResolvableQuestionDoc = Parameters<typeof resolveQuestionForEvent>[0] & {
   templateId?: string | null
   engineTag?: string | null
+}
+
+const buildFinalResolutionContext = (
+  question: ResolvableQuestionDoc,
+  event: EngineEvent,
+  boxScore: BoxScore | null
+) => {
+  const finalValue = buildSimResult(question, event, boxScore)
+  return {
+    ...(question.resolutionContext ?? {}),
+    finalValue,
+  }
 }
 
 const NBA_HTTP_CACHE = new Map<string, CacheEntry>()
@@ -2276,6 +2289,7 @@ const resolveOpenQuestionsForEvent = async (
       boxScore,
       derivedStats,
     })
+    const resolutionContext = buildFinalResolutionContext(data, event, boxScore)
     logOfficialCompare({
       phase: 'resolution',
       gameId,
@@ -2297,6 +2311,7 @@ const resolveOpenQuestionsForEvent = async (
         {
           state: 'resolved',
           answer: decision.answer ?? null,
+          resolutionContext,
           resolvedEventId: event.eventId,
           resolutionSource,
           resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2310,6 +2325,7 @@ const resolveOpenQuestionsForEvent = async (
         {
           state: 'cancelled',
           cancelReason: decision.reason || 'VOID',
+          resolutionContext,
           resolvedEventId: event.eventId,
           resolutionSource,
           closedAt: admin.firestore.FieldValue.serverTimestamp(),

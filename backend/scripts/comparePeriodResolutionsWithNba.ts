@@ -537,6 +537,17 @@ const getOfficialCumulativePlayerStatThroughPeriod = (
   return found ? total : null
 }
 
+const getOfficialQuarterTeamStat = (
+  officialQuarterDataByPeriod: Map<number, OfficialQuarterData>,
+  period: number,
+  teamCode: string,
+  stat: StatKey
+): number | null => {
+  const quarter = officialQuarterDataByPeriod.get(period)
+  if (!quarter) return null
+  return getOfficialStatValue(quarter.teamStats.get(teamCode) ?? null, stat)
+}
+
 const getStoredEventTeamStat = (
   event: StoredEventDoc | null,
   teamCode: string,
@@ -824,6 +835,18 @@ const compareQuestion = (
     if (!homeCode || !awayCode) return null
     const homePbp = statFromAccumulator(accumulator, statType, homeCode)
     const awayPbp = statFromAccumulator(accumulator, statType, awayCode)
+    const homeOfficialQuarter = getOfficialQuarterTeamStat(
+      officialQuarterDataByPeriod,
+      startPeriod,
+      homeCode,
+      statType
+    )
+    const awayOfficialQuarter = getOfficialQuarterTeamStat(
+      officialQuarterDataByPeriod,
+      startPeriod,
+      awayCode,
+      statType
+    )
     const homeOfficialCumulative = getOfficialCumulativeTeamStatThroughPeriod(
       officialQuarterDataByPeriod,
       startPeriod,
@@ -845,13 +868,13 @@ const compareQuestion = (
         ? getStoredEventTeamStat(linkedEvent, awayCode, statType)
         : null
     const homeCumulative =
-      homeEventCumulative !== null
-        ? homeEventCumulative
-        : homeOfficialCumulative
+      homeOfficialCumulative !== null
+        ? homeOfficialCumulative
+        : homeEventCumulative
     const awayCumulative =
-      awayEventCumulative !== null
-        ? awayEventCumulative
-        : awayOfficialCumulative
+      awayOfficialCumulative !== null
+        ? awayOfficialCumulative
+        : awayEventCumulative
     const startHomeRaw = context.minHomeStat
     const startAwayRaw = context.minAwayStat
     const startHomeStat =
@@ -863,13 +886,17 @@ const compareQuestion = (
         ? toNumber(startAwayRaw)
         : null
     const homeDelta =
-      homeCumulative !== null && startHomeStat !== null
-        ? Math.max(0, homeCumulative - startHomeStat)
-        : homePbp
+      homeOfficialQuarter !== null
+        ? homeOfficialQuarter
+        : homeCumulative !== null && startHomeStat !== null
+          ? Math.max(0, homeCumulative - startHomeStat)
+          : homePbp
     const awayDelta =
-      awayCumulative !== null && startAwayStat !== null
-        ? Math.max(0, awayCumulative - startAwayStat)
-        : awayPbp
+      awayOfficialQuarter !== null
+        ? awayOfficialQuarter
+        : awayCumulative !== null && startAwayStat !== null
+          ? Math.max(0, awayCumulative - startAwayStat)
+          : awayPbp
     if (homeDelta === awayDelta) {
       computedState = 'cancelled'
       computedReason = 'TIE'
@@ -877,15 +904,19 @@ const compareQuestion = (
       computedState = 'resolved'
       computedAnswer = homeDelta > awayDelta ? homeCode : awayCode
     }
-    if (homeEventCumulative !== null && awayEventCumulative !== null) {
+    if (homeOfficialQuarter !== null && awayOfficialQuarter !== null) {
+      nbaValues = `official_q${startPeriod} ${homeCode}:${homeOfficialQuarter} ${awayCode}:${awayOfficialQuarter} stat=${statType}`
+    } else if (
+      homeOfficialCumulative !== null &&
+      awayOfficialCumulative !== null
+    ) {
+      nbaValues = `official_cum_through_q${startPeriod} ${homeCode}:${homeOfficialCumulative} ${awayCode}:${awayOfficialCumulative} stat=${statType}`
+    } else if (homeEventCumulative !== null && awayEventCumulative !== null) {
       nbaValues = `event_boxscore ${homeCode}:${homeEventCumulative} ${awayCode}:${awayEventCumulative} stat=${statType}`
     } else {
-      nbaValues =
-        homeOfficialCumulative === null || awayOfficialCumulative === null
-          ? `official_cum_through_q${startPeriod} unavailable for ${statType}`
-          : `official_cum_through_q${startPeriod} ${homeCode}:${homeOfficialCumulative} ${awayCode}:${awayOfficialCumulative} stat=${statType}`
+      nbaValues = `official_cum_through_q${startPeriod} unavailable for ${statType}`
     }
-    detail = `home=${homeCode}:${homeDelta} away=${awayCode}:${awayDelta} stat=${statType} pbpHome=${homePbp} pbpAway=${awayPbp}`
+    detail = `home=${homeCode}:${homeDelta} away=${awayCode}:${awayDelta} stat=${statType} pbpHome=${homePbp} pbpAway=${awayPbp} eventHome=${homeEventCumulative ?? 'null'} eventAway=${awayEventCumulative ?? 'null'} officialQuarterHome=${homeOfficialQuarter ?? 'null'} officialQuarterAway=${awayOfficialQuarter ?? 'null'} officialHome=${homeOfficialCumulative ?? 'null'} officialAway=${awayOfficialCumulative ?? 'null'}`
   } else if (contextType === 'PLAYER_MILESTONE_PERIOD') {
     const playerId = toNumber(context.playerId)
     const startGameStat = toNumber(context.startGameStat)
