@@ -35,7 +35,7 @@ import {
 import { PortalHost } from '@rn-primitives/portal'
 import * as Sentry from '@sentry/react-native'
 import { useColorScheme as useNativeWindColorScheme } from 'nativewind'
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { NativeModules, Platform } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
@@ -306,10 +306,11 @@ const buildForegroundNotificationId = (params: {
 
 function ThemedApp() {
   const { theme, colorScheme } = useTheme()
-  const { user, firebaseUser } = useAuth()
+  const { user, firebaseUser, loading } = useAuth()
   const { setColorScheme: setNativeWindColorScheme } =
     useNativeWindColorScheme()
   const currentSegments = useSegments()
+  const initialNotificationHandledRef = useRef(false)
 
   const trackGameEndNotificationOpened = (
     openSource: 'foreground' | 'background' | 'initial',
@@ -453,7 +454,10 @@ function ThemedApp() {
 
   // Handle notification that opened the app from killed state
   useEffect(() => {
+    if (loading || initialNotificationHandledRef.current) return
+
     const checkInitialNotification = async () => {
+      initialNotificationHandledRef.current = true
       const initialNotification = await notifee.getInitialNotification()
       console.log('[Notification] initialNotification', initialNotification)
       const notificationData = initialNotification?.notification?.data as
@@ -484,7 +488,7 @@ function ThemedApp() {
       }
     }
     checkInitialNotification()
-  }, [primaryUserId])
+  }, [loading, primaryUserId])
 
   // Handle notification taps while app is in background
   useEffect(() => {
