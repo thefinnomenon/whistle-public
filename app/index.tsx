@@ -83,6 +83,7 @@ const sameDay = (a: Date, b: Date) =>
 
 export default function GamesScreen() {
   const { colorScheme } = useColorScheme()
+  const iconColor = colorScheme === 'dark' ? '#ffffff' : '#000000'
   const { user } = useAuth()
   const [games, setGames] = useState<Game[]>([])
   const [userGames, setUserGames] = useState<Map<string, UserGame>>(new Map())
@@ -449,7 +450,7 @@ export default function GamesScreen() {
           <MaterialCommunityIcons
             name="whistle-outline"
             size={18}
-            color="black"
+            color={iconColor}
           />
           <Text className="text-sm font-semibold text-foreground">
             {(user?.points ?? 0).toLocaleString()}
