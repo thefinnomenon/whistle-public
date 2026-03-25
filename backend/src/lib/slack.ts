@@ -15,6 +15,14 @@ type WaitlistSlackMessage = {
   source: string
 }
 
+type UserCreatedSlackMessage = {
+  userId: string
+  email?: string
+  username?: string
+  loginMethod?: 'Google' | 'Apple'
+  createdAtIso: string
+}
+
 type SlackPostMessagePayload = {
   channel: string
   text: string
@@ -74,6 +82,22 @@ const buildWaitlistSlackMessage = ({
     `email=${email}`,
     `emailDomain=${emailDomain}`,
     `source=${source}`,
+  ].join('\n')
+
+const buildUserCreatedSlackMessage = ({
+  userId,
+  email,
+  username,
+  loginMethod,
+  createdAtIso,
+}: UserCreatedSlackMessage) =>
+  [
+    ':bust_in_silhouette: New Whistle user created',
+    `userId=${userId}`,
+    `email=${email || 'none'}`,
+    `username=${username || 'none'}`,
+    `loginMethod=${loginMethod || 'unknown'}`,
+    `createdAt=${createdAtIso}`,
   ].join('\n')
 
 export const sendSlackMessage = async (channel: string, text: string) => {
@@ -147,6 +171,21 @@ export const sendTesterWaitlistToSlack = async (
       email: message.email,
       emailDomain: message.emailDomain,
       source: message.source,
+    })
+  )
+}
+
+export const sendUserCreatedToSlack = async (
+  message: UserCreatedSlackMessage
+) => {
+  await sendSlackMessage(
+    ALERTS_SLACK_CHANNEL,
+    buildUserCreatedSlackMessage({
+      userId: message.userId,
+      email: message.email,
+      username: message.username,
+      loginMethod: message.loginMethod,
+      createdAtIso: message.createdAtIso,
     })
   )
 }

@@ -15,6 +15,7 @@ import gameRouter, {
 import logsRouter from './routes/logs'
 import testersRouter from './routes/testers'
 import { startSeasonProfilesWorker } from './workers/seasonProfilesWorker'
+import { startUserCreatedSlackWorker } from './workers/userCreatedSlackWorker'
 
 const LOG_BLACKLIST = ['/health', '/api/log']
 
@@ -193,6 +194,8 @@ const startSeasonProfilesCacheWorker = () => {
 }
 
 startSeasonProfilesCacheWorker()
+
+startUserCreatedSlackWorker()
 
 // Background worker: close expired questions every second (small batch)
 const closeExpiredQuestionsWorker = () => {
