@@ -50,7 +50,7 @@ const RULES: RuleSection[] = [
     bullets: [
       'Participate in prediction games within the Whistle app during the Competition Period.',
       'Submit predictions for at least 50% of eligible game questions in a session to qualify.',
-      'There is no random drawing or chance-based selection for prizes. Winners are determined solely on skill-based performance.',
+      'There is no random drawing or chance-based selection for recognition. Winners are determined solely on skill-based performance.',
     ],
   },
   {
@@ -58,20 +58,19 @@ const RULES: RuleSection[] = [
     paragraphs: [
       'Participants earn points based on the accuracy of their predictions, as calculated by the Whistle app.',
       'At the end of the Competition Period, the participant(s) with the highest total points will be declared the Competition winner(s).',
-      'If two or more participants are tied for the highest score, the total prize will be equally divided among all tied winners.',
+      'If two or more participants are tied for the highest score, all tied participants will be recognized as Competition winners.',
       'No luck or chance component is involved. All results are based on in-app performance.',
     ],
   },
   {
-    title: '7. Prize',
+    title: '7. Winner Recognition',
     paragraphs: [
-      'A total prize of $50 USD will be awarded per Competition Period.',
+      'No cash, monetary award, or other item of value is awarded for this Competition.',
     ],
     bullets: [
-      'If there is a single winner, they will receive the full amount.',
-      'If multiple winners are tied for first place, the prize will be split evenly among them.',
-      'Prizes will be delivered via [payment method - e.g., PayPal, Venmo, bank transfer].',
-      'Prizes are non-transferable. Winners are responsible for any applicable taxes or reporting requirements.',
+      'Winners may be acknowledged in the app leaderboard or other in-app competition surfaces.',
+      'If multiple winners are tied for first place, all tied winners will receive the same recognition.',
+      'No payment, transfer, or fulfillment process applies.',
     ],
   },
   {
@@ -82,7 +81,7 @@ const RULES: RuleSection[] = [
     bullets: [
       'An in-app notification;',
       'Email, if provided.',
-      'If a winner does not respond within 7 days, Finnternet LLC may award the prize to the next highest scorer.',
+      'No response is required to receive winner recognition.',
     ],
   },
   {
