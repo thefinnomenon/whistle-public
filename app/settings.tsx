@@ -418,19 +418,20 @@ Thank you!`
           </TouchableOpacity>
         </View>
 
-        {/* App Info */}
-        <View className="items-center gap-1">
-          <Text className="text-xs text-muted-foreground">
-            Whistle v{Constants.expoConfig?.version || '1.0.0'}
-            {buildLabel}
-          </Text>
-          <Text className="text-xs text-muted-foreground">
-            Channel: {Updates.channel || 'none'}
-          </Text>
-          <Text className="text-xs text-muted-foreground">
-            Domain: {env.DOMAIN || 'unknown'}
-          </Text>
-        </View>
+        {env.APP_ENV !== 'production' ? (
+          <View className="items-center gap-1">
+            <Text className="text-xs text-muted-foreground">
+              Whistle v{Constants.expoConfig?.version || '1.0.0'}
+              {buildLabel}
+            </Text>
+            <Text className="text-xs text-muted-foreground">
+              Channel: {Updates.channel || 'none'}
+            </Text>
+            <Text className="text-xs text-muted-foreground">
+              Domain: {env.DOMAIN || 'unknown'}
+            </Text>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   )
