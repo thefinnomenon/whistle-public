@@ -40,17 +40,67 @@ const NBA_JSON_HEADERS = {
 const NBA_JSON_TIMEOUT_MS = Number(process.env.NBA_JSON_TIMEOUT_MS ?? 120_000)
 const NBA_HTML_TIMEOUT_MS = Number(process.env.NBA_HTML_TIMEOUT_MS ?? 120_000)
 const ENABLE_OFFICIAL_CUMULATIVE_FETCH =
-  process.env.NBA_ENABLE_OFFICIAL_CUMULATIVE_FETCH !== '0'
-const LOG_OFFICIAL_COMPARE = process.env.NBA_LOG_OFFICIAL_COMPARE !== '0'
+  process.env.NBA_ENABLE_OFFICIAL_CUMULATIVE_FETCH === '1'
+const LOG_OFFICIAL_COMPARE = process.env.NBA_LOG_OFFICIAL_COMPARE === '1'
 const USE_OFFICIAL_CUMULATIVE_RESOLUTION =
   process.env.NBA_USE_OFFICIAL_CUMULATIVE_RESOLUTION === '1'
+const PERSIST_RAW_NBA_EVENTS = process.env.NBA_PERSIST_RAW_EVENTS === '1'
+const PERSIST_BOX_SCORE_SNAPSHOTS =
+  process.env.NBA_PERSIST_BOX_SCORE_SNAPSHOTS === '1'
+const ENABLE_ENTITYSPORT_SHADOW_CAPTURE =
+  process.env.NBA_ENABLE_ENTITYSPORT_SHADOW_CAPTURE === '1'
 const ENTITYSPORT_TOKEN = process.env.ENTITYSPORT_TOKEN ?? ''
 const ENTITYSPORT_TIMEOUT_MS = 12_000
 const ENTITYSPORT_MAX_PAYLOAD_BYTES = 850_000
 
+const readPositiveNumberEnv = (
+  name: string,
+  rawValue: string | undefined,
+  fallback: number,
+  minimum: number
+): number => {
+  if (!rawValue) return fallback
+
+  const value = Number(rawValue)
+  if (Number.isFinite(value) && value >= minimum) return value
+
+  console.warn(
+    `[config] invalid_number env=${name} value=${rawValue} fallback=${fallback}`
+  )
+  return fallback
+}
+
+const NBA_LIVE_HEARTBEAT_MS = readPositiveNumberEnv(
+  'NBA_LIVE_HEARTBEAT_MS',
+  process.env.NBA_LIVE_HEARTBEAT_MS,
+  60_000,
+  10_000
+)
+const NBA_OPEN_GAMES_REFRESH_MS = readPositiveNumberEnv(
+  'NBA_OPEN_GAMES_REFRESH_MS',
+  process.env.NBA_OPEN_GAMES_REFRESH_MS,
+  60_000,
+  10_000
+)
+const NBA_OPEN_GAMES_WATCH_RESTART_MS = 30_000
+const NBA_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS = 5_000
+
 type CacheEntry = {
   etag?: string
   lastModified?: string
+}
+
+type NbaGameData = FirebaseFirestore.DocumentData
+
+type FirestoreWrite = {
+  ref: FirebaseFirestore.DocumentReference
+  data: FirebaseFirestore.DocumentData
+}
+
+type CachedOpenNbaGame = {
+  id: string
+  ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
+  data: NbaGameData
 }
 
 type ResolvableQuestionDoc = Parameters<typeof resolveQuestionForEvent>[0] & {
@@ -569,6 +619,7 @@ const captureEntitySportShadowForAction = async ({
   anchorPeriod: number | null
   anchorClock: string | null
 }) => {
+  if (!ENABLE_ENTITYSPORT_SHADOW_CAPTURE) return
   if (!isNonEmptyString(ENTITYSPORT_TOKEN)) return
   try {
     const resolvedMatchId = await resolveEntitySportMatchId({
@@ -1515,7 +1566,13 @@ const persistBoxScoreSnapshot = async (
   actionNumber: number,
   boxScore: BoxScore | null
 ) => {
-  if (!boxScore || !Number.isFinite(actionNumber) || actionNumber <= 0) return
+  if (
+    !PERSIST_BOX_SCORE_SNAPSHOTS ||
+    !boxScore ||
+    !Number.isFinite(actionNumber) ||
+    actionNumber <= 0
+  )
+    return
 
   const scoreHome =
     typeof boxScore.homeTeam?.score === 'number'
@@ -2455,7 +2512,7 @@ const buildBaseGamePayload = (game: any, startTime: Date | null) => {
 }
 
 const commitInBatches = async (
-  writes: { ref: FirebaseFirestore.DocumentReference; data: any }[],
+  writes: FirestoreWrite[],
   onRetry?: () => void
 ) => {
   const limit = 200
@@ -2530,6 +2587,146 @@ const commitInBatches = async (
     }
   }
   if (count > 0) await commitWithRetry(batch)
+}
+
+const OPEN_NBA_GAMES_CACHE = new Map<string, CachedOpenNbaGame>()
+let openNbaGamesCacheReady = false
+let openNbaGamesLastRefreshMs = 0
+let openNbaGamesRefreshPromise: Promise<void> | null = null
+let openNbaGamesWatchStarted = false
+let openNbaGamesWatchInitialLoad: Promise<void> | null = null
+let openNbaGamesWatchUnsubscribe: (() => void) | null = null
+let openNbaGamesLastWatchErrorMs = 0
+
+const buildOpenNbaGamesQuery = () =>
+  db
+    .collection('games')
+    .where('state', '==', 'open')
+    .where('league', '==', 'NBA')
+
+const replaceOpenNbaGamesCache = (
+  docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]
+) => {
+  OPEN_NBA_GAMES_CACHE.clear()
+  for (const doc of docs) {
+    OPEN_NBA_GAMES_CACHE.set(doc.id, {
+      id: doc.id,
+      ref: doc.ref,
+      data: doc.data(),
+    })
+  }
+  openNbaGamesCacheReady = true
+  openNbaGamesLastRefreshMs = Date.now()
+}
+
+const mergeOpenNbaGameCacheData = (
+  gameId: string,
+  data: FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData>
+) => {
+  const cached = OPEN_NBA_GAMES_CACHE.get(gameId)
+  if (!cached) return
+  cached.data = {
+    ...cached.data,
+    ...data,
+  }
+}
+
+const removeOpenNbaGameFromCache = (gameId: string) => {
+  OPEN_NBA_GAMES_CACHE.delete(gameId)
+}
+
+const refreshOpenNbaGamesCache = async (reason: string): Promise<void> => {
+  if (openNbaGamesRefreshPromise) return openNbaGamesRefreshPromise
+
+  openNbaGamesRefreshPromise = (async () => {
+    const snap = await buildOpenNbaGamesQuery().get()
+    replaceOpenNbaGamesCache(snap.docs)
+    console.log(
+      `[nba] open_games_cache refresh reason=${reason} games=${snap.size}`
+    )
+  })().finally(() => {
+    openNbaGamesRefreshPromise = null
+  })
+
+  return openNbaGamesRefreshPromise
+}
+
+const startOpenNbaGamesWatch = (): Promise<void> => {
+  if (openNbaGamesWatchStarted && openNbaGamesWatchInitialLoad) {
+    return openNbaGamesWatchInitialLoad
+  }
+
+  const nowMs = Date.now()
+  if (
+    openNbaGamesLastWatchErrorMs > 0 &&
+    nowMs - openNbaGamesLastWatchErrorMs < NBA_OPEN_GAMES_WATCH_RESTART_MS
+  ) {
+    return Promise.resolve()
+  }
+
+  openNbaGamesWatchStarted = true
+  let initialLoadResolved = false
+  if (openNbaGamesWatchUnsubscribe) {
+    openNbaGamesWatchUnsubscribe()
+    openNbaGamesWatchUnsubscribe = null
+  }
+  openNbaGamesWatchInitialLoad = new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      if (initialLoadResolved) return
+      initialLoadResolved = true
+      console.warn(
+        `[nba] open_games_cache watch_initial_timeout timeoutMs=${NBA_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS}`
+      )
+      resolve()
+    }, NBA_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS)
+
+    openNbaGamesWatchUnsubscribe = buildOpenNbaGamesQuery().onSnapshot(
+      (snapshot) => {
+        replaceOpenNbaGamesCache(snapshot.docs)
+        if (!initialLoadResolved) {
+          initialLoadResolved = true
+          clearTimeout(timeout)
+          resolve()
+        }
+        if (snapshot.docChanges().length > 0) {
+          console.log(
+            `[nba] open_games_cache watch games=${snapshot.size} changes=${snapshot.docChanges().length}`
+          )
+        }
+      },
+      (error: Error) => {
+        console.error('[nba] open_games_cache watch_error', error)
+        openNbaGamesLastWatchErrorMs = Date.now()
+        openNbaGamesWatchStarted = false
+        openNbaGamesWatchUnsubscribe = null
+        if (!initialLoadResolved) {
+          initialLoadResolved = true
+          clearTimeout(timeout)
+          resolve()
+        }
+      }
+    )
+  })
+
+  return openNbaGamesWatchInitialLoad
+}
+
+const getOpenNbaGamesForLiveSync = async (): Promise<CachedOpenNbaGame[]> => {
+  await startOpenNbaGamesWatch()
+
+  const nowMs = Date.now()
+  const shouldRefresh =
+    !openNbaGamesCacheReady ||
+    nowMs - openNbaGamesLastRefreshMs >= NBA_OPEN_GAMES_REFRESH_MS
+
+  if (shouldRefresh) {
+    await refreshOpenNbaGamesCache(openNbaGamesCacheReady ? 'ttl' : 'initial')
+  }
+
+  return Array.from(OPEN_NBA_GAMES_CACHE.values()).map((game) => ({
+    ...game,
+    data: { ...game.data },
+  }))
 }
 
 export type NbaLiveSyncStats = {
@@ -2630,13 +2827,9 @@ export const syncNbaSchedule = async (daysAhead: number) => {
 
 export const syncNbaLiveEvents = async () => {
   const seasonProfiles = getSeasonProfilesById()
-  const gamesSnap = await db
-    .collection('games')
-    .where('state', '==', 'open')
-    .where('league', '==', 'NBA')
-    .get()
+  const openGames = await getOpenNbaGamesForLiveSync()
 
-  if (gamesSnap.empty) {
+  if (!openGames.length) {
     return {
       openGames: 0,
       updatedGames: 0,
@@ -2645,12 +2838,13 @@ export const syncNbaLiveEvents = async () => {
     } satisfies NbaLiveSyncStats
   }
 
-  const processGame = async (doc: FirebaseFirestore.QueryDocumentSnapshot) => {
+  const processGame = async (cachedGame: CachedOpenNbaGame) => {
     let updated = 0
     let actionsProcessed = 0
     let commitRetries = 0
-    const gameId = doc.id
-    const game = doc.data() as any
+    const gameId = cachedGame.id
+    const gameRef = cachedGame.ref
+    const game = cachedGame.data
     const nbaGameId = String(game?.nbaGameId || '')
     if (!nbaGameId) {
       console.log(
@@ -2725,6 +2919,34 @@ export const syncNbaLiveEvents = async () => {
       boxScore?.gameStatusText ??
       game?.nbaGameStatusText ??
       ''
+    const isGameFinal = isFinalStatus(nbaGameStatus, nbaGameStatusText)
+    const persistedGameStatusText =
+      typeof game?.nbaGameStatusText === 'string'
+        ? game.nbaGameStatusText
+        : String(game?.nbaGameStatusText ?? '')
+    const shouldPersistLiveSyncStatus =
+      !lastSyncMs ||
+      nowMs - lastSyncMs >= NBA_LIVE_HEARTBEAT_MS ||
+      game?.nbaGameStatus !== nbaGameStatus ||
+      persistedGameStatusText !== nbaGameStatusText
+    const persistLiveSyncStatus = async () => {
+      const cachedTimestamp = admin.firestore.Timestamp.now()
+      await gameRef.set(
+        {
+          nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+          nbaGameStatus: nbaGameStatus ?? null,
+          nbaGameStatusText,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      mergeOpenNbaGameCacheData(gameId, {
+        nbaLastSyncAt: cachedTimestamp,
+        nbaGameStatus: nbaGameStatus ?? null,
+        nbaGameStatusText,
+        updatedAt: cachedTimestamp,
+      })
+    }
     const isGameInProgress = isInProgressStatus(
       nbaGameStatus,
       nbaGameStatusText
@@ -2734,16 +2956,10 @@ export const syncNbaLiveEvents = async () => {
       console.log(
         `[nba] live sync skip game=${gameId} nbaGameId=${nbaGameId} reason=catchup_non_live status=${String(nbaGameStatus ?? '')} statusText=${String(nbaGameStatusText)}`
       )
-      await doc.ref.set(
-        {
-          nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
-          nbaGameStatus: nbaGameStatus ?? null,
-          nbaGameStatusText,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      )
-      if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+      if (shouldPersistLiveSyncStatus || isGameFinal) {
+        await persistLiveSyncStatus()
+      }
+      if (isGameFinal) {
         await resolveQuestionsAtGameEnd(
           gameId,
           lastActionNumber,
@@ -2752,6 +2968,7 @@ export const syncNbaLiveEvents = async () => {
         )
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
+        removeOpenNbaGameFromCache(gameId)
       }
       return { updated, actionsProcessed, commitRetries }
     }
@@ -2780,13 +2997,17 @@ export const syncNbaLiveEvents = async () => {
         persistQuestions: true,
         seasonProfiles,
       })
-      await doc.ref.set(
+      const cachedTimestamp = admin.firestore.Timestamp.now()
+      await gameRef.set(
         {
           gameStartQuestionsScheduledAt:
             admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       )
+      mergeOpenNbaGameCacheData(gameId, {
+        gameStartQuestionsScheduledAt: cachedTimestamp,
+      })
     }
 
     let newActions = actions
@@ -2810,16 +3031,10 @@ export const syncNbaLiveEvents = async () => {
     }
 
     if (newActions.length === 0) {
-      await doc.ref.set(
-        {
-          nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
-          nbaGameStatus: nbaGameStatus ?? null,
-          nbaGameStatusText,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      )
-      if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
+      if (shouldPersistLiveSyncStatus || isGameFinal) {
+        await persistLiveSyncStatus()
+      }
+      if (isGameFinal) {
         await resolveQuestionsAtGameEnd(
           gameId,
           lastActionNumber,
@@ -2828,6 +3043,7 @@ export const syncNbaLiveEvents = async () => {
         )
         console.log(`[nba] live sync game=${gameId} status=final auto-end`)
         await endGameById(gameId)
+        removeOpenNbaGameFromCache(gameId)
       }
       return { updated, actionsProcessed, commitRetries }
     }
@@ -2876,13 +3092,18 @@ export const syncNbaLiveEvents = async () => {
               : null,
           startTimeMs,
           persistResolvedMatchId: async (resolvedMatchId: string) => {
-            await doc.ref.set(
+            const cachedTimestamp = admin.firestore.Timestamp.now()
+            await gameRef.set(
               {
                 entitySportMatchId: resolvedMatchId,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
             )
+            mergeOpenNbaGameCacheData(gameId, {
+              entitySportMatchId: resolvedMatchId,
+              updatedAt: cachedTimestamp,
+            })
           },
           anchorActionNumber: latestFetchedActionNumber,
           anchorPeriod,
@@ -2906,21 +3127,24 @@ export const syncNbaLiveEvents = async () => {
     let latestActionObj = newActions[newActions.length - 1]
     for (let i = 0; i < newActions.length; i += batchSize) {
       const batch = newActions.slice(i, i + batchSize)
-      const eventWrites: { ref: any; data: any }[] = []
+      const eventWrites: FirestoreWrite[] = []
       const newEventPayloads: EngineEvent[] = []
       const previewDerivedStats = cloneDerivedStatsSnapshot(derivedStats)
 
       for (const action of batch) {
         const actionNumber = action.actionNumber as number
-        const rawRef = db
-          .collection(`games/${gameId}/rawEvents`)
-          .doc(String(actionNumber))
-        const rawPayload = {
-          source: 'nba.com',
-          nbaGameId,
-          actionNumber,
-          raw: action,
-          ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        if (PERSIST_RAW_NBA_EVENTS) {
+          const rawRef = db
+            .collection(`games/${gameId}/rawEvents`)
+            .doc(String(actionNumber))
+          const rawPayload = {
+            source: 'nba.com',
+            nbaGameId,
+            actionNumber,
+            raw: action,
+            ingestedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }
+          eventWrites.push({ ref: rawRef, data: rawPayload })
         }
 
         const eventRef = db
@@ -2985,7 +3209,6 @@ export const syncNbaLiveEvents = async () => {
         eventPayload.derivedStatsSnapshot =
           cloneDerivedStatsSnapshot(previewDerivedStats)
 
-        eventWrites.push({ ref: rawRef, data: rawPayload })
         eventWrites.push({ ref: eventRef, data: eventPayload })
         newEventPayloads.push(eventPayload)
       }
@@ -3104,7 +3327,8 @@ export const syncNbaLiveEvents = async () => {
     }
 
     const latestAction = latestActionObj?.actionNumber ?? 0
-    await doc.ref.set(
+    const cachedTimestamp = admin.firestore.Timestamp.now()
+    await gameRef.set(
       {
         lastNbaActionNumber: latestAction,
         nbaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3115,6 +3339,14 @@ export const syncNbaLiveEvents = async () => {
       },
       { merge: true }
     )
+    mergeOpenNbaGameCacheData(gameId, {
+      lastNbaActionNumber: latestAction,
+      nbaLastSyncAt: cachedTimestamp,
+      nbaGameStatus: nbaGameStatus ?? null,
+      nbaGameStatusText,
+      nbaDerivedStats: derivedStats,
+      updatedAt: cachedTimestamp,
+    })
     console.log(
       `[nba] live sync game=${gameId} nbaGameId=${nbaGameId} newActions=${newActions.length} latestAction=${latestAction}`
     )
@@ -3132,6 +3364,7 @@ export const syncNbaLiveEvents = async () => {
       )
       console.log(`[nba] live sync game=${gameId} action=game_end auto-end`)
       await endGameById(gameId)
+      removeOpenNbaGameFromCache(gameId)
     } else if (isFinalStatus(nbaGameStatus, nbaGameStatusText)) {
       await resolveQuestionsAtGameEnd(
         gameId,
@@ -3141,13 +3374,14 @@ export const syncNbaLiveEvents = async () => {
       )
       console.log(`[nba] live sync game=${gameId} status=final auto-end`)
       await endGameById(gameId)
+      removeOpenNbaGameFromCache(gameId)
     }
     updated += 1
     return { updated, actionsProcessed, commitRetries }
   }
 
   const gameResults = await Promise.all(
-    gamesSnap.docs.map((doc) => processGame(doc))
+    openGames.map((cachedGame) => processGame(cachedGame))
   )
   const totals = gameResults.reduce(
     (acc, result) => ({
@@ -3167,7 +3401,7 @@ export const syncNbaLiveEvents = async () => {
     )
   }
   return {
-    openGames: gamesSnap.size,
+    openGames: openGames.length,
     updatedGames: updated,
     actionsProcessed,
     commitRetries,

@@ -82,11 +82,139 @@ app.listen(PORT, () => {
     console.log('[sentry] Initialized')
 })
 
-const NBA_SCHEDULE_DAYS_AHEAD = Number(process.env.NBA_SCHEDULE_DAYS_AHEAD ?? 7)
-const NBA_SCHEDULE_POLL_MS = Number(
-  process.env.NBA_SCHEDULE_POLL_MS ?? 3_600_000
+const parseBooleanEnv = (
+  name: string,
+  rawValue: string | undefined,
+  fallback: boolean
+): boolean => {
+  if (!rawValue) return fallback
+
+  const value = rawValue.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true
+  if (['0', 'false', 'no', 'off'].includes(value)) return false
+
+  console.warn(
+    `[config] invalid_bool env=${name} value=${rawValue} fallback=${fallback ? '1' : '0'}`
+  )
+  return fallback
+}
+
+const parsePositiveNumberEnv = (
+  name: string,
+  rawValue: string | undefined,
+  fallback: number,
+  minimum: number
+): number => {
+  if (!rawValue) return fallback
+
+  const value = Number(rawValue)
+  if (Number.isFinite(value) && value >= minimum) return value
+
+  console.warn(
+    `[config] invalid_number env=${name} value=${rawValue} fallback=${fallback}`
+  )
+  return fallback
+}
+
+const BACKGROUND_WORKERS_ENABLED = parseBooleanEnv(
+  'RUN_BACKGROUND_WORKERS',
+  process.env.RUN_BACKGROUND_WORKERS,
+  // Production web instances default to API-only so App Engine autoscaling does
+  // not duplicate Firestore polling loops on every instance.
+  process.env.NODE_ENV !== 'production'
 )
-const NBA_LIVE_POLL_MS = Number(process.env.NBA_LIVE_POLL_MS ?? 1000)
+const RUN_PLAYER_COUNT_WORKER = parseBooleanEnv(
+  'RUN_PLAYER_COUNT_WORKER',
+  process.env.RUN_PLAYER_COUNT_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_SCHEDULED_GAMES_WORKER = parseBooleanEnv(
+  'RUN_SCHEDULED_GAMES_WORKER',
+  process.env.RUN_SCHEDULED_GAMES_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_NBA_SCHEDULE_WORKER = parseBooleanEnv(
+  'RUN_NBA_SCHEDULE_WORKER',
+  process.env.RUN_NBA_SCHEDULE_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_NBA_LIVE_WORKER = parseBooleanEnv(
+  'RUN_NBA_LIVE_WORKER',
+  process.env.RUN_NBA_LIVE_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_SEASON_PROFILES_WORKER = parseBooleanEnv(
+  'RUN_SEASON_PROFILES_WORKER',
+  process.env.RUN_SEASON_PROFILES_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_USER_CREATED_SLACK_WORKER = parseBooleanEnv(
+  'RUN_USER_CREATED_SLACK_WORKER',
+  process.env.RUN_USER_CREATED_SLACK_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_CLOSE_EXPIRED_QUESTIONS_WORKER = parseBooleanEnv(
+  'RUN_CLOSE_EXPIRED_QUESTIONS_WORKER',
+  process.env.RUN_CLOSE_EXPIRED_QUESTIONS_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+
+const NBA_SCHEDULE_DAYS_AHEAD = parsePositiveNumberEnv(
+  'NBA_SCHEDULE_DAYS_AHEAD',
+  process.env.NBA_SCHEDULE_DAYS_AHEAD,
+  7,
+  0
+)
+const NBA_SCHEDULE_POLL_MS = parsePositiveNumberEnv(
+  'NBA_SCHEDULE_POLL_MS',
+  process.env.NBA_SCHEDULE_POLL_MS,
+  3_600_000,
+  60_000
+)
+const NBA_LIVE_POLL_MS = parsePositiveNumberEnv(
+  'NBA_LIVE_POLL_MS',
+  process.env.NBA_LIVE_POLL_MS,
+  1_000,
+  1_000
+)
+const NBA_LIVE_IDLE_POLL_MS = parsePositiveNumberEnv(
+  'NBA_LIVE_IDLE_POLL_MS',
+  process.env.NBA_LIVE_IDLE_POLL_MS,
+  1_000,
+  NBA_LIVE_POLL_MS
+)
+const PLAYER_COUNT_POLL_MS = parsePositiveNumberEnv(
+  'PLAYER_COUNT_POLL_MS',
+  process.env.PLAYER_COUNT_POLL_MS,
+  60_000,
+  10_000
+)
+const START_SCHEDULED_GAMES_POLL_MS = parsePositiveNumberEnv(
+  'START_SCHEDULED_GAMES_POLL_MS',
+  process.env.START_SCHEDULED_GAMES_POLL_MS,
+  60_000,
+  10_000
+)
+const CLOSE_EXPIRED_QUESTIONS_POLL_MS = parsePositiveNumberEnv(
+  'CLOSE_EXPIRED_QUESTIONS_POLL_MS',
+  process.env.CLOSE_EXPIRED_QUESTIONS_POLL_MS,
+  5_000,
+  1_000
+)
+
+const startWorkerIfEnabled = (
+  name: string,
+  envName: string,
+  enabled: boolean,
+  start: () => void
+) => {
+  if (!enabled) {
+    console.log(`[worker] skipped name=${name} reason=disabled env=${envName}`)
+    return
+  }
+
+  start()
+}
 
 // Background worker: update player counts for active games every minute
 const startPlayerCountWorker = () => {
@@ -102,10 +230,8 @@ const startPlayerCountWorker = () => {
 
   // run immediately, then every minute
   run()
-  setInterval(run, 60_000)
+  setInterval(run, PLAYER_COUNT_POLL_MS)
 }
-
-startPlayerCountWorker()
 
 // Background worker: start scheduled games every minute
 const startScheduledGamesWorker = () => {
@@ -119,10 +245,8 @@ const startScheduledGamesWorker = () => {
     }
   }
   run()
-  setInterval(run, 60_000)
+  setInterval(run, START_SCHEDULED_GAMES_POLL_MS)
 }
-
-startScheduledGamesWorker()
 
 // Background worker: sync NBA schedule every hour
 const startNbaScheduleWorker = () => {
@@ -144,16 +268,17 @@ const startNbaScheduleWorker = () => {
   setInterval(run, NBA_SCHEDULE_POLL_MS)
 }
 
-startNbaScheduleWorker()
-
 // Background worker: sync NBA live events for open games
 const startNbaLiveFeedWorker = () => {
   console.log('[worker] NBA live feed worker started')
   let stopped = false
+  let nextPollMs = NBA_LIVE_IDLE_POLL_MS
   const run = async () => {
     const startedAt = Date.now()
     try {
       const stats = await syncNbaLiveEvents()
+      nextPollMs =
+        stats.openGames > 0 ? NBA_LIVE_POLL_MS : NBA_LIVE_IDLE_POLL_MS
       const durationMs = Date.now() - startedAt
       if (stats.actionsProcessed > 0) {
         console.log(
@@ -170,7 +295,7 @@ const startNbaLiveFeedWorker = () => {
     while (!stopped) {
       await run()
       await new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), NBA_LIVE_POLL_MS)
+        setTimeout(() => resolve(), nextPollMs)
       })
     }
   }
@@ -182,8 +307,6 @@ const startNbaLiveFeedWorker = () => {
   }
 }
 
-startNbaLiveFeedWorker()
-
 // Background worker: refresh NBA season profiles every 24h
 const startSeasonProfilesCacheWorker = () => {
   console.log('[worker] NBA season profiles worker started')
@@ -192,10 +315,6 @@ const startSeasonProfilesCacheWorker = () => {
     Sentry.captureException(err)
   })
 }
-
-startSeasonProfilesCacheWorker()
-
-startUserCreatedSlackWorker()
 
 // Background worker: close expired questions every second (small batch)
 const closeExpiredQuestionsWorker = () => {
@@ -214,7 +333,48 @@ const closeExpiredQuestionsWorker = () => {
     }
   }
   run()
-  setInterval(run, 1_000)
+  setInterval(run, CLOSE_EXPIRED_QUESTIONS_POLL_MS)
 }
 
-closeExpiredQuestionsWorker()
+startWorkerIfEnabled(
+  'player-count',
+  'RUN_PLAYER_COUNT_WORKER',
+  RUN_PLAYER_COUNT_WORKER,
+  startPlayerCountWorker
+)
+startWorkerIfEnabled(
+  'scheduled-games',
+  'RUN_SCHEDULED_GAMES_WORKER',
+  RUN_SCHEDULED_GAMES_WORKER,
+  startScheduledGamesWorker
+)
+startWorkerIfEnabled(
+  'nba-schedule',
+  'RUN_NBA_SCHEDULE_WORKER',
+  RUN_NBA_SCHEDULE_WORKER,
+  startNbaScheduleWorker
+)
+startWorkerIfEnabled(
+  'nba-live-feed',
+  'RUN_NBA_LIVE_WORKER',
+  RUN_NBA_LIVE_WORKER,
+  startNbaLiveFeedWorker
+)
+startWorkerIfEnabled(
+  'season-profiles',
+  'RUN_SEASON_PROFILES_WORKER',
+  RUN_SEASON_PROFILES_WORKER,
+  startSeasonProfilesCacheWorker
+)
+startWorkerIfEnabled(
+  'user-created-slack',
+  'RUN_USER_CREATED_SLACK_WORKER',
+  RUN_USER_CREATED_SLACK_WORKER,
+  startUserCreatedSlackWorker
+)
+startWorkerIfEnabled(
+  'close-expired-questions',
+  'RUN_CLOSE_EXPIRED_QUESTIONS_WORKER',
+  RUN_CLOSE_EXPIRED_QUESTIONS_WORKER,
+  closeExpiredQuestionsWorker
+)
