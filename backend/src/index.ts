@@ -116,13 +116,19 @@ const parsePositiveNumberEnv = (
   return fallback
 }
 
-const BACKGROUND_WORKERS_ENABLED = parseBooleanEnv(
-  'RUN_BACKGROUND_WORKERS',
-  process.env.RUN_BACKGROUND_WORKERS,
-  // Production web instances default to API-only so App Engine autoscaling does
-  // not duplicate Firestore polling loops on every instance.
-  process.env.NODE_ENV !== 'production'
+const BACKGROUND_WORKERS_FORCE_DISABLED = parseBooleanEnv(
+  'DISABLE_BACKGROUND_WORKERS',
+  process.env.DISABLE_BACKGROUND_WORKERS,
+  process.env.NODE_ENV === 'production'
 )
+const BACKGROUND_WORKERS_ENABLED =
+  parseBooleanEnv(
+    'RUN_BACKGROUND_WORKERS',
+    process.env.RUN_BACKGROUND_WORKERS,
+    // Production web instances default to API-only so App Engine autoscaling does
+    // not duplicate Firestore polling loops on every instance.
+    process.env.NODE_ENV !== 'production'
+  ) && !BACKGROUND_WORKERS_FORCE_DISABLED
 const RUN_PLAYER_COUNT_WORKER = parseBooleanEnv(
   'RUN_PLAYER_COUNT_WORKER',
   process.env.RUN_PLAYER_COUNT_WORKER,
@@ -208,6 +214,13 @@ const startWorkerIfEnabled = (
   enabled: boolean,
   start: () => void
 ) => {
+  if (BACKGROUND_WORKERS_FORCE_DISABLED) {
+    console.log(
+      `[worker] skipped name=${name} reason=force_disabled env=DISABLE_BACKGROUND_WORKERS`
+    )
+    return
+  }
+
   if (!enabled) {
     console.log(`[worker] skipped name=${name} reason=disabled env=${envName}`)
     return
