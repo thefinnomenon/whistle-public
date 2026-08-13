@@ -219,14 +219,33 @@ const countGameSubcollectionDocs = async (
   return total
 }
 
+const countDiagnosticSubcollectionDocs = async (
+  collectionName: string
+): Promise<number> => countQuery(db.collectionGroup(collectionName))
+
+const getGameIdFromDiagnosticDoc = (
+  doc: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>,
+  collectionName: string
+): string | null => {
+  const segments = doc.ref.path.split('/')
+  if (
+    segments.length === 4 &&
+    segments[0] === 'games' &&
+    segments[2] === collectionName
+  ) {
+    return segments[1]
+  }
+
+  return null
+}
+
 const deleteGameSubcollectionDocs = async (
   label: string,
   collectionName: string,
-  gameRefs: GameRef[],
   options: CleanupOptions
 ): Promise<CleanupResult> => {
   if (!options.apply) {
-    const matched = await countGameSubcollectionDocs(gameRefs, collectionName)
+    const matched = await countDiagnosticSubcollectionDocs(collectionName)
     console.log(
       `[cleanup/diagnostic-storage] dry_run label=${label} action=delete matched=${matched}`
     )
@@ -242,37 +261,48 @@ const deleteGameSubcollectionDocs = async (
   let applied = 0
   let batchesCommitted = 0
 
-  for (const gameRef of gameRefs) {
-    while (true) {
-      const pageSize = limitedPageSize(
-        options.pageSize,
-        applied,
-        options.maxDocs
-      )
-      if (pageSize <= 0) break
+  while (true) {
+    const pageSize = limitedPageSize(options.pageSize, applied, options.maxDocs)
+    if (pageSize <= 0) break
 
-      const query = gameRef.collection(collectionName).limit(pageSize).select()
-      const snap = await getQueryPageWithRetry(query, label, 'delete')
-      if (snap.empty) break
+    const query = db.collectionGroup(collectionName).limit(pageSize).select()
+    const snap = await getQueryPageWithRetry(query, label, 'delete')
+    if (snap.empty) break
 
-      const batch = db.batch()
-      for (const doc of snap.docs) {
-        batch.delete(doc.ref)
-      }
-      const attempts = await commitBatchWithRetry(batch, label, 'delete')
-
-      applied += snap.size
-      batchesCommitted += 1
-      if (attempts > 1 || batchesCommitted % 25 === 0 || snap.size < pageSize) {
-        console.log(
-          `[cleanup/diagnostic-storage] progress label=${label} action=delete applied=${applied} game=${gameRef.id} lastBatch=${snap.size} batches=${batchesCommitted} attempts=${attempts}`
-        )
+    const batch = db.batch()
+    let queued = 0
+    let skipped = 0
+    let lastGameId = 'not-set'
+    for (const doc of snap.docs) {
+      const gameId = getGameIdFromDiagnosticDoc(doc, collectionName)
+      if (!gameId) {
+        skipped += 1
+        continue
       }
 
-      if (snap.size < pageSize) break
+      lastGameId = gameId
+      queued += 1
+      batch.delete(doc.ref)
     }
 
-    if (options.maxDocs !== null && applied >= options.maxDocs) break
+    if (queued <= 0) {
+      console.warn(
+        `[cleanup/diagnostic-storage] skipped_collection_group_page label=${label} action=delete skipped=${skipped} reason=no_game_docs`
+      )
+      break
+    }
+
+    const attempts = await commitBatchWithRetry(batch, label, 'delete')
+
+    applied += queued
+    batchesCommitted += 1
+    if (attempts > 1 || batchesCommitted % 25 === 0 || snap.size < pageSize) {
+      console.log(
+        `[cleanup/diagnostic-storage] progress label=${label} action=delete applied=${applied} game=${lastGameId} lastBatch=${queued} batches=${batchesCommitted} attempts=${attempts}${skipped > 0 ? ` skipped=${skipped}` : ''}`
+      )
+    }
+
+    if (snap.size < pageSize) break
   }
 
   return {
@@ -396,17 +426,18 @@ const main = async () => {
   )
 
   const results: CleanupResult[] = []
-  const gameRefs = await loadGameRefs()
-  console.log(`[cleanup/diagnostic-storage] games=${gameRefs.length}`)
+  let gameRefs: GameRef[] | null = null
+  const getGameRefs = async (): Promise<GameRef[]> => {
+    if (!gameRefs) {
+      gameRefs = await loadGameRefs()
+      console.log(`[cleanup/diagnostic-storage] games=${gameRefs.length}`)
+    }
+    return gameRefs
+  }
 
   if (options.includeRawEvents) {
     results.push(
-      await deleteGameSubcollectionDocs(
-        'rawEvents',
-        'rawEvents',
-        gameRefs,
-        options
-      )
+      await deleteGameSubcollectionDocs('rawEvents', 'rawEvents', options)
     )
   }
 
@@ -415,7 +446,6 @@ const main = async () => {
       await deleteGameSubcollectionDocs(
         'boxScoreSnapshots',
         'boxScoreSnapshots',
-        gameRefs,
         options
       )
     )
@@ -426,14 +456,15 @@ const main = async () => {
       await deleteGameSubcollectionDocs(
         'entitySportShadow',
         'entitySportShadow',
-        gameRefs,
         options
       )
     )
   }
 
   if (options.includeOfficialCumulative) {
-    results.push(await clearOfficialCumulativeStats(gameRefs, options))
+    results.push(
+      await clearOfficialCumulativeStats(await getGameRefs(), options)
+    )
   }
 
   logSummary(results, options.apply)
