@@ -2,7 +2,27 @@ import { createHash } from 'crypto'
 import https from 'https'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
 import { admin, db } from '../firebase'
-import { endGameById } from '../routes/game'
+import { calculateScores, endGameById } from '../routes/game'
+import {
+  createAndSendEngineQuestion,
+  type EngineQuestionPayload,
+  type QuestionWindowType,
+  type ResolutionContext,
+} from './engine'
+import { trackEvent } from './mixpanel'
+import {
+  buildNflQuestionCandidate,
+  buildNflPregameGameWinnerPayload,
+  extractNflPassTarget,
+  NFL_MAX_QUESTIONS_PER_GAME,
+  NFL_QUESTION_MIN_INTERVAL_MS,
+  NFL_QUESTION_RESPONSE_MS,
+  resolveNflQuestionForPlay,
+  type NflActiveQuestion,
+  type NflQuestionDecision,
+} from './nflQuestionEngine'
+import { sendDismissNotification } from './notifications'
+import { buildQuestionResolvedProps } from './questionAnalytics'
 
 const ESPN_NFL_SCOREBOARD_URL =
   'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
@@ -71,6 +91,9 @@ type NflFieldPosition = {
 
 export type EspnNflPlay = {
   id: string
+  driveId: string | null
+  driveTeamId: string | null
+  driveTeamAbbreviation: string | null
   sequenceNumber: string | null
   text: string
   typeId: string | null
@@ -93,6 +116,24 @@ export type EspnNflPlay = {
   reviewResult: 'UPHELD' | 'REVERSED' | null
 }
 
+export type NflPlayerRole = 'PASSER' | 'RUSHER' | 'RECEIVER'
+
+export type EspnNflAthleteName = {
+  id: string
+  teamId: string
+  firstName: string
+  lastName: string
+  displayName: string
+  roles: NflPlayerRole[]
+  passingAttempts: number
+  passingYards: number
+  rushingAttempts: number
+  rushingYards: number
+  receptions: number
+  receivingYards: number
+  receivingTargets: number
+}
+
 export type EspnNflSummary = {
   competitionId: string | null
   statusName: string
@@ -101,7 +142,10 @@ export type EspnNflSummary = {
   completed: boolean
   homeScore: number | null
   awayScore: number | null
+  homeTeam: string
+  awayTeam: string
   plays: EspnNflPlay[]
+  athletes: EspnNflAthleteName[]
 }
 
 export type EspnNflScheduledGame = {
@@ -329,7 +373,16 @@ const extractPossessionTeamId = (play: JsonObject): string | null => {
   return null
 }
 
-const extractPlay = (value: JsonValue): EspnNflPlay | null => {
+type NflDriveContext = {
+  id: string | null
+  teamId: string | null
+  teamAbbreviation: string | null
+}
+
+const extractPlay = (
+  value: JsonValue,
+  driveContext: NflDriveContext | null = null
+): EspnNflPlay | null => {
   const play = asObject(value)
   const id = asString(play?.id)
   if (!play || !id) return null
@@ -343,6 +396,9 @@ const extractPlay = (value: JsonValue): EspnNflPlay | null => {
 
   return {
     id,
+    driveId: driveContext?.id ?? null,
+    driveTeamId: driveContext?.teamId ?? null,
+    driveTeamAbbreviation: driveContext?.teamAbbreviation ?? null,
     sequenceNumber: asString(play.sequenceNumber),
     text: asString(play.text) ?? '',
     typeId: asString(type?.id),
@@ -369,23 +425,100 @@ const extractPlay = (value: JsonValue): EspnNflPlay | null => {
 const extractDrivePlays = (value: JsonValue | undefined): EspnNflPlay[] => {
   const drive = asObject(value)
   if (!drive) return []
+  const team = asObject(drive.team)
+  const driveContext: NflDriveContext = {
+    id: asString(drive.id),
+    teamId: asString(team?.id),
+    teamAbbreviation: normalizeTeamCode(team?.abbreviation) || null,
+  }
   return asArray(drive.plays)
-    .map(extractPlay)
+    .map((play) => extractPlay(play, driveContext))
     .filter((play): play is EspnNflPlay => play !== null)
 }
 
 const extractSummaryPlays = (root: JsonObject): EspnNflPlay[] => {
   const drives = asObject(root.drives)
   const plays = [
+    ...asArray(root.plays)
+      .map((play) => extractPlay(play))
+      .filter((play): play is EspnNflPlay => play !== null),
     ...asArray(drives?.previous).flatMap(extractDrivePlays),
     ...extractDrivePlays(drives?.current),
-    ...asArray(root.plays)
-      .map(extractPlay)
-      .filter((play): play is EspnNflPlay => play !== null),
   ]
   const byId = new Map<string, EspnNflPlay>()
   for (const play of plays) byId.set(play.id, play)
   return [...byId.values()]
+}
+
+const extractSummaryAthletes = (root: JsonObject): EspnNflAthleteName[] => {
+  const boxscore = asObject(root.boxscore)
+  const athletesById = new Map<string, EspnNflAthleteName>()
+  for (const teamEntry of asArray(boxscore?.players)) {
+    const teamBoxscore = asObject(teamEntry)
+    const team = asObject(teamBoxscore?.team)
+    const teamId = asString(team?.id)
+    if (!teamId) continue
+    for (const statisticEntry of asArray(teamBoxscore?.statistics)) {
+      const statistic = asObject(statisticEntry)
+      const statisticName = asString(statistic?.name)
+      const keys = asArray(statistic?.keys).map(asString)
+      for (const athleteEntry of asArray(statistic?.athletes)) {
+        const row = asObject(athleteEntry)
+        const athlete = asObject(row?.athlete)
+        const id = asString(athlete?.id)
+        const firstName = asString(athlete?.firstName)
+        const lastName = asString(athlete?.lastName)
+        const displayName = asString(athlete?.displayName)
+        if (!id || !firstName || !lastName || !displayName) continue
+        const athleteKey = `${teamId}:${id}`
+        const existing = athletesById.get(athleteKey)
+        const profile: EspnNflAthleteName = existing ?? {
+          id,
+          teamId,
+          firstName,
+          lastName,
+          displayName,
+          roles: [],
+          passingAttempts: 0,
+          passingYards: 0,
+          rushingAttempts: 0,
+          rushingYards: 0,
+          receptions: 0,
+          receivingYards: 0,
+          receivingTargets: 0,
+        }
+        const stats = asArray(row?.stats)
+        const readStat = (key: string): number => {
+          const index = keys.findIndex((candidate) => candidate === key)
+          return index >= 0 ? (asNumber(stats[index]) ?? 0) : 0
+        }
+        if (statisticName === 'passing') {
+          if (!profile.roles.includes('PASSER')) profile.roles.push('PASSER')
+          const attemptsIndex = keys.findIndex(
+            (statName) => statName === 'completions/passingAttempts'
+          )
+          const attemptsValue =
+            attemptsIndex >= 0 ? asString(stats[attemptsIndex]) : null
+          const attempts = attemptsValue?.split('/')[1]
+          profile.passingAttempts = attempts ? Number(attempts) || 0 : 0
+          profile.passingYards = readStat('passingYards')
+        } else if (statisticName === 'rushing') {
+          if (!profile.roles.includes('RUSHER')) profile.roles.push('RUSHER')
+          profile.rushingAttempts = readStat('rushingAttempts')
+          profile.rushingYards = readStat('rushingYards')
+        } else if (statisticName === 'receiving') {
+          if (!profile.roles.includes('RECEIVER')) {
+            profile.roles.push('RECEIVER')
+          }
+          profile.receptions = readStat('receptions')
+          profile.receivingYards = readStat('receivingYards')
+          profile.receivingTargets = readStat('receivingTargets')
+        }
+        athletesById.set(athleteKey, profile)
+      }
+    }
+  }
+  return [...athletesById.values()]
 }
 
 export const parseEspnNflSummary = (root: JsonObject): EspnNflSummary => {
@@ -403,7 +536,10 @@ export const parseEspnNflSummary = (root: JsonObject): EspnNflSummary => {
     completed: status.completed || status.name === 'STATUS_FINAL',
     homeScore: asNumber(home?.score),
     awayScore: asNumber(away?.score),
+    homeTeam: extractTeamCode(home),
+    awayTeam: extractTeamCode(away),
     plays: extractSummaryPlays(root),
+    athletes: extractSummaryAthletes(root),
   }
 }
 
@@ -680,6 +816,235 @@ const readStoredFingerprints = (
   return fingerprints
 }
 
+const asNflQuestionWindowType = (
+  value: JsonValue | undefined
+): QuestionWindowType | null => {
+  const windowType = asString(value)
+  if (
+    windowType === 'NFL_NEXT_PLAY' ||
+    windowType === 'NFL_DRIVE' ||
+    windowType === 'NFL_NEXT_TARGET' ||
+    windowType === 'PERIOD' ||
+    windowType === 'GAME'
+  ) {
+    return windowType
+  }
+  return null
+}
+
+const parseStoredChoices = (
+  value: JsonValue | undefined
+): { id: string; value: string }[] | null => {
+  const choices = asArray(value).flatMap((entry) => {
+    const choice = asObject(entry)
+    const id = asString(choice?.id)
+    const label = asString(choice?.value)
+    return id && label ? [{ id, value: label }] : []
+  })
+  return choices.length > 0 ? choices : null
+}
+
+const parseStoredStringRecord = (
+  value: JsonValue | undefined
+): Record<string, string> | null => {
+  const object = asObject(value)
+  if (!object) return null
+  const entries = Object.entries(object).flatMap(([key, entry]) => {
+    const parsed = asString(entry)
+    return parsed ? [[key, parsed] as const] : []
+  })
+  return entries.length > 0 ? Object.fromEntries(entries) : null
+}
+
+const parseStoredResolutionContext = (
+  value: JsonValue | undefined
+): ResolutionContext | null => {
+  const context = asObject(value)
+  if (!context) return null
+  const type = asString(context.type)
+  const anchorPlayId = asString(context.anchorPlayId)
+  const driveId = asString(context.driveId)
+  if (!type || !anchorPlayId) return null
+  return {
+    type,
+    anchorPlayId,
+    driveId,
+    teamId: asString(context.teamId),
+    teamCode: asString(context.teamCode),
+    homeTricode: asString(context.homeTricode),
+    awayTricode: asString(context.awayTricode),
+    redZoneVariant: asString(context.redZoneVariant),
+    targetToken: asString(context.targetToken),
+    targetLastSeenAtMs: asNumber(context.targetLastSeenAtMs),
+    targetQuietWindowMs: asNumber(context.targetQuietWindowMs),
+    period: asNumber(context.period),
+    statType: asString(context.statType),
+    target: asNumber(context.target),
+    playerToken: asString(context.playerToken),
+    playerDisplayName: asString(context.playerDisplayName),
+    choices: parseStoredChoices(context.choices) ?? undefined,
+    receiverChoiceByTarget:
+      parseStoredStringRecord(context.receiverChoiceByTarget) ?? undefined,
+  }
+}
+
+const readStoredActiveNflQuestions = (
+  value: JsonValue | undefined
+): NflActiveQuestion[] =>
+  asArray(value).flatMap((entry) => {
+    const question = asObject(entry)
+    const id = asString(question?.id)
+    const templateId = asString(question?.templateId)
+    const windowType = asNflQuestionWindowType(question?.windowType)
+    const createdAtMs = asNumber(question?.createdAtMs) ?? 0
+    const resolutionContext = parseStoredResolutionContext(
+      question?.resolutionContext
+    )
+    if (!id || !templateId || !windowType || !resolutionContext) return []
+    return [{ id, templateId, windowType, resolutionContext, createdAtMs }]
+  })
+
+const readStoredStringArray = (value: JsonValue | undefined): string[] =>
+  asArray(value).flatMap((entry) => {
+    const parsed = asString(entry)
+    return parsed ? [parsed] : []
+  })
+
+const toActiveNflQuestion = (
+  id: string,
+  payload: EngineQuestionPayload,
+  createdAtMs: number
+): NflActiveQuestion => ({
+  id,
+  templateId: payload.templateId,
+  windowType: payload.windowType,
+  resolutionContext: payload.resolutionContext ?? {},
+  createdAtMs,
+})
+
+const persistNflQuestionDecision = async (
+  gameId: string,
+  question: NflActiveQuestion,
+  play: EspnNflPlay,
+  decision: NflQuestionDecision
+): Promise<void> => {
+  const questionRef = db
+    .collection('games')
+    .doc(gameId)
+    .collection('questions')
+    .doc(question.id)
+  if (decision.state === 'resolved') {
+    await questionRef.set(
+      {
+        state: 'resolved',
+        answer: decision.answer,
+        resolvedNflPlayId: play.id,
+        resolutionSource: 'espn',
+        resolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+    try {
+      await calculateScores(gameId, question.id)
+    } catch (error) {
+      console.error(
+        `[nfl] question score_failed game=${gameId} question=${question.id} play=${play.id} message=${String(error)}`
+      )
+    }
+  } else {
+    await questionRef.set(
+      {
+        state: 'cancelled',
+        cancelReason: decision.reason,
+        resolvedNflPlayId: play.id,
+        resolutionSource: 'espn',
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+  }
+
+  trackEvent(
+    'question_resolved',
+    buildQuestionResolvedProps({
+      questionId: question.id,
+      gameId,
+      resolvedTimestampMs: Date.now(),
+      outcome: decision.state === 'resolved' ? decision.answer : null,
+      resolutionType: decision.state === 'resolved' ? 'normal' : 'void',
+      voidReason:
+        decision.state === 'cancelled' ? decision.reason.toLowerCase() : null,
+    })
+  )
+  try {
+    await sendDismissNotification(gameId, question.id, `game_${gameId}`)
+  } catch (error) {
+    console.error(
+      `[nfl] question dismiss_failed game=${gameId} question=${question.id} message=${String(error)}`
+    )
+  }
+  console.log(
+    `[nfl] question resolved game=${gameId} question=${question.id} template=${question.templateId} state=${decision.state} answer=${decision.answer ?? 'null'} reason=${decision.reason ?? 'null'} play=${play.id}`
+  )
+}
+
+const resolveActiveNflQuestionsForPlay = async (
+  gameId: string,
+  activeQuestions: NflActiveQuestion[],
+  play: EspnNflPlay,
+  playsThroughCurrent: readonly EspnNflPlay[],
+  gameCompleted = false
+): Promise<NflActiveQuestion[]> => {
+  const remaining: NflActiveQuestion[] = []
+  for (const question of activeQuestions) {
+    const decision = resolveNflQuestionForPlay(
+      question,
+      play,
+      playsThroughCurrent,
+      gameCompleted
+    )
+    if (!decision) {
+      remaining.push(question)
+      continue
+    }
+    await persistNflQuestionDecision(gameId, question, play, decision)
+  }
+  return remaining
+}
+
+const cancelReceiverQuestionsForRedZone = async (
+  gameId: string,
+  activeQuestions: NflActiveQuestion[],
+  play: EspnNflPlay
+): Promise<NflActiveQuestion[]> => {
+  const remaining: NflActiveQuestion[] = []
+  for (const question of activeQuestions) {
+    if (question.resolutionContext.type !== 'NFL_NEXT_TARGET') {
+      remaining.push(question)
+      continue
+    }
+    const expectedTarget = question.resolutionContext.targetToken
+    const actualTarget = extractNflPassTarget(play)
+    if (
+      typeof expectedTarget === 'string' &&
+      actualTarget &&
+      expectedTarget.toLowerCase().replace(/[^a-z0-9]/g, '') ===
+        actualTarget.toLowerCase().replace(/[^a-z0-9]/g, '')
+    ) {
+      remaining.push(question)
+      continue
+    }
+    await persistNflQuestionDecision(gameId, question, play, {
+      state: 'cancelled',
+      answer: null,
+      reason: 'RED_ZONE_PRIORITY',
+    })
+  }
+  return remaining
+}
+
 const commitNflPlayWrites = async (
   writes: {
     ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
@@ -716,6 +1081,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
       data: FirebaseFirestore.DocumentData
     }[] = []
+    const createdPlays: EspnNflPlay[] = []
     let created = 0
     let revised = 0
 
@@ -726,7 +1092,10 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       const isRevision = typeof previousFingerprint === 'string'
       nextFingerprints[play.id] = fingerprint
       if (isRevision) revised += 1
-      else created += 1
+      else {
+        created += 1
+        createdPlays.push(play)
+      }
 
       writes.push({
         ref: cachedGame.ref.collection('nflEvents').doc(`play_${play.id}`),
@@ -744,6 +1113,224 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
     if (writes.length > 0) await commitNflPlayWrites(writes)
 
     const nowMs = Date.now()
+    const latestPlay =
+      summary.plays.length > 0 ? summary.plays[summary.plays.length - 1] : null
+    let activeQuestions = readStoredActiveNflQuestions(game.nflActiveQuestions)
+    let redZoneAskedDriveIds = readStoredStringArray(
+      game.nflQuestionedRedZoneDriveIds
+    )
+    let redZoneAskedPeriodKeys = readStoredStringArray(
+      game.nflQuestionedRedZonePeriodKeys
+    )
+    let receiverQuestionKeys = readStoredStringArray(
+      game.nflReceiverQuestionKeys
+    )
+    let completionReceiverHalfKeys = readStoredStringArray(
+      game.nflCompletionReceiverHalfKeys
+    )
+    let timeoutQuestionDriveIds = readStoredStringArray(
+      game.nflTimeoutQuestionDriveIds
+    )
+    let gameQuestionKeys = readStoredStringArray(game.nflGameQuestionKeys)
+    let periodQuestionKeys = readStoredStringArray(game.nflPeriodQuestionKeys)
+    let questionStateChanged = false
+    let questionCount =
+      typeof game.nflQuestionCount === 'number' &&
+      Number.isFinite(game.nflQuestionCount)
+        ? game.nflQuestionCount
+        : 0
+    let lastQuestionAtMs =
+      typeof game.nflLastQuestionAtMs === 'number' &&
+      Number.isFinite(game.nflLastQuestionAtMs)
+        ? game.nflLastQuestionAtMs
+        : null
+    if (
+      summary.plays.length === 0 &&
+      !summary.completed &&
+      questionCount < NFL_MAX_QUESTIONS_PER_GAME &&
+      !gameQuestionKeys.includes('winner')
+    ) {
+      const homeTeam =
+        typeof game.homeTeam === 'string' ? game.homeTeam.trim() : ''
+      const awayTeam =
+        typeof game.awayTeam === 'string' ? game.awayTeam.trim() : ''
+      if (homeTeam && awayTeam) {
+        const payload = buildNflPregameGameWinnerPayload(homeTeam, awayTeam)
+        const questionId = await createAndSendEngineQuestion(gameId, payload)
+        activeQuestions.push(toActiveNflQuestion(questionId, payload, nowMs))
+        gameQuestionKeys = [...gameQuestionKeys, 'winner'].slice(-20)
+        questionCount += 1
+        lastQuestionAtMs = nowMs
+        questionStateChanged = true
+        console.log(
+          `[nfl] question created game=${gameId} question=${questionId} play=pregame template=${payload.templateId} priority=GAME`
+        )
+      }
+    }
+    for (const play of createdPlays) {
+      const playIndex = summary.plays.findIndex(
+        (summaryPlay) => summaryPlay.id === play.id
+      )
+      const previousActiveCount = activeQuestions.length
+      activeQuestions = await resolveActiveNflQuestionsForPlay(
+        gameId,
+        activeQuestions,
+        play,
+        summary.plays.slice(0, Math.max(0, playIndex) + 1),
+        summary.completed && play.id === latestPlay?.id
+      )
+      if (activeQuestions.length !== previousActiveCount) {
+        questionStateChanged = true
+      }
+    }
+    const latestCreatedPlay = createdPlays[createdPlays.length - 1] ?? null
+    if (
+      summary.completed &&
+      latestPlay &&
+      latestCreatedPlay?.id !== latestPlay.id &&
+      activeQuestions.length > 0
+    ) {
+      const previousActiveCount = activeQuestions.length
+      activeQuestions = await resolveActiveNflQuestionsForPlay(
+        gameId,
+        activeQuestions,
+        latestPlay,
+        summary.plays,
+        true
+      )
+      if (activeQuestions.length !== previousActiveCount) {
+        questionStateChanged = true
+      }
+    }
+
+    if (latestCreatedPlay && latestCreatedPlay.id === latestPlay?.id) {
+      const homeTeam =
+        typeof game.homeTeam === 'string' ? game.homeTeam.trim() : ''
+      const awayTeam =
+        typeof game.awayTeam === 'string' ? game.awayTeam.trim() : ''
+      const candidate = buildNflQuestionCandidate({
+        plays: summary.plays,
+        anchorPlay: latestCreatedPlay,
+        homeTeam,
+        awayTeam,
+        nowMs,
+        redZoneAskedDriveIds,
+        redZoneAskedPeriodKeys,
+        receiverQuestionKeys,
+        completionReceiverHalfKeys,
+        timeoutQuestionDriveIds,
+        gameQuestionKeys,
+        periodQuestionKeys,
+        athletes: summary.athletes,
+      })
+      if (candidate?.priority === 'RED_ZONE') {
+        activeQuestions = await cancelReceiverQuestionsForRedZone(
+          gameId,
+          activeQuestions,
+          latestCreatedPlay
+        )
+      }
+
+      if (candidate && questionCount >= NFL_MAX_QUESTIONS_PER_GAME) {
+        console.log(
+          `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidate.payload.templateId} reason=game_cap count=${questionCount} cap=${NFL_MAX_QUESTIONS_PER_GAME}`
+        )
+      } else if (candidate) {
+        const bypassCadence =
+          candidate.priority === 'RED_ZONE' ||
+          candidate.priority === 'FIELD_GOAL' ||
+          candidate.priority === 'FOURTH_DOWN' ||
+          candidate.priority === 'GAME' ||
+          candidate.priority === 'PERIOD_TEAM'
+        const cadenceReady =
+          lastQuestionAtMs === null ||
+          nowMs - lastQuestionAtMs >= NFL_QUESTION_MIN_INTERVAL_MS
+        const responseWindowQuestions = activeQuestions.filter(
+          (question) =>
+            question.createdAtMs > 0 &&
+            nowMs - question.createdAtMs < NFL_QUESTION_RESPONSE_MS
+        )
+        if (responseWindowQuestions.length > 0) {
+          console.log(
+            `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidate.payload.templateId} reason=response_window_active count=${responseWindowQuestions.length}`
+          )
+        } else if (!bypassCadence && !cadenceReady) {
+          console.log(
+            `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidate.payload.templateId} reason=cadence remainingMs=${NFL_QUESTION_MIN_INTERVAL_MS - (nowMs - (lastQuestionAtMs ?? nowMs))}`
+          )
+        } else {
+          const questionId = await createAndSendEngineQuestion(
+            gameId,
+            candidate.payload
+          )
+          activeQuestions.push(
+            toActiveNflQuestion(questionId, candidate.payload, nowMs)
+          )
+          lastQuestionAtMs = nowMs
+          questionCount += 1
+          if (candidate.redZoneDriveId) {
+            redZoneAskedDriveIds = [
+              ...redZoneAskedDriveIds.filter(
+                (driveId) => driveId !== candidate.redZoneDriveId
+              ),
+              candidate.redZoneDriveId,
+            ].slice(-50)
+          }
+          if (candidate.redZonePeriodKey) {
+            redZoneAskedPeriodKeys = [
+              ...redZoneAskedPeriodKeys.filter(
+                (key) => key !== candidate.redZonePeriodKey
+              ),
+              candidate.redZonePeriodKey,
+            ].slice(-10)
+          }
+          if (candidate.receiverQuestionKey) {
+            receiverQuestionKeys = [
+              ...receiverQuestionKeys.filter(
+                (key) => key !== candidate.receiverQuestionKey
+              ),
+              candidate.receiverQuestionKey,
+            ].slice(-50)
+          }
+          if (candidate.completionReceiverHalfKey) {
+            completionReceiverHalfKeys = [
+              ...completionReceiverHalfKeys.filter(
+                (key) => key !== candidate.completionReceiverHalfKey
+              ),
+              candidate.completionReceiverHalfKey,
+            ].slice(-10)
+          }
+          if (candidate.timeoutQuestionDriveId) {
+            timeoutQuestionDriveIds = [
+              ...timeoutQuestionDriveIds.filter(
+                (driveId) => driveId !== candidate.timeoutQuestionDriveId
+              ),
+              candidate.timeoutQuestionDriveId,
+            ].slice(-50)
+          }
+          if (candidate.gameQuestionKey) {
+            gameQuestionKeys = [
+              ...gameQuestionKeys.filter(
+                (key) => key !== candidate.gameQuestionKey
+              ),
+              candidate.gameQuestionKey,
+            ].slice(-20)
+          }
+          if (candidate.periodQuestionKey) {
+            periodQuestionKeys = [
+              ...periodQuestionKeys.filter(
+                (key) => key !== candidate.periodQuestionKey
+              ),
+              candidate.periodQuestionKey,
+            ].slice(-20)
+          }
+          console.log(
+            `[nfl] question created game=${gameId} question=${questionId} play=${latestCreatedPlay.id} template=${candidate.payload.templateId} priority=${candidate.priority}`
+          )
+        }
+      }
+    }
+
     const lastSyncMs =
       typeof game.nflLastSyncAt?.toMillis === 'function'
         ? game.nflLastSyncAt.toMillis()
@@ -752,11 +1339,10 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       typeof game.nflGameStatus === 'string' ? game.nflGameStatus : ''
     const shouldUpdateGame =
       writes.length > 0 ||
+      questionStateChanged ||
       !lastSyncMs ||
       nowMs - lastSyncMs >= NFL_LIVE_HEARTBEAT_MS ||
       persistedStatus !== summary.statusName
-    const latestPlay =
-      summary.plays.length > 0 ? summary.plays[summary.plays.length - 1] : null
 
     if (shouldUpdateGame || summary.completed) {
       const cachedTimestamp = admin.firestore.Timestamp.now()
@@ -766,6 +1352,20 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         nflGameStatusState: summary.statusState,
         nflGameStatusText: summary.statusText,
         ...(writes.length > 0 ? { nflPlayFingerprints: nextFingerprints } : {}),
+        ...(writes.length > 0 || questionStateChanged
+          ? {
+              nflActiveQuestions: activeQuestions,
+              nflQuestionedRedZoneDriveIds: redZoneAskedDriveIds,
+              nflQuestionedRedZonePeriodKeys: redZoneAskedPeriodKeys,
+              nflReceiverQuestionKeys: receiverQuestionKeys,
+              nflCompletionReceiverHalfKeys: completionReceiverHalfKeys,
+              nflTimeoutQuestionDriveIds: timeoutQuestionDriveIds,
+              nflGameQuestionKeys: gameQuestionKeys,
+              nflPeriodQuestionKeys: periodQuestionKeys,
+              nflLastQuestionAtMs: lastQuestionAtMs,
+              nflQuestionCount: questionCount,
+            }
+          : {}),
         nflLastPlayId: latestPlay?.id ?? null,
         nflLastPlayWallclock: latestPlay?.wallclock ?? null,
         period: latestPlay?.period ?? null,

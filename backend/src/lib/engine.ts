@@ -22,12 +22,15 @@ import type {
 } from '../workers/seasonProfilesWorker'
 
 type PeriodWindow = 'EARLY' | 'MID' | 'LATE' | 'CLUTCH'
-type QuestionWindowType =
+export type QuestionWindowType =
   | 'PERIOD'
   | 'NEXT_N_MIN'
   | 'NEXT_EVENT'
   | 'GAME'
   | 'JUMP_BALL'
+  | 'NFL_NEXT_PLAY'
+  | 'NFL_DRIVE'
+  | 'NFL_NEXT_TARGET'
 
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -879,6 +882,11 @@ const buildPlayerCompareTemplate = (
 
 const MULTI_CHOICE_TEMPLATE_IDS = new Set([
   'GAME_WINNER',
+  'NFL_GAME_WINNER',
+  'NFL_PERIOD_TEAM_COMPARE_POINTS',
+  'NFL_PERIOD_TEAM_COMPARE_PASSING_YARDS',
+  'NFL_PERIOD_TEAM_COMPARE_RUSHING_YARDS',
+  'NFL_NEXT_COMPLETION_RECEIVER',
   'JUMP_BALL_WINNER',
   'PERIOD_LEADER',
   'PERIOD_LEADER_END',
@@ -974,10 +982,10 @@ export const buildQuestionChoices = (
   ]
 }
 
-const createAndSendEngineQuestion = async (
+export const createAndSendEngineQuestion = async (
   gameId: string,
   question: EngineQuestionPayload
-): Promise<void> => {
+): Promise<string> => {
   const { admin, db } = await import('../firebase')
   const isDev = process.env.NODE_ENV !== 'production'
   const now = Date.now()
@@ -1132,6 +1140,8 @@ const createAndSendEngineQuestion = async (
       error
     )
   }
+
+  return qRef.id
 }
 
 type GroupScope = 'PERIOD' | 'HALF' | 'GAME'

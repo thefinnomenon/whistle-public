@@ -71,8 +71,31 @@ export type LeaderboardItem = {
 
 export type QuestionType = 'YESNO' | 'MULTIPLE_CHOICE'
 export type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
-export type QuestionWindowType = 'PERIOD' | 'NEXT_N_MIN' | 'GAME' | 'JUMP_BALL'
-export type QuestionCancelReason = 'MANUAL' | 'VOID' | 'RESOLVED_WHILE_OPEN'
+export type QuestionWindowType =
+  | 'PERIOD'
+  | 'NEXT_N_MIN'
+  | 'NEXT_EVENT'
+  | 'GAME'
+  | 'JUMP_BALL'
+  | 'NFL_NEXT_PLAY'
+  | 'NFL_DRIVE'
+  | 'NFL_NEXT_TARGET'
+export type QuestionCancelReason =
+  | 'MANUAL'
+  | 'VOID'
+  | 'RESOLVED_WHILE_OPEN'
+  | 'NO_NEXT_OFFENSIVE_PLAY'
+  | 'NO_FOURTH_DOWN_PLAY'
+  | 'NO_NEXT_TARGET'
+  | 'NO_COMPLETED_PASS'
+  | 'UNRESOLVED_PASS_TARGET'
+  | 'RED_ZONE_PRIORITY'
+  | 'TIE'
+  | 'TIE_OR_NO_SCORE'
+  | 'INVALID_PERIOD'
+  | 'MISSING_TEAMS'
+  | 'MISSING_STATS'
+  | 'GAME_ENDED'
 
 export type Choice = {
   id: string
