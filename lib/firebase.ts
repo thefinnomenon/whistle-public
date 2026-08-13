@@ -1,5 +1,6 @@
 import { DocumentData } from '@google-cloud/firestore'
 import { getAuth, signOut } from '@react-native-firebase/auth'
+import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore'
 import {
   addDoc,
   collection,
@@ -16,6 +17,7 @@ import {
   setDoc,
   Timestamp,
   updateDoc,
+  where,
   writeBatch,
 } from '@react-native-firebase/firestore'
 
@@ -319,22 +321,30 @@ export const addGame = async (game: Omit<Game, 'id' | 'createdAt'>) => {
 export const getGame = async (gameId: string): Promise<Game | undefined> =>
   (await getDoc(doc(db, 'games', gameId))).data() as Game | undefined
 export const getGames = async (setGames: (games: Game[]) => void) => {
-  const q = query(collection(db, 'games'), orderBy('createdAt', 'asc'))
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - 5 * 60 * 60 * 1000))
+  const q = query(
+    collection(db, 'games'),
+    where('league', '==', 'NFL'),
+    where('startTime', '>=', cutoff),
+    orderBy('startTime', 'asc')
+  )
   return onSnapshot(q, (gamesSnap) => {
     if (!gamesSnap) {
       setGames([])
       return
     }
     setGames(
-      gamesSnap.docs.map((gameSnap: any) => {
-        const data = gameSnap.data()
-        return {
-          ...(data as Game),
-          startTime: data.startTime,
-          playerCount: (data as any).playerCount || 0,
-          id: gameSnap.id,
+      gamesSnap.docs.map(
+        (gameSnap: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
+          const data = gameSnap.data() as Game
+          return {
+            ...data,
+            startTime: data.startTime,
+            playerCount: data.playerCount || 0,
+            id: gameSnap.id,
+          }
         }
-      })
+      )
     )
   })
 }

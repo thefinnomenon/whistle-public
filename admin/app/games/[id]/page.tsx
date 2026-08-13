@@ -10,7 +10,7 @@ import {
   onSnapshot,
   orderBy,
   query,
-  updateDoc
+  updateDoc,
 } from 'firebase/firestore'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
@@ -23,11 +23,30 @@ import {
   ResponsiveContainer,
   Tooltip,
   XAxis,
-  YAxis
+  YAxis,
 } from 'recharts'
 
 // Import types from parent project
-import type { Game, Prediction, Question } from '@/types'
+import type {
+  Game,
+  PlayerCountByPlatform,
+  Prediction,
+  Question,
+  QuestionStatistics,
+} from '@/types'
+
+type NormalizedQuestionStatistics = QuestionStatistics & {
+  playerCount: number
+  responseRate: number
+}
+
+type PlayerCountHistoryDoc = {
+  count?: number
+  ios?: number
+  android?: number
+  unknown?: number
+  createdAt?: { toMillis?: () => number }
+}
 
 const getPercentile = (sortedArray: number[], percentile: number): number => {
   if (sortedArray.length === 0) return 0
@@ -35,7 +54,9 @@ const getPercentile = (sortedArray: number[], percentile: number): number => {
   return sortedArray[Math.max(0, index)]
 }
 
-const timestampToMs = (value: { toMillis?: () => number } | undefined): number | null => {
+const timestampToMs = (
+  value: { toMillis?: () => number } | undefined
+): number | null => {
   if (!value || typeof value.toMillis !== 'function') return null
   const ms = value.toMillis()
   return Number.isFinite(ms) ? ms : null
@@ -83,10 +104,14 @@ export default function GamePage() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [loading, setLoading] = useState(true)
   const [changingAnswerId, setChangingAnswerId] = useState<string | null>(null)
-  const [selectedEngineTag, setSelectedEngineTag] = useState<string | null>(null)
+  const [selectedEngineTag, setSelectedEngineTag] = useState<string | null>(
+    null
+  )
   const [livePredictions, setLivePredictions] = useState<Prediction[]>([])
   const [isStatsExpanded, setIsStatsExpanded] = useState(false)
-  const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set())
+  const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(
+    new Set()
+  )
   const timerRef = React.useRef<HTMLDivElement>(null)
   const triggeredTimeRef = React.useRef<number>(0)
   const [playerCountHistory, setPlayerCountHistory] = useState<
@@ -95,25 +120,32 @@ export default function GamePage() {
       count: number
       ios: number
       android: number
-      byPlatform?: { ios: number; android: number; unknown?: number }
+      byPlatform?: PlayerCountByPlatform
     }[]
   >([])
 
-  const getQuestionStats = React.useCallback((question: Question) => {
-    const stats: any = (question as any).statistics || {}
-    const totalResponses = stats.totalResponses ?? 0
-    const playerCount = stats.playerCount ?? 0
-    const responseRate =
-      stats.responseRate ??
-      (playerCount > 0 ? totalResponses / playerCount : 0)
+  const getQuestionStats = React.useCallback(
+    (question: Question): NormalizedQuestionStatistics => {
+      const stats = question.statistics
+      const totalResponses = stats?.totalResponses ?? 0
+      const playerCount = stats?.playerCount ?? 0
+      const correctCount = stats?.correctCount ?? 0
+      const incorrectCount = stats?.incorrectCount ?? 0
+      const responseRate =
+        stats?.responseRate ??
+        (playerCount > 0 ? totalResponses / playerCount : 0)
 
-    return {
-      ...stats,
-      totalResponses,
-      playerCount,
-      responseRate,
-    }
-  }, [])
+      return {
+        ...stats,
+        totalResponses,
+        correctCount,
+        incorrectCount,
+        playerCount,
+        responseRate,
+      }
+    },
+    []
+  )
 
   // Calculate real-time game statistics from questions
   const gameStats = React.useMemo(() => {
@@ -141,10 +173,11 @@ export default function GamePage() {
     const platformTotals: Record<string, { responses: number }> = {}
 
     resolvedQuestions.forEach((q) => {
-      const stats: any = getQuestionStats(q)
+      const stats = getQuestionStats(q)
       totalResponses += stats.totalResponses || 0
 
-      if (typeof stats.correctCount === 'number') totalCorrect += stats.correctCount
+      if (typeof stats.correctCount === 'number')
+        totalCorrect += stats.correctCount
       if (typeof stats.incorrectCount === 'number')
         totalIncorrect += stats.incorrectCount
 
@@ -153,16 +186,17 @@ export default function GamePage() {
 
       if (typeof stats.open?.avg === 'number') openAvgs.push(stats.open.avg)
 
-      if (typeof stats.respond?.avg === 'number') respondAvgs.push(stats.respond.avg)
+      if (typeof stats.respond?.avg === 'number')
+        respondAvgs.push(stats.respond.avg)
 
       if (typeof stats.responseRate === 'number')
         responseRates.push(stats.responseRate)
 
       if (stats.responseByPlatform) {
-        Object.entries(stats.responseByPlatform as Record<string, any>).forEach(
-          ([platform, platStats]: any) => {
+        Object.entries(stats.responseByPlatform).forEach(
+          ([platform, platformStats]) => {
             const existing = (platformTotals[platform] ||= { responses: 0 })
-            existing.responses += platStats.totalResponses || 0
+            existing.responses += platformStats.totalResponses || 0
           }
         )
       }
@@ -178,28 +212,31 @@ export default function GamePage() {
 
     const currentPlayerCount =
       playerCountHistory[playerCountHistory.length - 1]?.count ??
-      (game as any)?.playerCount ?? 0
+      game?.playerCount ??
       0
     const currentPlayerCountByPlatform =
       playerCountHistory[playerCountHistory.length - 1]?.byPlatform ||
-      (game as any)?.playerCountByPlatform ||
-      {}
+      game?.playerCountByPlatform
     const peakFromHistory =
       playerCountHistory.length > 0
         ? Math.max(...playerCountHistory.map((p) => p.count))
         : 0
     const peakPlayerCount =
-      Math.max(
-        peakFromHistory,
-        (game as any)?.statistics?.highestPlayerCount ?? 0
-      ) || undefined
+      Math.max(peakFromHistory, game?.statistics?.highestPlayerCount ?? 0) ||
+      undefined
 
     const buildMetric = (arr: number[]) =>
       arr.length
         ? {
             avg: arr.reduce((a, b) => a + b, 0) / arr.length,
-            p50: getPercentile([...arr].sort((a, b) => a - b), 50),
-            p95: getPercentile([...arr].sort((a, b) => a - b), 95),
+            p50: getPercentile(
+              [...arr].sort((a, b) => a - b),
+              50
+            ),
+            p95: getPercentile(
+              [...arr].sort((a, b) => a - b),
+              95
+            ),
           }
         : undefined
 
@@ -296,7 +333,8 @@ export default function GamePage() {
             : 0
       const flattenedSources: Record<string, number> = {}
       Object.entries(responseSourceCounts).forEach(([key, value]) => {
-        flattenedSources[`source__${key}`] = typeof value === 'number' ? value : 0
+        flattenedSources[`source__${key}`] =
+          typeof value === 'number' ? value : 0
       })
       const iosResponses = stats.responseByPlatform?.ios?.totalResponses || 0
       const androidResponses =
@@ -322,7 +360,7 @@ export default function GamePage() {
         p95ResponseTime:
           stats.respond?.p95 !== undefined ? stats.respond.p95 / 1000 : 0,
         accuracy:
-        totalResponses > 0
+          totalResponses > 0
             ? ((stats.correctCount || 0) / totalResponses) * 100
             : 0,
         totalResponses,
@@ -347,71 +385,79 @@ export default function GamePage() {
       const filled: Record<string, number> = {}
       responseSourceKeys.forEach((key) => {
         const prop = `source__${key}`
-        filled[prop] = typeof (d as any)[prop] === 'number' ? (d as any)[prop] : 0
+        const value = Object.entries(d).find(
+          ([entryKey]) => entryKey === prop
+        )?.[1]
+        filled[prop] = typeof value === 'number' ? value : 0
       })
       return { ...filled, ...d }
     })
   }, [chartData, responseSourceKeys])
 
   // Calculate last question stats
-const lastQuestionStats = React.useMemo(() => {
-  if (questions.length === 0) return null
+  const lastQuestionStats = React.useMemo(() => {
+    if (questions.length === 0) return null
 
-  const lastQuestion = questions[0] // Already sorted by createdAt desc
-  const triggeredTime =
-    lastQuestion.triggeredAt?.toMillis?.() || lastQuestion.createdAt?.toMillis?.() || 0
+    const lastQuestion = questions[0] // Already sorted by createdAt desc
+    const triggeredTime =
+      lastQuestion.triggeredAt?.toMillis?.() ||
+      lastQuestion.createdAt?.toMillis?.() ||
+      0
 
-  // Update ref for timer (doesn't cause re-render)
-  triggeredTimeRef.current = triggeredTime
+    // Update ref for timer (doesn't cause re-render)
+    triggeredTimeRef.current = triggeredTime
 
-  const stats: any = getQuestionStats(lastQuestion)
+    const stats = getQuestionStats(lastQuestion)
 
-  let totalResponses = stats.totalResponses || 0
-  const totalPlayers = stats.playerCount || 0
-  let responseRate =
-    stats.responseRate !== undefined
-      ? stats.responseRate * 100
-      : totalPlayers > 0
-        ? (totalResponses / totalPlayers) * 100
-        : 0
-  const correctCount = stats.correctCount || 0
-  const incorrectCount = stats.incorrectCount || 0
-  let accuracy = 0
+    let totalResponses = stats.totalResponses || 0
+    const totalPlayers = stats.playerCount || 0
+    let responseRate =
+      stats.responseRate !== undefined
+        ? stats.responseRate * 100
+        : totalPlayers > 0
+          ? (totalResponses / totalPlayers) * 100
+          : 0
+    const correctCount = stats.correctCount || 0
+    const incorrectCount = stats.incorrectCount || 0
+    let accuracy = 0
 
-  const avgResponseMs =
-    typeof stats.respond?.avg === 'number'
-      ? stats.respond.avg
-      : typeof (lastQuestion as any).avgResponseTimeMs === 'number'
-        ? (lastQuestion as any).avgResponseTimeMs
-        : undefined
-  const avgResponseTime =
-    typeof avgResponseMs === 'number' ? (avgResponseMs / 1000).toFixed(1) : '—'
+    const avgResponseMs =
+      typeof stats.respond?.avg === 'number'
+        ? stats.respond.avg
+        : typeof lastQuestion.avgResponseTimeMs === 'number'
+          ? lastQuestion.avgResponseTimeMs
+          : undefined
+    const avgResponseTime =
+      typeof avgResponseMs === 'number'
+        ? (avgResponseMs / 1000).toFixed(1)
+        : '—'
 
-  if (lastQuestion.state === 'open' || lastQuestion.state === 'closed') {
-    // Calculate live stats from predictions
-    totalResponses = livePredictions.length || totalResponses
-    responseRate = totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
-  } else if (lastQuestion.state === 'resolved') {
-    if (correctCount + incorrectCount > 0) {
-      accuracy = (correctCount / (correctCount + incorrectCount)) * 100
+    if (lastQuestion.state === 'open' || lastQuestion.state === 'closed') {
+      // Calculate live stats from predictions
+      totalResponses = livePredictions.length || totalResponses
+      responseRate =
+        totalPlayers > 0 ? (totalResponses / totalPlayers) * 100 : 0
+    } else if (lastQuestion.state === 'resolved') {
+      if (correctCount + incorrectCount > 0) {
+        accuracy = (correctCount / (correctCount + incorrectCount)) * 100
+      }
     }
-  }
 
-  return {
-    question: lastQuestion.question,
-    engineTag: lastQuestion.engineTag || 'No tag',
-    state: lastQuestion.state,
-    responseRate,
-    avgResponseTime,
-    totalResponses,
-    totalPlayers,
-    triggeredTime, // Return triggeredTime instead of calculating timeSince here
-    correctCount,
-    incorrectCount,
-    accuracy,
-    statistics: stats,
-  }
-}, [getQuestionStats, livePredictions, questions])
+    return {
+      question: lastQuestion.question,
+      engineTag: lastQuestion.engineTag || 'No tag',
+      state: lastQuestion.state,
+      responseRate,
+      avgResponseTime,
+      totalResponses,
+      totalPlayers,
+      triggeredTime, // Return triggeredTime instead of calculating timeSince here
+      correctCount,
+      incorrectCount,
+      accuracy,
+      statistics: stats,
+    }
+  }, [getQuestionStats, livePredictions, questions])
 
   useEffect(() => {
     if (!user || !gameId) return
@@ -457,11 +503,8 @@ const lastQuestionStats = React.useMemo(() => {
 
     const unsub = onSnapshot(q, (snapshot) => {
       const history = snapshot.docs.map((doc) => {
-        const data = doc.data() as any
-        const ts =
-          data.createdAt?.toMillis?.() ??
-          Number(doc.id) ??
-          Date.now()
+        const data = doc.data() as PlayerCountHistoryDoc
+        const ts = data.createdAt?.toMillis?.() ?? Number(doc.id) ?? Date.now()
         const ios = data.ios ?? 0
         const android = data.android ?? 0
         return {
@@ -490,7 +533,14 @@ const lastQuestionStats = React.useMemo(() => {
     if (!lastQuestion?.id) return
 
     const q = query(
-      collection(db, 'games', gameId, 'questions', lastQuestion.id, 'predictions')
+      collection(
+        db,
+        'games',
+        gameId,
+        'questions',
+        lastQuestion.id,
+        'predictions'
+      )
     )
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -510,7 +560,9 @@ const lastQuestionStats = React.useMemo(() => {
       if (timerRef.current && triggeredTimeRef.current > 0) {
         const timeSinceLastMs = Date.now() - triggeredTimeRef.current
         const minutes = Math.floor(timeSinceLastMs / 60000)
-        const seconds = String(Math.floor((timeSinceLastMs % 60000) / 1000)).padStart(2, '0')
+        const seconds = String(
+          Math.floor((timeSinceLastMs % 60000) / 1000)
+        ).padStart(2, '0')
         timerRef.current.textContent = `${minutes}:${seconds} ago`
       }
     }
@@ -532,9 +584,10 @@ const lastQuestionStats = React.useMemo(() => {
           state: newState,
         })
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error updating game state:', error)
-      alert(`Failed to update game state: ${error.message || error}`)
+      const message = error instanceof Error ? error.message : String(error)
+      alert(`Failed to update game state: ${message}`)
     }
   }
 
@@ -548,9 +601,12 @@ const lastQuestionStats = React.useMemo(() => {
           method: 'POST',
         })
       } else if (newState === 'cancelled') {
-        await apiRequest(`/api/games/${gameId}/questions/${questionId}/cancel`, {
-          method: 'POST',
-        })
+        await apiRequest(
+          `/api/games/${gameId}/questions/${questionId}/cancel`,
+          {
+            method: 'POST',
+          }
+        )
       } else {
         await updateDoc(doc(db, 'games', gameId, 'questions', questionId), {
           state: newState,
@@ -641,12 +697,16 @@ const lastQuestionStats = React.useMemo(() => {
     )
   }
 
-  const questionTimelineBaselineMs = questions.reduce<number | null>((minMs, question) => {
-    const candidateMs = timestampToMs(question.triggeredAt) ?? timestampToMs(question.createdAt)
-    if (candidateMs === null) return minMs
-    if (minMs === null) return candidateMs
-    return candidateMs < minMs ? candidateMs : minMs
-  }, null)
+  const questionTimelineBaselineMs = questions.reduce<number | null>(
+    (minMs, question) => {
+      const candidateMs =
+        timestampToMs(question.triggeredAt) ?? timestampToMs(question.createdAt)
+      if (candidateMs === null) return minMs
+      if (minMs === null) return candidateMs
+      return candidateMs < minMs ? candidateMs : minMs
+    },
+    null
+  )
 
   return (
     <div className="min-h-screen p-8">
@@ -914,8 +974,10 @@ const lastQuestionStats = React.useMemo(() => {
                           Response Rate (avg/p50/p95)
                         </div>
                         <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                          {(gameStats.responseRateMetric.avg * 100).toFixed(1)}% /{' '}
-                          {(gameStats.responseRateMetric.p50 * 100).toFixed(1)}% /{' '}
+                          {(gameStats.responseRateMetric.avg * 100).toFixed(1)}%
+                          /{' '}
+                          {(gameStats.responseRateMetric.p50 * 100).toFixed(1)}%
+                          /{' '}
                           {(gameStats.responseRateMetric.p95 * 100).toFixed(1)}%
                         </div>
                       </div>
@@ -954,7 +1016,9 @@ const lastQuestionStats = React.useMemo(() => {
                             </div>
                             <div className="flex justify-between">
                               <span>Total Responses:</span>
-                              <span className="font-medium">{stats.totalResponses}</span>
+                              <span className="font-medium">
+                                {stats.totalResponses}
+                              </span>
                             </div>
                             {stats.correctCount + stats.incorrectCount > 0 && (
                               <div className="flex justify-between">
@@ -962,7 +1026,8 @@ const lastQuestionStats = React.useMemo(() => {
                                 <span className="font-medium text-green-600 dark:text-green-400">
                                   {(
                                     (stats.correctCount /
-                                      (stats.correctCount + stats.incorrectCount)) *
+                                      (stats.correctCount +
+                                        stats.incorrectCount)) *
                                     100
                                   ).toFixed(1)}
                                   %
@@ -994,221 +1059,265 @@ const lastQuestionStats = React.useMemo(() => {
                   {isStatsExpanded && (
                     <div className="space-y-6">
                       {/* Response Rate & Engagement Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Response Rate & Engagement
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartDataWithSources}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis yAxisId="left" label={{ value: 'Response Rate (%)', angle: -90, position: 'insideLeft' }} />
-                        <YAxis yAxisId="right" orientation="right" label={{ value: 'Responses', angle: 90, position: 'insideRight' }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey="responseRate"
-                          stroke="#3b82f6"
-                          name="Response Rate (%)"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="totalResponses"
-                          stroke="#10b981"
-                          name="Total Responses"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="iosResponses"
-                          stroke="#6366f1"
-                          name="iOS Responses"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="androidResponses"
-                          stroke="#f97316"
-                          name="Android Responses"
-                          strokeWidth={2}
-                        />
-                        {responseSourceKeys.map((sourceKey, idx) => {
-                          const colors = ['#6366f1', '#f97316', '#06b6d4', '#a855f7', '#ef4444']
-                          return (
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                          Response Rate & Engagement
+                        </h4>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <LineChart data={chartDataWithSources}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="questionName" />
+                            <YAxis
+                              yAxisId="left"
+                              label={{
+                                value: 'Response Rate (%)',
+                                angle: -90,
+                                position: 'insideLeft',
+                              }}
+                            />
+                            <YAxis
+                              yAxisId="right"
+                              orientation="right"
+                              label={{
+                                value: 'Responses',
+                                angle: 90,
+                                position: 'insideRight',
+                              }}
+                            />
+                            <Tooltip />
+                            <Legend />
                             <Line
-                              key={sourceKey}
+                              yAxisId="left"
+                              type="monotone"
+                              dataKey="responseRate"
+                              stroke="#3b82f6"
+                              name="Response Rate (%)"
+                              strokeWidth={2}
+                            />
+                            <Line
                               yAxisId="right"
                               type="monotone"
-                              dataKey={`source__${sourceKey}`}
-                              stroke={colors[idx % colors.length]}
-                              name={`${sourceKey} Responses`}
+                              dataKey="totalResponses"
+                              stroke="#10b981"
+                              name="Total Responses"
                               strokeWidth={2}
-                              strokeDasharray={idx % 2 === 0 ? '4 4' : '2 6'}
                             />
-                          )
-                        })}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                            <Line
+                              yAxisId="right"
+                              type="monotone"
+                              dataKey="iosResponses"
+                              stroke="#6366f1"
+                              name="iOS Responses"
+                              strokeWidth={2}
+                            />
+                            <Line
+                              yAxisId="right"
+                              type="monotone"
+                              dataKey="androidResponses"
+                              stroke="#f97316"
+                              name="Android Responses"
+                              strokeWidth={2}
+                            />
+                            {responseSourceKeys.map((sourceKey, idx) => {
+                              const colors = [
+                                '#6366f1',
+                                '#f97316',
+                                '#06b6d4',
+                                '#a855f7',
+                                '#ef4444',
+                              ]
+                              return (
+                                <Line
+                                  key={sourceKey}
+                                  yAxisId="right"
+                                  type="monotone"
+                                  dataKey={`source__${sourceKey}`}
+                                  stroke={colors[idx % colors.length]}
+                                  name={`${sourceKey} Responses`}
+                                  strokeWidth={2}
+                                  strokeDasharray={
+                                    idx % 2 === 0 ? '4 4' : '2 6'
+                                  }
+                                />
+                              )
+                            })}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
 
-                  {/* Player Count */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Player Count
-                    </h4>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={playerCountHistory}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis
-                          dataKey="t"
-                          tickFormatter={(t) =>
-                            new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                          }
-                        />
-                        <YAxis allowDecimals={false} />
-                        <Tooltip
-                          labelFormatter={(t) =>
-                            new Date(t as number).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              second: '2-digit',
-                            })
-                          }
-                        />
-                        <Legend />
-                        <Line
-                          type="monotone"
-                          dataKey="count"
-                          stroke="#6366f1"
-                          name="Total"
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="ios"
-                          stroke="#2563eb"
-                          name="iOS"
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="android"
-                          stroke="#f59e0b"
-                          name="Android"
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                      {/* Player Count */}
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                          Player Count
+                        </h4>
+                        <ResponsiveContainer width="100%" height={260}>
+                          <LineChart data={playerCountHistory}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="t"
+                              tickFormatter={(t) =>
+                                new Date(t).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              }
+                            />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip
+                              labelFormatter={(t) =>
+                                new Date(t as number).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit',
+                                })
+                              }
+                            />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="count"
+                              stroke="#6366f1"
+                              name="Total"
+                              strokeWidth={2}
+                              dot={false}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="ios"
+                              stroke="#2563eb"
+                              name="iOS"
+                              strokeWidth={2}
+                              dot={false}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="android"
+                              stroke="#f59e0b"
+                              name="Android"
+                              strokeWidth={2}
+                              dot={false}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
 
-                  {/* Response Time Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Response Times (seconds)
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis label={{ value: 'Time (seconds)', angle: -90, position: 'insideLeft' }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line
-                          type="monotone"
-                          dataKey="avgResponseTime"
-                          stroke="#8b5cf6"
-                          name="Average"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="medianResponseTime"
-                          stroke="#06b6d4"
-                          name="Median"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="p95ResponseTime"
-                          stroke="#f59e0b"
-                          name="95th Percentile"
-                          strokeWidth={2}
-                          strokeDasharray="5 5"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                      {/* Response Time Chart */}
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                          Response Times (seconds)
+                        </h4>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="questionName" />
+                            <YAxis
+                              label={{
+                                value: 'Time (seconds)',
+                                angle: -90,
+                                position: 'insideLeft',
+                              }}
+                            />
+                            <Tooltip />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="avgResponseTime"
+                              stroke="#8b5cf6"
+                              name="Average"
+                              strokeWidth={2}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="medianResponseTime"
+                              stroke="#06b6d4"
+                              name="Median"
+                              strokeWidth={2}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="p95ResponseTime"
+                              stroke="#f59e0b"
+                              name="95th Percentile"
+                              strokeWidth={2}
+                              strokeDasharray="5 5"
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
 
-                  {/* Delivery Time Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Notification Delivery Times (seconds)
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis label={{ value: 'Time (seconds)', angle: -90, position: 'insideLeft' }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line
-                          type="monotone"
-                          dataKey="avgDeliveryTime"
-                          stroke="#14b8a6"
-                          name="Avg Delivery Time"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="medianDeliveryTime"
-                          stroke="#0ea5e9"
-                          name="Median Delivery Time"
-                          strokeWidth={2}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="p95DeliveryTime"
-                          stroke="#f97316"
-                          name="95th Percentile"
-                          strokeWidth={2}
-                          strokeDasharray="5 5"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                      {/* Delivery Time Chart */}
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                          Notification Delivery Times (seconds)
+                        </h4>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="questionName" />
+                            <YAxis
+                              label={{
+                                value: 'Time (seconds)',
+                                angle: -90,
+                                position: 'insideLeft',
+                              }}
+                            />
+                            <Tooltip />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="avgDeliveryTime"
+                              stroke="#14b8a6"
+                              name="Avg Delivery Time"
+                              strokeWidth={2}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="medianDeliveryTime"
+                              stroke="#0ea5e9"
+                              name="Median Delivery Time"
+                              strokeWidth={2}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="p95DeliveryTime"
+                              stroke="#f97316"
+                              name="95th Percentile"
+                              strokeWidth={2}
+                              strokeDasharray="5 5"
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
 
-                  {/* Accuracy Chart */}
-                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
-                    <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                      Player Accuracy
-                    </h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="questionName" />
-                        <YAxis domain={[0, 100]} label={{ value: 'Accuracy (%)', angle: -90, position: 'insideLeft' }} />
-                        <Tooltip />
-                        <Legend />
-                        <Line
-                          type="monotone"
-                          dataKey="accuracy"
-                          stroke="#ef4444"
-                          name="Accuracy (%)"
-                          strokeWidth={2}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-
+                      {/* Accuracy Chart */}
+                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-gray-800 dark:text-gray-200 mb-4">
+                          Player Accuracy
+                        </h4>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="questionName" />
+                            <YAxis
+                              domain={[0, 100]}
+                              label={{
+                                value: 'Accuracy (%)',
+                                angle: -90,
+                                position: 'insideLeft',
+                              }}
+                            />
+                            <Tooltip />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="accuracy"
+                              stroke="#ef4444"
+                              name="Accuracy (%)"
+                              strokeWidth={2}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1230,23 +1339,38 @@ const lastQuestionStats = React.useMemo(() => {
                 GAME MOMENT TAGS
               </h3>
               <div className="flex flex-wrap gap-2">
-                {['SCORE_EVENT', 'BIG_PLAY', 'START_OF_DRIVE', 'DEAD_TIME', 'RED_ZONE', 'FIELD_GOAL_SETUP', '4TH_DOWN', 'TWO_MINUTE_WARNING', 'CHALLENGE_REVIEW', 'RETURN_PLAY', 'TURNOVER', 'INJURY_TIMEOUT', 'HALFTIME', 'START_OF_QUARTER'].map(
-                  (tag) => (
-                    <button
-                      key={tag}
-                      onClick={() =>
-                        setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
-                      }
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-                        selectedEngineTag === tag
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      {tag.replace(/_/g, ' ')}
-                    </button>
-                  )
-                )}
+                {[
+                  'SCORE_EVENT',
+                  'BIG_PLAY',
+                  'START_OF_DRIVE',
+                  'DEAD_TIME',
+                  'RED_ZONE',
+                  'FIELD_GOAL_SETUP',
+                  '4TH_DOWN',
+                  'TWO_MINUTE_WARNING',
+                  'CHALLENGE_REVIEW',
+                  'RETURN_PLAY',
+                  'TURNOVER',
+                  'INJURY_TIMEOUT',
+                  'HALFTIME',
+                  'START_OF_QUARTER',
+                ].map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() =>
+                      setSelectedEngineTag(
+                        selectedEngineTag === tag ? null : tag
+                      )
+                    }
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                      selectedEngineTag === tag
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {tag.replace(/_/g, ' ')}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -1259,7 +1383,9 @@ const lastQuestionStats = React.useMemo(() => {
                   <button
                     key={tag}
                     onClick={() =>
-                      setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
+                      setSelectedEngineTag(
+                        selectedEngineTag === tag ? null : tag
+                      )
                     }
                     className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
                       selectedEngineTag === tag
@@ -1282,7 +1408,9 @@ const lastQuestionStats = React.useMemo(() => {
                   <button
                     key={tag}
                     onClick={() =>
-                      setSelectedEngineTag(selectedEngineTag === tag ? null : tag)
+                      setSelectedEngineTag(
+                        selectedEngineTag === tag ? null : tag
+                      )
                     }
                     className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
                       selectedEngineTag === tag
@@ -1310,9 +1438,7 @@ const lastQuestionStats = React.useMemo(() => {
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
-                onClick={() =>
-                  createQuickQuestion('Will [HOMETEAM] win?')
-                }
+                onClick={() => createQuickQuestion('Will [HOMETEAM] win?')}
                 className="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 🏆 Home team win?
@@ -1432,7 +1558,9 @@ const lastQuestionStats = React.useMemo(() => {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the next play result in a touchdown?')
+                  createQuickQuestion(
+                    'Will the next play result in a touchdown?'
+                  )
                 }
                 className="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1472,7 +1600,9 @@ const lastQuestionStats = React.useMemo(() => {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the defense score on the next play?')
+                  createQuickQuestion(
+                    'Will the defense score on the next play?'
+                  )
                 }
                 className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1545,20 +1675,26 @@ const lastQuestionStats = React.useMemo(() => {
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               <button
-                onClick={() => createQuickQuestion('Will the next pass be completed?')}
+                onClick={() =>
+                  createQuickQuestion('Will the next pass be completed?')
+                }
                 className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 ✅ Completion?
               </button>
               <button
-                onClick={() => createQuickQuestion('Will the next play be a sack?')}
+                onClick={() =>
+                  createQuickQuestion('Will the next play be a sack?')
+                }
                 className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
                 💥 Sack?
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the next play result in a turnover?')
+                  createQuickQuestion(
+                    'Will the next play result in a turnover?'
+                  )
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1566,7 +1702,9 @@ const lastQuestionStats = React.useMemo(() => {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will the next play result in an interception?')
+                  createQuickQuestion(
+                    'Will the next play result in an interception?'
+                  )
                 }
                 className="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1582,7 +1720,9 @@ const lastQuestionStats = React.useMemo(() => {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will there be a penalty on the next play?')
+                  createQuickQuestion(
+                    'Will there be a penalty on the next play?'
+                  )
                 }
                 className="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1621,7 +1761,9 @@ const lastQuestionStats = React.useMemo(() => {
               </button>
               <button
                 onClick={() =>
-                  createQuickQuestion('Will there be a score in the final 2-minutes?')
+                  createQuickQuestion(
+                    'Will there be a score in the final 2-minutes?'
+                  )
                 }
                 className="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-2 rounded text-sm font-medium text-left cursor-pointer"
               >
@@ -1700,7 +1842,8 @@ const lastQuestionStats = React.useMemo(() => {
                         ? (question.choices.find((choice) =>
                             typeof choice === 'string'
                               ? choice === question.answer
-                              : choice.id === question.answer || choice.value === question.answer
+                              : choice.id === question.answer ||
+                                choice.value === question.answer
                           ) ?? question.answer)
                         : null
                       const answerText =
@@ -1712,7 +1855,9 @@ const lastQuestionStats = React.useMemo(() => {
 
                       return (
                         <tr key={`debug-${question.id}`}>
-                          <td className="px-3 py-2 align-top text-gray-500">{index + 1}</td>
+                          <td className="px-3 py-2 align-top text-gray-500">
+                            {index + 1}
+                          </td>
                           <td className="px-3 py-2 align-top">
                             <div className="font-medium text-sm text-gray-900">
                               {question.question}
@@ -1720,7 +1865,9 @@ const lastQuestionStats = React.useMemo(() => {
                             <div className="text-gray-600 mt-1">
                               {question.choices
                                 .map((choice) =>
-                                  typeof choice === 'string' ? choice : choice.value
+                                  typeof choice === 'string'
+                                    ? choice
+                                    : choice.value
                                 )
                                 .join(', ')}
                             </div>
@@ -1738,7 +1885,9 @@ const lastQuestionStats = React.useMemo(() => {
                           </td>
                           <td className="px-3 py-2 align-top text-gray-700">
                             <div>created: {formatMsDateTime(createdAtMs)}</div>
-                            <div>triggered: {formatMsDateTime(triggeredAtMs)}</div>
+                            <div>
+                              triggered: {formatMsDateTime(triggeredAtMs)}
+                            </div>
                             <div>timeout: {formatMsDateTime(timeoutAtMs)}</div>
                             <div>
                               done:{' '}
@@ -1769,7 +1918,7 @@ const lastQuestionStats = React.useMemo(() => {
             </div>
           )}
 
-              <div className="divide-y">
+          <div className="divide-y">
             {questions.length === 0 ? (
               <div className="px-6 py-8 text-center text-gray-500">
                 No questions yet. Create your first question!
@@ -1796,28 +1945,37 @@ const lastQuestionStats = React.useMemo(() => {
                   stats && totalResponses > 0
                     ? ((stats.correctCount || 0) / totalResponses) * 100
                     : undefined
-                const choiceBreakdown: { choiceId: string; count: number; label: string }[] =
-                  stats?.choiceCounts
-                    ? (Object.entries(stats.choiceCounts as Record<string, number>)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([choiceId, count]) => {
-                          const match = question.choices.find((c) =>
-                            typeof c === 'string'
-                              ? c === choiceId
-                              : c.id === choiceId || c.value === choiceId
-                          )
-                          const label =
-                            typeof match === 'string'
-                              ? match
-                              : match?.value || choiceId
+                const choiceBreakdown: {
+                  choiceId: string
+                  count: number
+                  label: string
+                }[] = stats?.choiceCounts
+                  ? (Object.entries(
+                      stats.choiceCounts as Record<string, number>
+                    )
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([choiceId, count]) => {
+                        const match = question.choices.find((c) =>
+                          typeof c === 'string'
+                            ? c === choiceId
+                            : c.id === choiceId || c.value === choiceId
+                        )
+                        const label =
+                          typeof match === 'string'
+                            ? match
+                            : match?.value || choiceId
 
-                          return {
-                            choiceId,
-                            count,
-                            label,
-                          }
-                        }) as { choiceId: string; count: number; label: string }[])
-                    : []
+                        return {
+                          choiceId,
+                          count,
+                          label,
+                        }
+                      }) as {
+                      choiceId: string
+                      count: number
+                      label: string
+                    }[])
+                  : []
 
                 return (
                   <div key={question.id} className="px-6 py-4">
@@ -1854,10 +2012,13 @@ const lastQuestionStats = React.useMemo(() => {
                               const match = question.choices.find((c) =>
                                 typeof c === 'string'
                                   ? c === question.answer
-                                  : c.id === question.answer || c.value === question.answer
+                                  : c.id === question.answer ||
+                                    c.value === question.answer
                               )
                               if (!match) return question.answer
-                              return typeof match === 'string' ? match : match.value
+                              return typeof match === 'string'
+                                ? match
+                                : match.value
                             })()}
                           </div>
                         )}
@@ -1899,7 +2060,9 @@ const lastQuestionStats = React.useMemo(() => {
                                   📊 Statistics
                                 </span>
                                 <span className="text-lg text-gray-600 dark:text-gray-400">
-                                  {expandedQuestions.has(question.id) ? '−' : '+'}
+                                  {expandedQuestions.has(question.id)
+                                    ? '−'
+                                    : '+'}
                                 </span>
                               </button>
 
@@ -1912,8 +2075,8 @@ const lastQuestionStats = React.useMemo(() => {
                                         Responses:
                                       </span>{' '}
                                       <span className="font-medium">
-                                        {totalResponses} / {playerCount ?? '—'} (
-                                        {responseRate.toFixed(1)}%)
+                                        {totalResponses} / {playerCount ?? '—'}{' '}
+                                        ({responseRate.toFixed(1)}%)
                                       </span>
                                     </div>
                                     {unanswered !== undefined && (
@@ -1932,7 +2095,8 @@ const lastQuestionStats = React.useMemo(() => {
                                           Accuracy:
                                         </span>{' '}
                                         <span className="font-medium text-green-700 dark:text-green-300">
-                                          {accuracy.toFixed(1)}% ({stats?.correctCount || 0} /{' '}
+                                          {accuracy.toFixed(1)}% (
+                                          {stats?.correctCount || 0} /{' '}
                                           {stats?.incorrectCount || 0})
                                         </span>
                                       </div>
@@ -1979,9 +2143,12 @@ const lastQuestionStats = React.useMemo(() => {
                                         Delivery (avg/p50/p95):
                                       </div>
                                       <div className="text-lg font-semibold">
-                                        {(stats.delivery.avg / 1000).toFixed(2)}s /{' '}
-                                        {(stats.delivery.p50 / 1000).toFixed(2)}s /{' '}
-                                        {(stats.delivery.p95 / 1000).toFixed(2)}s
+                                        {(stats.delivery.avg / 1000).toFixed(2)}
+                                        s /{' '}
+                                        {(stats.delivery.p50 / 1000).toFixed(2)}
+                                        s /{' '}
+                                        {(stats.delivery.p95 / 1000).toFixed(2)}
+                                        s
                                       </div>
                                     </div>
                                   )}
@@ -2005,8 +2172,10 @@ const lastQuestionStats = React.useMemo(() => {
                                         Respond (avg/p50/p95):
                                       </div>
                                       <div className="text-lg font-semibold">
-                                        {(stats.respond.avg / 1000).toFixed(2)}s /{' '}
-                                        {(stats.respond.p50 / 1000).toFixed(2)}s /{' '}
+                                        {(stats.respond.avg / 1000).toFixed(2)}s
+                                        /{' '}
+                                        {(stats.respond.p50 / 1000).toFixed(2)}s
+                                        /{' '}
                                         {(stats.respond.p95 / 1000).toFixed(2)}s
                                       </div>
                                     </div>
@@ -2018,9 +2187,21 @@ const lastQuestionStats = React.useMemo(() => {
                                         Time Remaining at Receive (avg/p50/p95):
                                       </div>
                                       <div className="text-lg font-semibold">
-                                        {(stats.timeRemainingAtReceive.avg / 1000).toFixed(2)}s /{' '}
-                                        {(stats.timeRemainingAtReceive.p50 / 1000).toFixed(2)}s /{' '}
-                                        {(stats.timeRemainingAtReceive.p95 / 1000).toFixed(2)}s
+                                        {(
+                                          stats.timeRemainingAtReceive.avg /
+                                          1000
+                                        ).toFixed(2)}
+                                        s /{' '}
+                                        {(
+                                          stats.timeRemainingAtReceive.p50 /
+                                          1000
+                                        ).toFixed(2)}
+                                        s /{' '}
+                                        {(
+                                          stats.timeRemainingAtReceive.p95 /
+                                          1000
+                                        ).toFixed(2)}
+                                        s
                                       </div>
                                     </div>
                                   )}
@@ -2031,9 +2212,18 @@ const lastQuestionStats = React.useMemo(() => {
                                         Time Remaining at Open (avg/p50/p95):
                                       </div>
                                       <div className="text-lg font-semibold">
-                                        {(stats.timeRemainingAtOpen.avg / 1000).toFixed(2)}s /{' '}
-                                        {(stats.timeRemainingAtOpen.p50 / 1000).toFixed(2)}s /{' '}
-                                        {(stats.timeRemainingAtOpen.p95 / 1000).toFixed(2)}s
+                                        {(
+                                          stats.timeRemainingAtOpen.avg / 1000
+                                        ).toFixed(2)}
+                                        s /{' '}
+                                        {(
+                                          stats.timeRemainingAtOpen.p50 / 1000
+                                        ).toFixed(2)}
+                                        s /{' '}
+                                        {(
+                                          stats.timeRemainingAtOpen.p95 / 1000
+                                        ).toFixed(2)}
+                                        s
                                       </div>
                                     </div>
                                   )}
@@ -2053,72 +2243,80 @@ const lastQuestionStats = React.useMemo(() => {
                             Close
                           </button>
                         )}
-                      {question.state === 'closed' && (
-                        <>
-                          <button
-                            onClick={() =>
-                              updateQuestionState(question.id, 'open')
-                            }
-                            className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
-                          >
-                            Reopen
-                          </button>
-                          {question.choices.map((choice) => {
-                            const label =
-                              typeof choice === 'string' ? choice : choice.value
-                            const choiceId =
-                              typeof choice === 'string' ? choice : choice.id
-                            return (
-                              <button
-                                key={choiceId}
-                                onClick={() => resolveQuestion(question.id, choiceId)}
-                                className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
-                              >
-                                {label}
-                              </button>
-                            )
-                          })}
-                        </>
-                      )}
+                        {question.state === 'closed' && (
+                          <>
+                            <button
+                              onClick={() =>
+                                updateQuestionState(question.id, 'open')
+                              }
+                              className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                            >
+                              Reopen
+                            </button>
+                            {question.choices.map((choice) => {
+                              const label =
+                                typeof choice === 'string'
+                                  ? choice
+                                  : choice.value
+                              const choiceId =
+                                typeof choice === 'string' ? choice : choice.id
+                              return (
+                                <button
+                                  key={choiceId}
+                                  onClick={() =>
+                                    resolveQuestion(question.id, choiceId)
+                                  }
+                                  className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
+                                >
+                                  {label}
+                                </button>
+                              )
+                            })}
+                          </>
+                        )}
                         {question.state === 'resolved' && (
                           <>
-                          {changingAnswerId === question.id ? (
-                            <>
-                              {question.choices.map((choice) => {
-                                const label =
-                                  typeof choice === 'string' ? choice : choice.value
-                                const choiceId =
-                                  typeof choice === 'string' ? choice : choice.id
-                                return (
-                                  <button
-                                    key={choiceId}
-                                    onClick={() => {
-                                      resolveQuestion(question.id, choiceId)
-                                      setChangingAnswerId(null)
-                                    }}
-                                    className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
-                                  >
-                                    {label}
-                                  </button>
-                                )
-                              })}
+                            {changingAnswerId === question.id ? (
+                              <>
+                                {question.choices.map((choice) => {
+                                  const label =
+                                    typeof choice === 'string'
+                                      ? choice
+                                      : choice.value
+                                  const choiceId =
+                                    typeof choice === 'string'
+                                      ? choice
+                                      : choice.id
+                                  return (
+                                    <button
+                                      key={choiceId}
+                                      onClick={() => {
+                                        resolveQuestion(question.id, choiceId)
+                                        setChangingAnswerId(null)
+                                      }}
+                                      className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 cursor-pointer"
+                                    >
+                                      {label}
+                                    </button>
+                                  )
+                                })}
+                                <button
+                                  onClick={() => setChangingAnswerId(null)}
+                                  className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
                               <button
-                                onClick={() => setChangingAnswerId(null)}
-                                className="bg-gray-400 text-white px-3 py-1 rounded text-sm hover:bg-gray-500 cursor-pointer"
+                                onClick={() => setChangingAnswerId(question.id)}
+                                className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
                               >
-                                Cancel
+                                Change Answer
                               </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => setChangingAnswerId(question.id)}
-                              className="bg-orange-600 text-white px-3 py-1 rounded text-sm hover:bg-orange-700 cursor-pointer"
-                            >
-                              Change Answer
-                            </button>
-                          )}
-                        </>
-                      )}
+                            )}
+                          </>
+                        )}
                         {question.state !== 'cancelled' && (
                           <button
                             onClick={() =>
@@ -2145,7 +2343,10 @@ const lastQuestionStats = React.useMemo(() => {
           <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-200 uppercase tracking-wide">
             Last Question
           </span>
-          <span ref={timerRef} className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+          <span
+            ref={timerRef}
+            className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400"
+          >
             0:00 ago
           </span>
         </div>

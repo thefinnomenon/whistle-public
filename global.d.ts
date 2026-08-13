@@ -135,6 +135,7 @@ type NFL_Team =
   | 'JAX'
   | 'KC'
   | 'LAC'
+  | 'LAR'
   | 'LV'
   | 'MIA'
   | 'MIN'

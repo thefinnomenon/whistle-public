@@ -1,13 +1,12 @@
 import { getAuth } from 'firebase/auth'
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'
+const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'
 
 export async function apiRequest<T>(
   path: string,
   options: {
     method?: string
-    body?: any
+    body?: object
     token?: string
   } = {}
 ): Promise<T> {

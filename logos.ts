@@ -18,6 +18,7 @@ export const NFL: { [key in NFL_Team]: ImageSourcePropType } = {
   JAX: require('./assets/images/nfl/JAX.jpg'),
   KC: require('./assets/images/nfl/KC.jpg'),
   LAC: require('./assets/images/nfl/LAC.jpg'),
+  LAR: require('./assets/images/nfl/LAR.jpg'),
   LV: require('./assets/images/nfl/LV.jpg'),
   MIA: require('./assets/images/nfl/MIA.jpg'),
   MIN: require('./assets/images/nfl/MIN.jpg'),

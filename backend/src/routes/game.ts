@@ -2048,7 +2048,15 @@ export const startGameById = async (gameId: string) => {
     { merge: true }
   )
 
-  if (!game?.gameStartQuestionsScheduledAt) {
+  const shouldScheduleBasketballStartQuestions =
+    game?.sport === 'BASKETBALL' ||
+    game?.league === 'NBA' ||
+    (!game?.sport && !game?.league)
+
+  if (
+    shouldScheduleBasketballStartQuestions &&
+    !game?.gameStartQuestionsScheduledAt
+  ) {
     const homeTeam = game?.homeTeam ?? null
     const awayTeam = game?.awayTeam ?? null
     const gameStartState: EngineGameState = {

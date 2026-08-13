@@ -4,6 +4,7 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import { syncNbaLiveEvents, syncNbaSchedule } from './lib/nba'
+import { syncNflLiveEvents, syncNflSchedule } from './lib/nfl'
 import authRouter from './routes/auth'
 import analyticsRouter from './routes/analytics'
 import feedbackRouter from './routes/feedback'
@@ -149,6 +150,16 @@ const RUN_NBA_LIVE_WORKER = parseBooleanEnv(
   process.env.RUN_NBA_LIVE_WORKER,
   BACKGROUND_WORKERS_ENABLED
 )
+const RUN_NFL_SCHEDULE_WORKER = parseBooleanEnv(
+  'RUN_NFL_SCHEDULE_WORKER',
+  process.env.RUN_NFL_SCHEDULE_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
+const RUN_NFL_LIVE_WORKER = parseBooleanEnv(
+  'RUN_NFL_LIVE_WORKER',
+  process.env.RUN_NFL_LIVE_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
 const RUN_SEASON_PROFILES_WORKER = parseBooleanEnv(
   'RUN_SEASON_PROFILES_WORKER',
   process.env.RUN_SEASON_PROFILES_WORKER,
@@ -188,6 +199,30 @@ const NBA_LIVE_IDLE_POLL_MS = parsePositiveNumberEnv(
   process.env.NBA_LIVE_IDLE_POLL_MS,
   1_000,
   NBA_LIVE_POLL_MS
+)
+const NFL_SCHEDULE_DAYS_AHEAD = parsePositiveNumberEnv(
+  'NFL_SCHEDULE_DAYS_AHEAD',
+  process.env.NFL_SCHEDULE_DAYS_AHEAD,
+  14,
+  0
+)
+const NFL_SCHEDULE_POLL_MS = parsePositiveNumberEnv(
+  'NFL_SCHEDULE_POLL_MS',
+  process.env.NFL_SCHEDULE_POLL_MS,
+  3_600_000,
+  60_000
+)
+const NFL_LIVE_POLL_MS = parsePositiveNumberEnv(
+  'NFL_LIVE_POLL_MS',
+  process.env.NFL_LIVE_POLL_MS,
+  1_000,
+  1_000
+)
+const NFL_LIVE_IDLE_POLL_MS = parsePositiveNumberEnv(
+  'NFL_LIVE_IDLE_POLL_MS',
+  process.env.NFL_LIVE_IDLE_POLL_MS,
+  5_000,
+  NFL_LIVE_POLL_MS
 )
 const PLAYER_COUNT_POLL_MS = parsePositiveNumberEnv(
   'PLAYER_COUNT_POLL_MS',
@@ -320,6 +355,67 @@ const startNbaLiveFeedWorker = () => {
   }
 }
 
+// Background worker: sync the upcoming NFL schedule every hour
+const startNflScheduleWorker = () => {
+  console.log('[worker] NFL schedule sync worker started')
+  const run = async () => {
+    try {
+      const { processed, created, updated, unchanged } = await syncNflSchedule(
+        NFL_SCHEDULE_DAYS_AHEAD
+      )
+      console.log(
+        `[worker] NFL schedule sync complete gamesProcessed=${processed} gamesCreated=${created} gamesUpdated=${updated} gamesUnchanged=${unchanged}`
+      )
+    } catch (err) {
+      console.error('[worker] NFL schedule sync error', err)
+      Sentry.captureException(err)
+    }
+  }
+  void run()
+  setInterval(run, NFL_SCHEDULE_POLL_MS)
+}
+
+// Background worker: sync ESPN play-by-play for open NFL games
+const startNflLiveFeedWorker = () => {
+  console.log('[worker] NFL live feed worker started')
+  let stopped = false
+  let nextPollMs = NFL_LIVE_IDLE_POLL_MS
+  const run = async () => {
+    const startedAt = Date.now()
+    try {
+      const stats = await syncNflLiveEvents()
+      nextPollMs =
+        stats.openGames > 0 ? NFL_LIVE_POLL_MS : NFL_LIVE_IDLE_POLL_MS
+      if (
+        stats.playsCreated > 0 ||
+        stats.playsRevised > 0 ||
+        stats.errors > 0
+      ) {
+        console.log(
+          `[worker] NFL live feed summary durationMs=${Date.now() - startedAt} openGames=${stats.openGames} updatedGames=${stats.updatedGames} playsCreated=${stats.playsCreated} playsRevised=${stats.playsRevised} errors=${stats.errors}`
+        )
+      }
+    } catch (err) {
+      console.error('[worker] NFL live feed error', err)
+      Sentry.captureException(err)
+    }
+  }
+
+  const loop = async () => {
+    while (!stopped) {
+      await run()
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, nextPollMs)
+      })
+    }
+  }
+  void loop()
+
+  return () => {
+    stopped = true
+  }
+}
+
 // Background worker: refresh NBA season profiles every 24h
 const startSeasonProfilesCacheWorker = () => {
   console.log('[worker] NBA season profiles worker started')
@@ -372,6 +468,18 @@ startWorkerIfEnabled(
   'RUN_NBA_LIVE_WORKER',
   RUN_NBA_LIVE_WORKER,
   startNbaLiveFeedWorker
+)
+startWorkerIfEnabled(
+  'nfl-schedule',
+  'RUN_NFL_SCHEDULE_WORKER',
+  RUN_NFL_SCHEDULE_WORKER,
+  startNflScheduleWorker
+)
+startWorkerIfEnabled(
+  'nfl-live-feed',
+  'RUN_NFL_LIVE_WORKER',
+  RUN_NFL_LIVE_WORKER,
+  startNflLiveFeedWorker
 )
 startWorkerIfEnabled(
   'season-profiles',

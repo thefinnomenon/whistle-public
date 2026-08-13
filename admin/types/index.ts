@@ -52,8 +52,15 @@ export type Game = {
   updatedAt?: FirestoreTimestamp
   leaderboard?: LeaderboardItem[]
   statistics?: GameStatistics
+  playerCountByPlatform?: PlayerCountByPlatform
   sport?: Sport
   league?: League
+}
+
+export type PlayerCountByPlatform = {
+  ios: number
+  android: number
+  unknown?: number
 }
 
 export type LeaderboardItem = {
@@ -126,6 +133,7 @@ export type Question = {
   changedAt?: FirestoreTimestamp
   engineTag?: string
   engineVersion?: string
+  avgResponseTimeMs?: number
   statistics?: QuestionStatistics
 }
 

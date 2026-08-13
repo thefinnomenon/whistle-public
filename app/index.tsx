@@ -42,6 +42,9 @@ type DayOption = { label: string; date: Date; dayNum: number }
 
 const DISPLAY_WINDOW_MS = 5 * 60 * 60 * 1000
 
+const isVisibleNflGame = (game: Game) =>
+  game.league === 'NFL' || game.sport === 'FOOTBALL'
+
 const buildDayOptions = (games: Game[]): DayOption[] => {
   const now = new Date()
   const today = new Date(now)
@@ -107,11 +110,14 @@ export default function GamesScreen() {
     )
   }, [logoAssets])
 
-  // Subscribe to all games (persist across modal navigations)
+  // Keep the current consumer experience focused on NFL games. NBA remains
+  // supported by the shared game model and rendering paths for a future return.
   useEffect(() => {
     let unsubscribe: (() => void) | undefined
     const sub = async () => {
-      unsubscribe = await getGames(setGames)
+      unsubscribe = await getGames((nextGames) => {
+        setGames(nextGames.filter(isVisibleNflGame))
+      })
     }
     sub()
     return () => {

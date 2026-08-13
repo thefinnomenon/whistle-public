@@ -10,7 +10,7 @@ import { useAuth } from '@/components/AuthProvider'
 type NFL_Team =
   | 'ARI' | 'ATL' | 'BAL' | 'BUF' | 'CAR' | 'CHI' | 'CIN' | 'CLE'
   | 'DAL' | 'DEN' | 'DET' | 'GB' | 'HOU' | 'IND' | 'JAX' | 'KC'
-  | 'LAC' | 'LV' | 'MIA' | 'MIN' | 'NE' | 'NO' | 'NYG' | 'NYJ'
+  | 'LAC' | 'LAR' | 'LV' | 'MIA' | 'MIN' | 'NE' | 'NO' | 'NYG' | 'NYJ'
   | 'PHI' | 'PIT' | 'SEA' | 'SF' | 'TB' | 'TEN' | 'WAS'
 
 const NFL_TEAMS: { code: NFL_Team; name: string }[] = [
@@ -31,6 +31,7 @@ const NFL_TEAMS: { code: NFL_Team; name: string }[] = [
   { code: 'JAX', name: 'Jacksonville Jaguars' },
   { code: 'KC', name: 'Kansas City Chiefs' },
   { code: 'LAC', name: 'Los Angeles Chargers' },
+  { code: 'LAR', name: 'Los Angeles Rams' },
   { code: 'LV', name: 'Las Vegas Raiders' },
   { code: 'MIA', name: 'Miami Dolphins' },
   { code: 'MIN', name: 'Minnesota Vikings' },
@@ -97,15 +98,18 @@ export default function NewGamePage() {
           prizeAmount: parseFloat(prizeAmount) || 0,
           prizeType,
           state: 'scheduled',
+          sport: 'FOOTBALL',
+          league: 'NFL',
           playerCount: 0,
           leaderboard: [],
         },
       })
 
       router.push('/')
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error creating game:', error)
-      alert(`Failed to create game: ${error.message || error}`)
+      const message = error instanceof Error ? error.message : String(error)
+      alert(`Failed to create game: ${message}`)
       setLoading(false)
     }
   }
