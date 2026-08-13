@@ -16,9 +16,10 @@ type Token = {
 
 type UserGame = {
   score: number
-  predictions: {
+  predictions?: {
     [questionId: string]: { prediction: string; createdAt: Timestamp }
   }
+  joinedAt?: FirestoreTimestamp
   updatedAt: FirestoreTimestamp
 }
 
@@ -27,6 +28,21 @@ type GamePlayer = {
   username: string
   place?: number
   platform?: string
+  joinedAt?: FirestoreTimestamp
+  answersSubmitted?: number
+  predictionsByQuestionId?: Record<string, string>
+  cashEligibility?: {
+    qualified: boolean
+    answered: number
+    offered: number
+    requiredAnswers: number
+    answerRate: number
+    reason:
+      | 'qualified'
+      | 'missing_join_time'
+      | 'minimum_answers'
+      | 'answer_rate'
+  }
   updatedAt: FirestoreTimestamp
 }
 
@@ -37,6 +53,7 @@ type User = {
   loginMethod?: LoginType
   isAdmin?: boolean
   winnings?: number
+  winningsCents?: number
   points?: number
   onboardingComplete?: boolean
   onboardingPrediction?: Prediction
@@ -57,10 +74,17 @@ type Game = {
   id: string
   state: GameState
   prizeAmount: number
+  prizeAmountCents?: number
   prizeType?: 'USD' | 'POINTS'
   homeTeam: NFL_Team
   awayTeam: NFL_Team
   playerCount: number
+  playerCountByPlatform?: {
+    ios: number
+    android: number
+    web?: number
+    unknown?: number
+  }
   leaderboard: LeaderboardItem[]
   startTime: FirestoreTimestamp
   createdAt: FirestoreTimestamp
@@ -68,6 +92,25 @@ type Game = {
   updatedAt: FirestoreTimestamp
   sport?: Sport
   league?: League
+  isFeatured?: boolean
+  featuredWeekKey?: string
+  featuredPoolAmount?: number
+  featuredPoolAnnouncements?: Partial<
+    Record<'25' | '50' | '100', FirestoreTimestamp>
+  >
+  featuredPool50UnlockedAt?: FirestoreTimestamp
+  featuredPool100UnlockedAt?: FirestoreTimestamp
+  payoutStatus?: 'processing' | 'completed'
+  payoutPrizeType?: 'USD' | 'POINTS'
+  payoutTotalUnits?: number
+  payoutWinnerCount?: number
+  cashWinnerUserIds?: string[]
+  payoutEligiblePlayerCount?: number
+  payoutTopScore?: number | null
+  payoutStartedAt?: FirestoreTimestamp
+  payoutCompletedAt?: FirestoreTimestamp
+  cashEligibilityMinAnswers?: number
+  cashEligibilityMinRate?: number
 }
 
 type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
@@ -78,6 +121,16 @@ type QuestionCancelReason = 'MANUAL' | 'VOID' | 'RESOLVED_WHILE_OPEN'
 
 type Choice = { id: string; value: string }
 
+type NflQuestionDedupe = {
+  redZoneDriveId?: string
+  redZonePeriodKey?: string
+  receiverQuestionKey?: string
+  completionReceiverHalfKey?: string
+  timeoutQuestionDriveId?: string
+  gameQuestionKey?: string
+  periodQuestionKey?: string
+}
+
 type Question = {
   id: string
   state: QuestionState
@@ -86,6 +139,7 @@ type Question = {
   choices: Choice[]
   answer?: boolean
   engineTag?: string
+  nflDedupe?: NflQuestionDedupe
   timeoutAt: string
   windowType?: QuestionWindowType
   cancelReason?: QuestionCancelReason

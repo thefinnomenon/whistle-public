@@ -39,6 +39,7 @@ import React, { useEffect, useRef } from 'react'
 import { NativeModules, Platform } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { Toaster } from 'sonner-native'
+import { savePendingGameAttribution } from '@/lib/shareAttribution'
 
 // Background FCM handler registration (headless)
 import '../backgroundMessaging'
@@ -67,18 +68,41 @@ function AuthGate() {
     useAuth()
   const segments = useSegments()
   const pathname = segments.join('/')
-  const { gameId: gameIdParam, questionId: questionIdParam } =
-    useLocalSearchParams<{
-      gameId?: string | string[]
-      questionId?: string | string[]
-    }>()
+  const {
+    gameId: gameIdParam,
+    questionId: questionIdParam,
+    source: sourceParam,
+    ref: referralCodeParam,
+  } = useLocalSearchParams<{
+    gameId?: string | string[]
+    questionId?: string | string[]
+    source?: string | string[]
+    ref?: string | string[]
+  }>()
   const incomingGameId = Array.isArray(gameIdParam)
     ? gameIdParam[0]
     : gameIdParam
   const incomingQuestionId = Array.isArray(questionIdParam)
     ? questionIdParam[0]
     : questionIdParam
+  const incomingSource = Array.isArray(sourceParam)
+    ? sourceParam[0]
+    : sourceParam
+  const incomingReferralCode = Array.isArray(referralCodeParam)
+    ? referralCodeParam[0]
+    : referralCodeParam
   const { AuthConfig } = NativeModules as any
+
+  useEffect(() => {
+    if (!incomingGameId || (!incomingSource && !incomingReferralCode)) return
+    void savePendingGameAttribution({
+      gameId: incomingGameId,
+      source: incomingSource || 'shared_link',
+      ...(incomingReferralCode ? { referralCode: incomingReferralCode } : {}),
+    }).catch((error) =>
+      console.warn('[Attribution] Failed to save shared game', error)
+    )
+  }, [incomingGameId, incomingReferralCode, incomingSource])
 
   // Ensure the questions notification channel exists with high importance so pushes can surface/wake the device
   useEffect(() => {

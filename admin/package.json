@@ -6,7 +6,7 @@
     "dev:dev": "env-cmd -f .env.development next dev --turbopack",
     "dev:prod": "env-cmd -f .env.production next dev --turbopack",
     "build:dev": "env-cmd -f .env.development next build --turbopack",
-    "build:prod": "env-cmd -f .env.production NODE_ENV=production next build --turbopack",
+    "build:prod": "NODE_ENV=production env-cmd -f .env.production next build --turbopack",
     "start": "next start",
     "lint": "eslint"
   },

@@ -28,6 +28,23 @@ type Props = {
   isPractice?: boolean
 }
 
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+
+const parseResponse = (body: string): { [key: string]: JsonValue } => {
+  if (!body) return {}
+  const parsed = JSON.parse(body) as JsonValue
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+    return {}
+  }
+  return parsed
+}
+
 const normalizeUpper = (value: string | null | undefined) =>
   String(value || '')
     .trim()
@@ -127,7 +144,7 @@ export function QuestionAnswerModal({
       const idToken = currentUser
         ? await getIdTokenModular(currentUser)
         : undefined
-      const isPractice = gameId?.startsWith('practice-')
+      const practiceMode = gameId?.startsWith('practice-') || isPractice
       const apiUrl = `${env.DOMAIN}/api/games/${gameId}/questions/${question.id}/prediction`
 
       const resp = await fetch(apiUrl, {
@@ -140,35 +157,42 @@ export function QuestionAnswerModal({
           prediction: answer,
           source: `${Platform.OS}-app`,
           questionTimeoutAt: Number(question.timeoutAt),
-          practice: isPractice,
+          practice: practiceMode,
         }),
       })
+
+      const responseData = parseResponse(await resp.text())
 
       if (!resp.ok) {
         throw new Error(`API response ${resp.status}`)
       }
 
-      const db = getFirestore()
-      const userPredictionRef = isPractice
-        ? doc(db, `users/${userId}/practice/predictions/items/${question.id}`)
-        : doc(db, `users/${userId}/games/${gameId}/predictions/${question.id}`)
-      const userQuestionRef =
-        isPractice &&
-        doc(db, `users/${userId}/practice/questions/items/${question.id}`)
+      if (responseData.accepted === false) return
 
-      await setDoc(userPredictionRef, {
-        prediction: answer,
-        source: 'app',
-        createdAt: serverTimestamp(),
-      })
-      if (userQuestionRef) {
-        await setDoc(
-          userQuestionRef,
-          {
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
+      if (practiceMode) {
+        const db = getFirestore()
+        const userPredictionRef = doc(
+          db,
+          `users/${userId}/practice/predictions/items/${question.id}`
         )
+        const userQuestionRef = doc(
+          db,
+          `users/${userId}/practice/questions/items/${question.id}`
+        )
+        await Promise.all([
+          setDoc(userPredictionRef, {
+            prediction: answer,
+            source: 'app',
+            createdAt: serverTimestamp(),
+          }),
+          setDoc(
+            userQuestionRef,
+            {
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          ),
+        ])
       }
 
       analytics.track('Prediction Made', {

@@ -308,6 +308,10 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       ))
 
       val resp = client.newCall(reqBuilder.build()).execute()
+      val responseBody = resp.body?.string().orEmpty()
+      val accepted = runCatching {
+        JSONObject(responseBody).optBoolean("accepted", true)
+      }.getOrDefault(true)
       if (!resp.isSuccessful) {
         Log.e("QuestionAction", "Submit failed: ${'$'}{resp.code}")
         logError(context, domain, token, "notification_prediction_submit_failed", mapOf(
@@ -324,17 +328,21 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
       } else {
         Log.d("QuestionAction", "Submit success")
         NotificationManagerCompat.from(context).cancel(questionId.hashCode())
-      logEvent(context, domain, token, "notification_prediction_submitted", mapOf(
-        "questionId" to questionId,
-        "gameId" to gameId,
-        "timeoutAt" to timeoutAt,
-        "receivedAt" to receivedAt,
-        "sentAt" to sentAt,
-        "notificationDisplayedAt" to notificationDisplayedAt,
-        "notificationViewedAt" to notificationViewedAt,
-        "choiceTappedAt" to choiceTappedAt,
-        "predictionSentAt" to predictionSentAt
-      ))
+        if (accepted) {
+          logEvent(context, domain, token, "notification_prediction_submitted", mapOf(
+            "questionId" to questionId,
+            "gameId" to gameId,
+            "timeoutAt" to timeoutAt,
+            "receivedAt" to receivedAt,
+            "sentAt" to sentAt,
+            "notificationDisplayedAt" to notificationDisplayedAt,
+            "notificationViewedAt" to notificationViewedAt,
+            "choiceTappedAt" to choiceTappedAt,
+            "predictionSentAt" to predictionSentAt
+          ))
+        } else {
+          Log.d("QuestionAction", "Duplicate answer ignored")
+        }
       }
       resp.close()
     } catch (e: Exception) {

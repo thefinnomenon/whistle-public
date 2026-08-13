@@ -17,27 +17,23 @@ service cloud.firestore {
       // Users can only update tokens and updatedAt fields
       allow update: if isSignedIn() && isUser(userId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tokens', 'updatedAt']);
-      // Users can delete their own account
-      allow delete: if isSignedIn() && isUser(userId);
+      // Account deletion goes through the API so game membership and counts are
+      // cleaned up atomically before the auth user is removed.
     }
 
-  	// CRUD for user's subcollections
-  	match /users/{userId}/{document=**} {
-      allow read, write: if isSignedIn() && isUser(userId);
-    }
-
-    // Users can read/write their own predictions for games they're in
-    match /users/{userId}/games/{gameId}/predictions/{questionId} {
+    match /users/{userId}/games/{gameId} {
       allow read: if isSignedIn() && isUser(userId);
-      allow write: if isSignedIn() && isUser(userId) && userIsInGame(gameId);
+    }
+
+    // Practice data is local to the signed-in user and has no prize impact.
+    match /users/{userId}/practice/{document=**} {
+      allow read, write: if isSignedIn() && isUser(userId);
     }
 
     // User can create a username entry with user = uid
     match /usernames/{username} {
     	allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.user == request.auth.uid;
-      // Users can delete their own username when deleting account
-      allow delete: if isSignedIn() && resource.data.user == request.auth.uid;
     }
     
     // Admins can CRUD games
@@ -45,31 +41,18 @@ service cloud.firestore {
     	allow read, write: if isAdmin();
     }
     
-    // All users can read game info
-    	// Users in game can read questions
-    		// Users can read their predictions
-    		// Users can create their prediction with userId as docId if question is open
-      // Users can read, delete, and create their user record (score = 0)
+    // Membership and prediction writes go through the authenticated API so
+    // player counts, eligibility, and cash payouts cannot be bypassed.
     match /games/{gameId} {
       allow read: if isSignedIn();
         match /questions/{questionId} {
           allow read: if isSignedIn() && userIsInGame(gameId);
           match /predictions/{userId} {
             allow read: if isSignedIn() && isUser(userId) && userIsInGame(gameId);
-            allow create: if isSignedIn()
-              && isUser(userId)
-              && userIsInGame(gameId)
-              && isQuestionOpen(gameId, questionId)
-              && 'prediction' in request.resource.data
-              && request.resource.data.prediction is bool
-              && request.resource.data.keys().hasOnly(['prediction', 'sentAt', 'receivedAt'])
-              && (!('sentAt' in request.resource.data) || request.resource.data.sentAt is number)
-              && (!('receivedAt' in request.resource.data) || request.resource.data.receivedAt is number);
           }
         }
         match /users/{userId} {
-          allow read, delete: if isSignedIn() && isUser(userId);
-          allow create: if isSignedIn() && isUser(userId) && request.resource.data.score == 0 && isUsername();
+          allow read: if isSignedIn() && isUser(userId);
         }
     }
     
@@ -85,20 +68,8 @@ service cloud.firestore {
     	return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
     }
 
-    function isUsername() {
-    	return get(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.user == request.auth.uid; 
-    }
-    
-    function isGameScheduled() {
-    	return resource.data.state == 'scheduled';
-    }
-    
     function userIsInGame(gameId) {
     	return exists(/databases/$(database)/documents/games/$(gameId)/users/$(request.auth.uid))
-    }
-    
-    function isQuestionOpen(gameId, questionId) {
-    	return get(/databases/$(database)/documents/games/$(gameId)/questions/$(questionId)).data.state == 'open';
     }
   }
 }

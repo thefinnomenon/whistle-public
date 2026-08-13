@@ -1,6 +1,7 @@
 'use client'
 
 import { useAuth } from '@/components/AuthProvider'
+import { FeaturedGamePanel } from '@/components/FeaturedGamePanel'
 import { apiRequest } from '@/lib/api'
 import { db } from '@/lib/firebase'
 import {
@@ -770,6 +771,8 @@ export default function GamePage() {
               </button>
             )}
           </div>
+
+          <FeaturedGamePanel game={game} gameId={gameId} />
 
           {/* Global Game Statistics */}
           {gameStats && (

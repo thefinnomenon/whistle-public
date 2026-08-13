@@ -6,9 +6,10 @@ export type LoginType = 'Google' | 'Apple'
 
 export type UserGame = {
   score: number
-  predictions: {
+  predictions?: {
     [questionId: string]: { prediction: string; createdAt: Timestamp }
   }
+  joinedAt?: FirestoreTimestamp
   updatedAt: FirestoreTimestamp
 }
 
@@ -16,6 +17,17 @@ export type GamePlayer = {
   score: number
   username: string
   platform?: string
+  joinedAt?: FirestoreTimestamp
+  answersSubmitted?: number
+  predictionsByQuestionId?: Record<string, string>
+  cashEligibility?: {
+    qualified: boolean
+    answered: number
+    offered: number
+    requiredAnswers: number
+    answerRate: number
+    reason: 'qualified' | 'missing_join_time' | 'minimum_answers' | 'answer_rate'
+  }
   updatedAt: FirestoreTimestamp
 }
 
@@ -26,6 +38,7 @@ export type User = {
   loginMethod?: LoginType
   isAdmin?: boolean
   winnings?: number
+  winningsCents?: number
   points?: number
   createdAt: FirestoreTimestamp
   updatedAt?: FirestoreTimestamp
@@ -46,6 +59,7 @@ export type Game = {
   awayTeam: string
   startTime: FirestoreTimestamp
   prizeAmount: number
+  prizeAmountCents?: number
   prizeType?: 'USD' | 'POINTS'
   playerCount: number
   createdAt: FirestoreTimestamp
@@ -55,15 +69,36 @@ export type Game = {
   playerCountByPlatform?: PlayerCountByPlatform
   sport?: Sport
   league?: League
+  isFeatured?: boolean
+  featuredWeekKey?: string
+  featuredPoolAmount?: number
+  featuredPoolAnnouncements?: Partial<
+    Record<'25' | '50' | '100', FirestoreTimestamp>
+  >
+  featuredPool50UnlockedAt?: FirestoreTimestamp
+  featuredPool100UnlockedAt?: FirestoreTimestamp
+  payoutStatus?: 'processing' | 'completed'
+  payoutPrizeType?: 'USD' | 'POINTS'
+  payoutTotalUnits?: number
+  payoutWinnerCount?: number
+  cashWinnerUserIds?: string[]
+  payoutEligiblePlayerCount?: number
+  payoutTopScore?: number | null
+  payoutStartedAt?: FirestoreTimestamp
+  payoutCompletedAt?: FirestoreTimestamp
+  cashEligibilityMinAnswers?: number
+  cashEligibilityMinRate?: number
 }
 
 export type PlayerCountByPlatform = {
   ios: number
   android: number
+  web?: number
   unknown?: number
 }
 
 export type LeaderboardItem = {
+  userId?: string
   place: number
   username: string
   score: number
@@ -155,6 +190,15 @@ export type Question = {
   cancelledAt?: FirestoreTimestamp
   changedAt?: FirestoreTimestamp
   engineTag?: string
+  nflDedupe?: {
+    redZoneDriveId?: string
+    redZonePeriodKey?: string
+    receiverQuestionKey?: string
+    completionReceiverHalfKey?: string
+    timeoutQuestionDriveId?: string
+    gameQuestionKey?: string
+    periodQuestionKey?: string
+  }
   engineVersion?: string
   avgResponseTimeMs?: number
   statistics?: QuestionStatistics

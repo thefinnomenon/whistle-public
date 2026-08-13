@@ -7,17 +7,21 @@ import { router } from 'expo-router'
 import { NBA, NFL } from '../../../logos'
 
 type Props = {
-  game: any
+  game: Game
   insetsTop: number
   onLeave: () => void
+  onShare?: () => void
   showLeave?: boolean
+  showShare?: boolean
 }
 
 export function GameNavbar({
   game,
   insetsTop,
   onLeave,
+  onShare,
   showLeave = true,
+  showShare = false,
 }: Props) {
   const logos = useMemo(() => {
     const home =
@@ -50,6 +54,17 @@ export function GameNavbar({
         className="absolute right-4 z-50 flex-row items-center gap-2"
         style={{ top: insetsTop + 12 }}
       >
+        {game.state === 'open' && showShare && onShare && (
+          <TouchableOpacity
+            onPress={onShare}
+            className="h-10 w-10 items-center justify-center"
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Invite friends"
+          >
+            <Ionicons name="person-add-outline" size={20} color="#2878ff" />
+          </TouchableOpacity>
+        )}
         {game.state === 'open' && showLeave && (
           <TouchableOpacity
             onPress={onLeave}

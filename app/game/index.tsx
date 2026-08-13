@@ -1,22 +1,28 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, AppState, Text, TouchableOpacity, View } from 'react-native'
+import {
+  Alert,
+  AppState,
+  Share,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { analytics } from '@/lib/analytics'
 import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
+import { FeaturedPoolProgress } from '@/components/FeaturedPoolProgress'
 
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
+import { getGameShareLink } from '@/lib/gameParticipation'
 import {
-  deleteGamePlayer,
   getGamePlayerStream,
   getGameStream,
   getPracticePredictionsStream,
   getPracticeQuestionsStream,
   getQuestionsStream,
-  getUserGameStream,
-  getUserPredictionsStream,
 } from '@/lib/firebase'
 import { createPracticeQuestion } from '@/lib/practice'
 import { GameInfoBar } from './components/GameInfoBar'
@@ -43,7 +49,6 @@ export default function GameScreen() {
     isPracticeExplicit || (gameId ? gameId.startsWith('practice-') : false)
 
   const [questions, setQuestions] = useState<Question[]>([])
-  const [userGame, setUserGame] = useState<UserGame>()
   const [gamePlayer, setGamePlayer] = useState<GamePlayer>()
   const [predictions, setPredictions] = useState<Map<string, string>>(new Map())
   const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(
@@ -52,7 +57,6 @@ export default function GameScreen() {
   const isLeavingRef = useRef(false)
   const unsubscribeGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeQuestionsRef = useRef<(() => void) | undefined>(null)
-  const unsubscribeUserGameRef = useRef<(() => void) | undefined>(null)
   const unsubscribeGamePlayerRef = useRef<(() => void) | undefined>(null)
   const unsubscribePredictionsRef = useRef<(() => void) | undefined>(null)
   const [sendingPractice, setSendingPractice] = useState(false)
@@ -81,7 +85,6 @@ export default function GameScreen() {
   const userIdRef = useRef(user?.id)
   const setGameRef = useRef(setGame)
   const setQuestionsRef = useRef(setQuestions)
-  const setUserGameRef = useRef(setUserGame)
   const setGamePlayerRef = useRef(setGamePlayer)
   const setPredictionsRef = useRef(setPredictions)
   const practiceAlertShownRef = useRef(false)
@@ -92,18 +95,16 @@ export default function GameScreen() {
     userIdRef.current = user?.id
     setGameRef.current = setGame
     setQuestionsRef.current = setQuestions
-    setUserGameRef.current = setUserGame
     setGamePlayerRef.current = setGamePlayer
     setPredictionsRef.current = setPredictions
-  }, [
-    gameId,
-    user?.id,
-    setGame,
-    setQuestions,
-    setUserGame,
-    setGamePlayer,
-    setPredictions,
-  ])
+  }, [gameId, user?.id, setGame, setQuestions, setGamePlayer, setPredictions])
+
+  useEffect(() => {
+    if (isPracticeMode) return
+    setPredictions(
+      new Map(Object.entries(gamePlayer?.predictionsByQuestionId ?? {}))
+    )
+  }, [gamePlayer?.predictionsByQuestionId, isPracticeMode])
 
   // Practice: derive local score/leaderboard from predictions
   useEffect(() => {
@@ -136,11 +137,6 @@ export default function GameScreen() {
       username: user.username || 'You',
     }))
     // @ts-ignore
-    setUserGame((prev) => ({
-      ...(prev || {}),
-      score,
-    }))
-    // @ts-ignore
     setGame((prev: any) => ({
       ...(prev || {}),
       id: practiceGameId,
@@ -169,7 +165,6 @@ export default function GameScreen() {
     questions,
     setGame,
     setGamePlayer,
-    setUserGame,
     user?.id,
     user?.username,
   ])
@@ -177,15 +172,15 @@ export default function GameScreen() {
   // Handle leave game
   const handleLeaveGame = useCallback(() => {
     Alert.alert(
-      'Leave Game',
-      'Are you sure you want to leave the game? You will forfeit your current score and will no longer receive questions.',
+      'Exit Game',
+      'Exit this screen and stop game notifications? Your score and game entry will be kept, and you can return later.',
       [
         {
           text: 'Cancel',
           style: 'cancel',
         },
         {
-          text: 'OK',
+          text: 'Exit',
           onPress: async () => {
             if (!user || !game) return
             const id = gameId || game.id
@@ -196,8 +191,7 @@ export default function GameScreen() {
             try {
               isLeavingRef.current = true
 
-              // Track game leave
-              analytics.track('Game Left', {
+              analytics.track('Game Exited', {
                 user_id: user.id,
                 game_id: id,
                 username: user.username,
@@ -206,9 +200,6 @@ export default function GameScreen() {
               if (!isPracticeMode) {
                 // Unsubscribe from game topic
                 await unsubscribeFromGameTopic(id)
-
-                // Delete player from game
-                await deleteGamePlayer(id, user.id)
               }
 
               router.replace('/')
@@ -222,6 +213,27 @@ export default function GameScreen() {
     )
   }, [user, game, gameId, isPracticeMode])
 
+  const handleShareFeaturedGame = useCallback(async () => {
+    if (!game?.id || !game.isFeatured) return
+    try {
+      const shareLink = await getGameShareLink(game.id)
+      const result = await Share.share({
+        title: `${game.awayTeam} vs ${game.homeTeam} on Whistle`,
+        message: `${shareLink.text}\n${shareLink.url}`,
+        url: shareLink.url,
+      })
+      analytics.track('Featured Game Shared', {
+        game_id: game.id,
+        referral_code: shareLink.referralCode,
+        source: 'live_game',
+        completed: result.action === Share.sharedAction,
+      })
+    } catch (error) {
+      console.error('Failed to share featured game:', error)
+      Alert.alert('Unable to share', 'Please try again in a moment.')
+    }
+  }, [game])
+
   // Handle app state changes (background/foreground)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
@@ -229,13 +241,11 @@ export default function GameScreen() {
         console.log('[Game] App backgrounded - unsubscribing')
         if (unsubscribeGameRef.current) unsubscribeGameRef.current()
         if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
-        if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
         if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
         if (unsubscribePredictionsRef.current)
           unsubscribePredictionsRef.current()
         unsubscribeGameRef.current = undefined
         unsubscribeQuestionsRef.current = undefined
-        unsubscribeUserGameRef.current = undefined
         unsubscribeGamePlayerRef.current = undefined
         unsubscribePredictionsRef.current = undefined
       } else if (nextAppState === 'active') {
@@ -267,39 +277,19 @@ export default function GameScreen() {
             Promise.all([
               getGameStream(currentGameId, setGameRef.current),
               getQuestionsStream(currentGameId, setQuestionsRef.current),
-              getUserGameStream(
-                currentUserId,
-                currentGameId,
-                setUserGameRef.current
-              ),
               getGamePlayerStream(
                 currentGameId,
                 currentUserId,
                 setGamePlayerRef.current
               ),
-              getUserPredictionsStream(
-                currentGameId,
-                currentUserId,
-                setPredictionsRef.current
-              ),
-            ]).then(
-              ([
-                gameUnsub,
-                questionsUnsub,
-                userGameUnsub,
-                gamePlayerUnsub,
-                predictionsUnsub,
-              ]) => {
-                unsubscribeGameRef.current = gameUnsub
-                unsubscribeQuestionsRef.current = questionsUnsub
-                unsubscribeUserGameRef.current = userGameUnsub
-                unsubscribeGamePlayerRef.current = gamePlayerUnsub
-                unsubscribePredictionsRef.current = predictionsUnsub
-                console.log(
-                  `[Game] Successfully resubscribed to game ${currentGameId} (5 subscriptions)`
-                )
-              }
-            )
+            ]).then(([gameUnsub, questionsUnsub, gamePlayerUnsub]) => {
+              unsubscribeGameRef.current = gameUnsub
+              unsubscribeQuestionsRef.current = questionsUnsub
+              unsubscribeGamePlayerRef.current = gamePlayerUnsub
+              console.log(
+                `[Game] Successfully resubscribed to game ${currentGameId} (3 subscriptions)`
+              )
+            })
           }
         }
       }
@@ -316,7 +306,7 @@ export default function GameScreen() {
         practiceAlertShownRef.current = true
         Alert.alert(
           'Practice mode',
-          'Tap "Send Practice Question" to simulate a game. You can answer here on the game screen, or answer from the notification — long press to expand on iOS or tap the arrow to expand on Android.'
+          'Tap "Send Practice Question" to simulate a game. You can answer here on the game screen, or answer from the notification. Long press to expand on iOS or tap the arrow to expand on Android.'
         )
       }, 1000)
       return () => clearTimeout(timer)
@@ -358,7 +348,6 @@ export default function GameScreen() {
             closedAt: new Date() as any,
             updatedAt: new Date() as any,
           } as any)
-          setUserGame({ score: 0 } as any)
           setGamePlayer({
             score: 0,
             username: user.username || 'You',
@@ -376,27 +365,17 @@ export default function GameScreen() {
           return
         }
 
-        const [
-          gameUnsub,
-          questionsUnsub,
-          userGameUnsub,
-          gamePlayerUnsub,
-          predictionsUnsub,
-        ] = await Promise.all([
+        const [gameUnsub, questionsUnsub, gamePlayerUnsub] = await Promise.all([
           getGameStream(targetGameId, setGame),
           getQuestionsStream(targetGameId, setQuestions),
-          getUserGameStream(user.id, targetGameId, setUserGame),
           getGamePlayerStream(targetGameId, user.id, setGamePlayer),
-          getUserPredictionsStream(targetGameId, user.id, setPredictions),
         ])
 
         unsubscribeGameRef.current = gameUnsub
         unsubscribeQuestionsRef.current = questionsUnsub
-        unsubscribeUserGameRef.current = userGameUnsub
         unsubscribeGamePlayerRef.current = gamePlayerUnsub
-        unsubscribePredictionsRef.current = predictionsUnsub
         console.log(
-          `[Game] Successfully subscribed to game ${targetGameId} (5 subscriptions)`
+          `[Game] Successfully subscribed to game ${targetGameId} (3 subscriptions)`
         )
 
         // Resubscribe to FCM topic for notifications if available.
@@ -422,13 +401,11 @@ export default function GameScreen() {
         )
         if (unsubscribeGameRef.current) unsubscribeGameRef.current()
         if (unsubscribeQuestionsRef.current) unsubscribeQuestionsRef.current()
-        if (unsubscribeUserGameRef.current) unsubscribeUserGameRef.current()
         if (unsubscribeGamePlayerRef.current) unsubscribeGamePlayerRef.current()
         if (unsubscribePredictionsRef.current)
           unsubscribePredictionsRef.current()
         unsubscribeGameRef.current = undefined
         unsubscribeQuestionsRef.current = undefined
-        unsubscribeUserGameRef.current = undefined
         unsubscribeGamePlayerRef.current = undefined
         unsubscribePredictionsRef.current = undefined
       }
@@ -444,7 +421,7 @@ export default function GameScreen() {
 
   if (!gameId && !isPracticeMode) return
 
-  if (!game || !userGame) return null
+  if (!game || (!isPracticeMode && !gamePlayer)) return null
 
   const handlePracticeQuestion = async () => {
     if (!user?.id) return
@@ -469,9 +446,22 @@ export default function GameScreen() {
         game={game}
         insetsTop={insets.top}
         onLeave={handleLeaveGame}
-        showLeave={!isPracticeMode}
+        onShare={handleShareFeaturedGame}
+        showLeave={!isPracticeMode && !game.isFeatured}
+        showShare={!isPracticeMode && Boolean(game.isFeatured)}
       />
       <GameInfoBar game={game} gamePlayer={gamePlayer} />
+      {!isPracticeMode && game.isFeatured && (
+        <View className="px-4 pt-3">
+          <FeaturedPoolProgress
+            playerCount={game.playerCount || 0}
+            featuredPoolAmount={game.featuredPoolAmount}
+            answersSubmitted={gamePlayer?.answersSubmitted ?? 0}
+            cashEligibility={gamePlayer?.cashEligibility}
+            compact
+          />
+        </View>
+      )}
       {isPracticeMode && (
         <View className="px-4 py-3">
           <TouchableOpacity

@@ -14,6 +14,8 @@ import gameRouter, {
   updatePlayerCountsForActiveGames,
 } from './routes/game'
 import logsRouter from './routes/logs'
+import participationRouter from './routes/participation'
+import referralLandingRouter from './routes/referralLanding'
 import testersRouter from './routes/testers'
 import { startSeasonProfilesWorker } from './workers/seasonProfilesWorker'
 import { startUserCreatedSlackWorker } from './workers/userCreatedSlackWorker'
@@ -68,6 +70,8 @@ app.get('/testers', (_req, res) =>
   res.sendFile(resolveStaticHtml('testers.html'))
 )
 
+app.use('/join', referralLandingRouter)
+app.use('/api/games', participationRouter)
 app.use('/api/games', gameRouter)
 app.use('/api', authRouter)
 app.use('/api/feedback', feedbackRouter)
@@ -133,7 +137,7 @@ const BACKGROUND_WORKERS_ENABLED =
 const RUN_PLAYER_COUNT_WORKER = parseBooleanEnv(
   'RUN_PLAYER_COUNT_WORKER',
   process.env.RUN_PLAYER_COUNT_WORKER,
-  BACKGROUND_WORKERS_ENABLED
+  false
 )
 const RUN_SCHEDULED_GAMES_WORKER = parseBooleanEnv(
   'RUN_SCHEDULED_GAMES_WORKER',
@@ -143,12 +147,12 @@ const RUN_SCHEDULED_GAMES_WORKER = parseBooleanEnv(
 const RUN_NBA_SCHEDULE_WORKER = parseBooleanEnv(
   'RUN_NBA_SCHEDULE_WORKER',
   process.env.RUN_NBA_SCHEDULE_WORKER,
-  BACKGROUND_WORKERS_ENABLED
+  false
 )
 const RUN_NBA_LIVE_WORKER = parseBooleanEnv(
   'RUN_NBA_LIVE_WORKER',
   process.env.RUN_NBA_LIVE_WORKER,
-  BACKGROUND_WORKERS_ENABLED
+  false
 )
 const RUN_NFL_SCHEDULE_WORKER = parseBooleanEnv(
   'RUN_NFL_SCHEDULE_WORKER',
@@ -163,7 +167,7 @@ const RUN_NFL_LIVE_WORKER = parseBooleanEnv(
 const RUN_SEASON_PROFILES_WORKER = parseBooleanEnv(
   'RUN_SEASON_PROFILES_WORKER',
   process.env.RUN_SEASON_PROFILES_WORKER,
-  BACKGROUND_WORKERS_ENABLED
+  false
 )
 const RUN_USER_CREATED_SLACK_WORKER = parseBooleanEnv(
   'RUN_USER_CREATED_SLACK_WORKER',

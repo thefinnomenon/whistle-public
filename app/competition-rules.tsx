@@ -40,7 +40,8 @@ const RULES: RuleSection[] = [
   {
     title: '4. Competition Period',
     paragraphs: [
-      'Each Competition Period begins at 12:00 AM EST on Monday and ends at 11:59 PM EST on Sunday of the same week.',
+      'Each Featured Game is a separate Competition. Its Competition Period begins when the game is marked as featured in Whistle and ends when Whistle resolves the game after the official game ends.',
+      'Participants may join before or during the game while the Competition remains open.',
       'Finnternet LLC reserves the right to modify Competition dates or times at its discretion.',
     ],
   },
@@ -48,8 +49,8 @@ const RULES: RuleSection[] = [
     title: '5. How to Enter',
     paragraphs: ['To enter the Competition, users must:'],
     bullets: [
-      'Participate in prediction games within the Whistle app during the Competition Period.',
-      'Submit predictions for at least 50% of eligible game questions in a session to qualify.',
+      'Join the Featured Game in the Whistle app during its Competition Period.',
+      'Submit at least five predictions and answer at least 50% of the resolved questions offered after joining the game.',
       'There is no random drawing or chance-based selection for recognition. Winners are determined solely on skill-based performance.',
     ],
   },
@@ -57,31 +58,32 @@ const RULES: RuleSection[] = [
     title: '6. Competition Format (Skill-Based)',
     paragraphs: [
       'Participants earn points based on the accuracy of their predictions, as calculated by the Whistle app.',
-      'At the end of the Competition Period, the participant(s) with the highest total points will be declared the Competition winner(s).',
-      'If two or more participants are tied for the highest score, all tied participants will be recognized as Competition winners.',
+      'At the end of the Competition Period, the eligible participant or participants with the highest total points will be declared the Competition winners.',
+      'If two or more eligible participants are tied for the highest score, the advertised prize pool will be divided among them as evenly as possible.',
       'No luck or chance component is involved. All results are based on in-app performance.',
     ],
   },
   {
-    title: '7. Winner Recognition',
+    title: '7. Prize Pool and Awards',
     paragraphs: [
-      'No cash, monetary award, or other item of value is awarded for this Competition.',
+      'The Featured Game starts with a guaranteed $25 cash prize pool. The pool increases to $50 when 50 participants join and to $100 when 100 participants join.',
+      'Participant thresholds may be reached before or during the game. Once a higher pool is unlocked, it remains unlocked for that Competition.',
     ],
     bullets: [
-      'Winners may be acknowledged in the app leaderboard or other in-app competition surfaces.',
-      'If multiple winners are tied for first place, all tied winners will receive the same recognition.',
-      'No payment, transfer, or fulfillment process applies.',
+      'The final advertised pool is divided among all tied eligible first-place winners.',
+      'Awards are calculated in whole cents. If a pool cannot be divided evenly, the remaining cent or cents are assigned using a stable participant-ID order.',
+      'Winnings are credited to the winner account in Whistle.',
     ],
   },
   {
     title: '8. Winner Notification',
     paragraphs: [
-      'Winners will be notified within 72 hours after the Competition Period ends via:',
+      'Winners will be notified after the Competition Period ends via:',
     ],
     bullets: [
       'An in-app notification;',
       'Email, if provided.',
-      'No response is required to receive winner recognition.',
+      'No response is required for winnings to be credited to the winner account.',
     ],
   },
   {

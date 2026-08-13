@@ -2,6 +2,13 @@ import { createHash, createHmac } from 'crypto'
 import { Router } from 'express'
 import { admin, db } from '../firebase'
 import { scheduleGameStartQuestions } from '../lib/engine'
+import {
+  buildPayoutPlan,
+  CASH_ELIGIBILITY_MIN_ANSWERS,
+  CASH_ELIGIBILITY_MIN_RATE,
+  CashEligibilityResult,
+  evaluateCashEligibility,
+} from '../lib/gamePayout'
 import { simulateStoredGame } from '../lib/gameSimulation'
 import {
   identifyUser,
@@ -36,15 +43,27 @@ const QUESTION_PAYLOAD_VERSION = 1
  * - timeoutAt: ms timestamp (number) used for countdown/expiry
  * - questionPayload/questionSignature: raw strings passed through unchanged
  */
+type SignedPayloadValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SignedPayloadValue[]
+  | { [key: string]: SignedPayloadValue }
+
 type SignedQuestionPayload = {
   version: number
   gameId: string
   questionId: string
   question: string
-  choices: { id: string; value: string; [key: string]: any }[]
+  choices: {
+    id: string
+    value: string
+    [key: string]: SignedPayloadValue
+  }[]
   timeoutAt: number | null
   engineTag?: string
-  [key: string]: any
+  [key: string]: SignedPayloadValue | undefined
 }
 
 type TimestampLikeValue =
@@ -71,6 +90,76 @@ type QuestionDocData = {
   closedAt?: TimestampLikeValue
   resolvedAt?: TimestampLikeValue
   cancelledAt?: TimestampLikeValue
+  choices?: { id?: string; value?: string }[]
+}
+
+type PredictionRequestBody = {
+  prediction?: string | number | boolean
+  notificationViewedAt?: string | number
+  notificationSentAt?: string | number
+  notificationDisplayedAt?: string | number
+  source?: string
+  questionTimeoutAt?: string | number
+  questionPayload?: string
+  questionSignature?: string
+  choiceTappedAt?: string | number
+  predictionSentAt?: string | number
+  practice?: boolean
+}
+
+type PredictionWrite = {
+  prediction: string
+  source: string
+  questionTimeoutAt?: number
+  timeRemaining?: number
+  createdAt: admin.firestore.FieldValue
+  createdAtMs: number
+  notificationViewedAt?: number
+  notificationSentAt?: number
+  notificationDisplayedAt?: number
+  deliveryMs?: number
+  openMs?: number
+  respondMs?: number
+  timeRemainingAtReceive?: number
+  timeRemainingAtOpen?: number
+  choiceTappedAt?: number
+  predictionSentAt?: number
+  tapToSendMs?: number
+  tapToAckMs?: number
+  questionPayload?: SignedQuestionPayload
+  questionSignature?: string
+}
+
+type PredictionTransactionResult = {
+  question: QuestionDocData
+  timeRemaining?: number
+}
+
+type FirestoreError = Error & { code?: string | number }
+
+const isFirestoreErrorCode = (
+  error: Error,
+  stringCode: string,
+  numericCode: number
+): boolean => {
+  const code = (error as FirestoreError).code
+  return code === stringCode || code === numericCode
+}
+
+const PREDICTION_SUBMISSION_GRACE_MS = 2_000
+
+const parseOptionalNumber = (value: string | number | undefined) => {
+  if (value === undefined) return undefined
+  const parsed = typeof value === 'string' ? Number(value) : value
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+const normalizeSubmittedPrediction = (
+  value: string | number | boolean | undefined
+): string | null => {
+  if (value === undefined) return null
+  const normalized = String(value).trim()
+  return normalized ? normalized : null
 }
 
 const toMs = (value: TimestampLikeValue): number | null => {
@@ -134,14 +223,24 @@ const buildSignedQuestionPayload = (payload: SignedQuestionPayload) => {
 const verifyQuestionPayload = (
   payloadString?: string,
   signature?: string
-): Record<string, any> | undefined => {
+): SignedQuestionPayload | undefined => {
   if (!payloadString || !signature || !QUESTION_SIGNATURE_SECRET) return
   const expected = createHmac('sha256', QUESTION_SIGNATURE_SECRET)
     .update(payloadString)
     .digest('hex')
   if (expected !== signature) return
   try {
-    return JSON.parse(payloadString)
+    const payload = JSON.parse(payloadString) as SignedQuestionPayload
+    if (
+      typeof payload.version !== 'number' ||
+      typeof payload.gameId !== 'string' ||
+      typeof payload.questionId !== 'string' ||
+      typeof payload.question !== 'string' ||
+      !Array.isArray(payload.choices)
+    ) {
+      return
+    }
+    return payload
   } catch (e) {
     console.error('[verifyQuestionPayload] error', e)
     return
@@ -1181,6 +1280,7 @@ router.post(
   authMiddleware,
   async (req, res) => {
     const { gameId, questionId } = req.params
+    const body = (req.body || {}) as PredictionRequestBody
     const {
       prediction,
       notificationViewedAt,
@@ -1192,14 +1292,15 @@ router.post(
       questionSignature,
       choiceTappedAt,
       predictionSentAt,
-    } = req.body || {}
+    } = body
+    const normalizedPrediction = normalizeSubmittedPrediction(prediction)
 
     console.log(
       '[questions/prediction]',
       gameId,
       questionId,
       'prediction',
-      prediction,
+      normalizedPrediction,
       'source',
       source
     )
@@ -1208,7 +1309,7 @@ router.post(
       return res.status(401).json({ error: 'Unauthorized' })
     }
 
-    if (!prediction) {
+    if (normalizedPrediction === null) {
       return res.status(400).json({ error: 'prediction is required' })
     }
 
@@ -1223,31 +1324,17 @@ router.post(
         typeof questionSignature === 'string' ? questionSignature : undefined
       )
 
-      const parsedNotificationSentAt =
-        typeof notificationSentAt === 'string'
-          ? Number(notificationSentAt)
-          : notificationSentAt
-      const parsedNotificationDisplayedAt =
-        typeof notificationDisplayedAt === 'string'
-          ? Number(notificationDisplayedAt)
-          : notificationDisplayedAt
+      const parsedNotificationSentAt = parseOptionalNumber(notificationSentAt)
+      const parsedNotificationDisplayedAt = parseOptionalNumber(
+        notificationDisplayedAt
+      )
       const parsedNotificationViewedAt =
-        typeof notificationViewedAt === 'string'
-          ? Number(notificationViewedAt)
-          : notificationViewedAt
-      const parsedChoiceTappedAt =
-        typeof choiceTappedAt === 'string'
-          ? Number(choiceTappedAt)
-          : choiceTappedAt
-      const parsedPredictionSentAt =
-        typeof predictionSentAt === 'string'
-          ? Number(predictionSentAt)
-          : predictionSentAt
+        parseOptionalNumber(notificationViewedAt)
+      const parsedChoiceTappedAt = parseOptionalNumber(choiceTappedAt)
+      const parsedPredictionSentAt = parseOptionalNumber(predictionSentAt)
 
       const effectiveQuestionTimeoutAt =
-        (typeof questionTimeoutAt === 'string'
-          ? Number(questionTimeoutAt)
-          : questionTimeoutAt) ??
+        parseOptionalNumber(questionTimeoutAt) ??
         (verifiedQuestionPayload?.timeoutAt as number | undefined)
 
       // Calculate time remaining server-side for accuracy
@@ -1265,7 +1352,7 @@ router.post(
             {
               onboardingPrediction: {
                 questionId,
-                prediction,
+                prediction: normalizedPrediction,
                 source: normalizedSource,
                 questionTimeoutAt,
                 createdAt: now,
@@ -1280,7 +1367,7 @@ router.post(
           {
             userId,
             questionId,
-            prediction,
+            prediction: normalizedPrediction,
             source: normalizedSource,
           },
           userId
@@ -1292,7 +1379,7 @@ router.post(
       const isPractice =
         gameId?.startsWith('practice-') ||
         (verifiedQuestionPayload as any)?.practice === true ||
-        (req.body?.practice as any) === true
+        body.practice === true
 
       if (isPractice) {
         const practicePredictionRef = db
@@ -1312,7 +1399,7 @@ router.post(
           .doc(questionId)
 
         const practicePayload: any = {
-          prediction,
+          prediction: normalizedPrediction,
           source: normalizedSource,
           questionTimeoutAt: effectiveQuestionTimeoutAt,
           createdAt: now,
@@ -1362,7 +1449,7 @@ router.post(
           {
             userId,
             questionId,
-            prediction,
+            prediction: normalizedPrediction,
             source: normalizedSource,
           },
           userId
@@ -1371,57 +1458,13 @@ router.post(
         return res.json({ ok: true, practice: true })
       }
 
-      type QuestionAnalyticsDoc = {
-        engineTag?: string
-        templateId?: string
-        trigger?: string
-        windowType?: string
-        question?: string
-        choices?: { id?: string; value?: string }[]
-      }
-
-      const questionSnap = await db
+      const questionRef = db
         .collection('games')
         .doc(gameId)
         .collection('questions')
         .doc(questionId)
-        .get()
-      const questionData = questionSnap.exists
-        ? (questionSnap.data() as QuestionAnalyticsDoc)
-        : null
-      const questionChoices = Array.isArray(questionData?.choices)
-        ? questionData.choices.map((choice) => ({
-            id: String(choice?.id ?? ''),
-            value: String(choice?.value ?? ''),
-          }))
-        : []
-      const dimensions = deriveQuestionDimensions({
-        templateId:
-          questionData?.engineTag ||
-          questionData?.templateId ||
-          verifiedQuestionPayload?.engineTag ||
-          null,
-        trigger: questionData?.trigger || null,
-        windowType: questionData?.windowType || null,
-        questionText: questionData?.question || null,
-        choices: questionChoices,
-      })
-
-      const predictionRef = db
-        .collection('games')
-        .doc(gameId)
-        .collection('questions')
-        .doc(questionId)
-        .collection('predictions')
-        .doc(userId)
-
-      const userPredictionRef = db
-        .collection('users')
-        .doc(userId)
-        .collection('games')
-        .doc(gameId)
-        .collection('predictions')
-        .doc(questionId)
+      const predictionRef = questionRef.collection('predictions').doc(userId)
+      const memberRef = db.doc(`games/${gameId}/users/${userId}`)
 
       // Derive timing metrics (ms) when data is available
       const createdAtMs = Date.now()
@@ -1459,51 +1502,165 @@ router.post(
           ? createdAtMs - parsedChoiceTappedAt
           : undefined
 
-      const payload: any = {
-        prediction,
-        source: normalizedSource,
-        questionTimeoutAt: effectiveQuestionTimeoutAt,
-        timeRemaining,
-        createdAt: now,
-        createdAtMs,
+      let submission: PredictionTransactionResult
+      try {
+        submission = await db.runTransaction<PredictionTransactionResult>(
+          async (transaction) => {
+            const questionSnap = await transaction.get(questionRef)
+            if (!questionSnap.exists) throw new Error('QUESTION_NOT_FOUND')
+
+            const questionData = questionSnap.data() as QuestionDocData
+            if (questionData.state !== 'open') {
+              throw new Error('QUESTION_CLOSED')
+            }
+            const authoritativeTimeoutAt = toMs(questionData.timeoutAt)
+            if (
+              authoritativeTimeoutAt !== null &&
+              nowMs > authoritativeTimeoutAt + PREDICTION_SUBMISSION_GRACE_MS
+            ) {
+              throw new Error('QUESTION_EXPIRED')
+            }
+            const normalizedChoice = normalizedPrediction.toLowerCase()
+            const validChoices = Array.isArray(questionData.choices)
+              ? questionData.choices
+              : []
+            if (
+              validChoices.length > 0 &&
+              !validChoices.some(
+                (choice) =>
+                  String(choice.id ?? '')
+                    .trim()
+                    .toLowerCase() === normalizedChoice ||
+                  String(choice.value ?? '')
+                    .trim()
+                    .toLowerCase() === normalizedChoice
+              )
+            ) {
+              throw new Error('INVALID_CHOICE')
+            }
+
+            const serverTimeoutAt =
+              authoritativeTimeoutAt ?? effectiveQuestionTimeoutAt
+            const authoritativeTimeRemaining =
+              serverTimeoutAt === undefined
+                ? undefined
+                : serverTimeoutAt - nowMs
+            const authoritativeTimeRemainingAtReceive =
+              parsedNotificationDisplayedAt !== undefined &&
+              serverTimeoutAt !== undefined
+                ? serverTimeoutAt - parsedNotificationDisplayedAt
+                : undefined
+            const authoritativeTimeRemainingAtOpen =
+              parsedNotificationViewedAt !== undefined &&
+              serverTimeoutAt !== undefined
+                ? serverTimeoutAt - parsedNotificationViewedAt
+                : undefined
+            const payload: PredictionWrite = {
+              prediction: normalizedPrediction,
+              source: normalizedSource,
+              ...(serverTimeoutAt !== undefined
+                ? { questionTimeoutAt: serverTimeoutAt }
+                : {}),
+              ...(authoritativeTimeRemaining !== undefined
+                ? { timeRemaining: authoritativeTimeRemaining }
+                : {}),
+              createdAt: now,
+              createdAtMs,
+              ...(parsedNotificationViewedAt !== undefined
+                ? { notificationViewedAt: parsedNotificationViewedAt }
+                : {}),
+              ...(parsedNotificationSentAt !== undefined
+                ? { notificationSentAt: parsedNotificationSentAt }
+                : {}),
+              ...(parsedNotificationDisplayedAt !== undefined
+                ? { notificationDisplayedAt: parsedNotificationDisplayedAt }
+                : {}),
+              ...(deliveryMs !== undefined ? { deliveryMs } : {}),
+              ...(openMs !== undefined ? { openMs } : {}),
+              ...(respondMs !== undefined ? { respondMs } : {}),
+              ...(authoritativeTimeRemainingAtReceive !== undefined
+                ? {
+                    timeRemainingAtReceive: authoritativeTimeRemainingAtReceive,
+                  }
+                : {}),
+              ...(authoritativeTimeRemainingAtOpen !== undefined
+                ? { timeRemainingAtOpen: authoritativeTimeRemainingAtOpen }
+                : {}),
+              ...(parsedChoiceTappedAt !== undefined
+                ? { choiceTappedAt: parsedChoiceTappedAt }
+                : {}),
+              ...(parsedPredictionSentAt !== undefined
+                ? { predictionSentAt: parsedPredictionSentAt }
+                : {}),
+              ...(tapToSendMs !== undefined ? { tapToSendMs } : {}),
+              ...(tapToAckMs !== undefined ? { tapToAckMs } : {}),
+              ...(verifiedQuestionPayload
+                ? {
+                    questionPayload: verifiedQuestionPayload,
+                    ...(questionSignature ? { questionSignature } : {}),
+                  }
+                : {}),
+            }
+
+            transaction.create(predictionRef, payload)
+            transaction.update(
+              memberRef,
+              new admin.firestore.FieldPath(
+                'predictionsByQuestionId',
+                questionId
+              ),
+              normalizedPrediction,
+              'answersSubmitted',
+              admin.firestore.FieldValue.increment(1),
+              'updatedAt',
+              now
+            )
+            return {
+              question: questionData,
+              timeRemaining: authoritativeTimeRemaining,
+            }
+          }
+        )
+      } catch (error) {
+        const transactionError =
+          error instanceof Error ? error : new Error(String(error))
+        if (isFirestoreErrorCode(transactionError, 'already-exists', 6)) {
+          return res.json({ ok: true, duplicate: true, accepted: false })
+        }
+        if (isFirestoreErrorCode(transactionError, 'not-found', 5)) {
+          throw new Error('NOT_IN_GAME')
+        }
+        throw transactionError
       }
 
-      if (parsedNotificationViewedAt !== undefined)
-        payload.notificationViewedAt = parsedNotificationViewedAt
-      if (parsedNotificationSentAt !== undefined)
-        payload.notificationSentAt = parsedNotificationSentAt
-      if (parsedNotificationDisplayedAt !== undefined)
-        payload.notificationDisplayedAt = parsedNotificationDisplayedAt
-      if (deliveryMs !== undefined) payload.deliveryMs = deliveryMs
-      if (openMs !== undefined) payload.openMs = openMs
-      if (respondMs !== undefined) payload.respondMs = respondMs
-      if (timeRemainingAtReceive !== undefined)
-        payload.timeRemainingAtReceive = timeRemainingAtReceive
-      if (timeRemainingAtOpen !== undefined)
-        payload.timeRemainingAtOpen = timeRemainingAtOpen
-      if (parsedChoiceTappedAt !== undefined)
-        payload.choiceTappedAt = parsedChoiceTappedAt
-      if (parsedPredictionSentAt !== undefined)
-        payload.predictionSentAt = parsedPredictionSentAt
-      if (tapToSendMs !== undefined) payload.tapToSendMs = tapToSendMs
-      if (tapToAckMs !== undefined) payload.tapToAckMs = tapToAckMs
-      if (verifiedQuestionPayload) {
-        payload.questionPayload = verifiedQuestionPayload
-        payload.questionSignature = questionSignature
-      }
+      const questionData = submission.question
+      timeRemaining = submission.timeRemaining
+      const questionChoices = Array.isArray(questionData.choices)
+        ? questionData.choices.map((choice) => ({
+            id: String(choice.id ?? ''),
+            value: String(choice.value ?? ''),
+          }))
+        : []
+      const dimensions = deriveQuestionDimensions({
+        templateId:
+          questionData.engineTag ||
+          questionData.templateId ||
+          verifiedQuestionPayload?.engineTag ||
+          null,
+        trigger: questionData.trigger || null,
+        windowType: questionData.windowType || null,
+        questionText: questionData.question || null,
+        choices: questionChoices,
+      })
 
-      await Promise.all([
-        predictionRef.set(payload, { merge: true }),
-        userPredictionRef.set(payload, { merge: true }),
-      ])
-
-      const eventProps: any = {
-        gameId,
-        questionId,
-        userId,
-        prediction,
-        source,
-      }
+      const eventProps: Record<string, string | number | boolean | undefined> =
+        {
+          gameId,
+          questionId,
+          userId,
+          prediction: normalizedPrediction,
+          source: normalizedSource,
+        }
 
       if (parsedNotificationViewedAt !== undefined)
         eventProps.notificationViewedAt = parsedNotificationViewedAt
@@ -1554,7 +1711,7 @@ router.post(
           user_id: userId,
           game_id: gameId,
           answered_timestamp: answeredTimestamp,
-          answer: String(prediction),
+          answer: normalizedPrediction,
           time_to_answer_ms: timeToAnswerMs,
           was_push_open: wasPushOpen,
           latency_at_answer_ms: latencyAtAnswerMs,
@@ -1576,8 +1733,9 @@ router.post(
         last_prediction_game_id: gameId,
       })
 
-      return res.json({ ok: true })
+      return res.json({ ok: true, accepted: true })
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error('[questions/prediction] error', err)
       trackEvent(
         'prediction_submit_error',
@@ -1585,10 +1743,22 @@ router.post(
           gameId,
           questionId,
           userId: req.user?.uid,
-          error: String(err),
+          error: message,
         },
         req.user?.uid
       )
+      if (message === 'QUESTION_NOT_FOUND') {
+        return res.status(404).json({ error: 'Question not found' })
+      }
+      if (message === 'NOT_IN_GAME') {
+        return res.status(403).json({ error: 'Join the game before answering' })
+      }
+      if (message === 'QUESTION_CLOSED' || message === 'QUESTION_EXPIRED') {
+        return res.status(409).json({ error: 'This answer window has closed' })
+      }
+      if (message === 'INVALID_CHOICE') {
+        return res.status(400).json({ error: 'Invalid answer choice' })
+      }
       return res.status(500).json({ error: 'Internal Server Error' })
     }
   }
@@ -1725,71 +1895,234 @@ const calculateGameStatistics = async (gameId: string) => {
   console.log('Successfully saved game statistics')
 }
 
-const distributeWinnings = async (
+type PayoutGameDocument = {
+  state?: string
+  isFeatured?: boolean
+  prizeAmount?: number
+  prizeAmountCents?: number
+  prize?: number
+  prizeType?: 'USD' | 'POINTS'
+  payoutStatus?: 'processing' | 'completed'
+}
+
+type PayoutMemberDocument = {
+  score?: number
+  joinedAt?: TimestampLikeValue
+  predictionsByQuestionId?: Record<string, string>
+}
+
+type PayoutUserDocument = {
+  winnings?: number
+  winningsCents?: number
+  points?: number
+}
+
+type WinnerNotification = {
+  userId: string
+  amount: number
+  type: 'USD' | 'POINTS'
+}
+
+const finiteNumber = (value: number | undefined, fallback = 0): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback
+
+const commitEligibilityResults = async (
   gameId: string,
-  game: any
-): Promise<{ userId: string; amount: number; type: 'USD' | 'POINTS' }[]> => {
-  console.log('Calculating winnings for game', gameId)
+  eligibility: CashEligibilityResult[]
+): Promise<void> => {
+  const chunkSize = 400
+  for (let offset = 0; offset < eligibility.length; offset += chunkSize) {
+    const batch = db.batch()
+    for (const result of eligibility.slice(offset, offset + chunkSize)) {
+      batch.set(
+        db.doc(`games/${gameId}/users/${result.userId}`),
+        {
+          cashEligibility: {
+            qualified: result.qualified,
+            answered: result.answered,
+            offered: result.offered,
+            requiredAnswers: result.requiredAnswers,
+            answerRate: result.answerRate,
+            reason: result.reason,
+          },
+          cashEligibilityCalculatedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+    await batch.commit()
+  }
+}
 
-  if (!game.leaderboard || game.leaderboard.length === 0) {
-    console.log('No leaderboard to distribute winnings from')
+const runInBatches = async <T>(
+  items: T[],
+  size: number,
+  task: (item: T) => Promise<void>
+): Promise<void> => {
+  for (let offset = 0; offset < items.length; offset += size) {
+    await Promise.all(items.slice(offset, offset + size).map(task))
+  }
+}
+
+export const distributeWinnings = async (
+  gameId: string
+): Promise<WinnerNotification[]> => {
+  console.log(`[payout] game=${gameId} stage=calculate`)
+  const gameRef = db.collection('games').doc(gameId)
+  const [gameSnap, memberSnap, questionSnap] = await Promise.all([
+    gameRef.get(),
+    gameRef.collection('users').get(),
+    gameRef.collection('questions').get(),
+  ])
+  if (!gameSnap.exists) return []
+  const game = gameSnap.data() as PayoutGameDocument
+  if (game.payoutStatus === 'completed') {
+    console.log(`[payout] game=${gameId} skipped=already_completed`)
     return []
   }
 
-  const topScore = game.leaderboard[0].score
-  const prizeAmount = game.prizeAmount ?? game.prize ?? 0
-  const prizeType: 'USD' | 'POINTS' = game.prizeType || 'USD'
+  const prizeType = game.prizeType ?? 'USD'
+  const members = memberSnap.docs.map((memberDoc) => {
+    const data = memberDoc.data() as PayoutMemberDocument
+    return {
+      userId: memberDoc.id,
+      score: finiteNumber(data.score),
+      joinedAtMs: toMs(data.joinedAt),
+      predictionsByQuestionId: data.predictionsByQuestionId ?? {},
+    }
+  })
+  const questions = questionSnap.docs.map((questionDoc) => {
+    const data = questionDoc.data() as QuestionDocData
+    return {
+      id: questionDoc.id,
+      state: data.state ?? 'unknown',
+      triggeredAtMs: toMs(data.triggeredAt ?? data.createdAt),
+    }
+  })
+  const eligibility =
+    prizeType === 'USD' && game.isFeatured
+      ? evaluateCashEligibility(members, questions)
+      : members.map<CashEligibilityResult>((member) => ({
+          userId: member.userId,
+          score: member.score,
+          answered: Object.keys(member.predictionsByQuestionId).length,
+          offered: questions.filter((question) => question.state === 'resolved')
+            .length,
+          requiredAnswers: 0,
+          answerRate: 1,
+          qualified: true,
+          reason: 'qualified',
+        }))
 
-  const winnerDocs = await admin
-    .firestore()
-    .collection(`games/${gameId}/users`)
-    .where('score', '==', topScore)
-    .get()
-
-  if (winnerDocs.empty) {
-    console.log('No winners found')
-    return []
+  if (prizeType === 'USD' && game.isFeatured) {
+    await commitEligibilityResults(gameId, eligibility)
   }
 
-  const numWinners = winnerDocs.size
-  const prizePerWinner = prizeAmount / numWinners
-
-  console.log(
-    `Distributing ${prizeType} ${prizeAmount} to ${numWinners} first place winner(s) with score ${topScore}: each ${prizePerWinner}`
+  const prizeAmount = finiteNumber(game.prizeAmount ?? game.prize)
+  const totalUnits =
+    prizeType === 'USD'
+      ? Math.max(0, Math.round(game.prizeAmountCents ?? prizeAmount * 100))
+      : Math.max(0, Math.floor(prizeAmount))
+  const plan = buildPayoutPlan(
+    totalUnits,
+    eligibility.map((entrant) => ({
+      userId: entrant.userId,
+      score: entrant.score,
+      eligible: entrant.qualified,
+    }))
+  )
+  const now = admin.firestore.FieldValue.serverTimestamp()
+  await gameRef.set(
+    {
+      payoutStatus: 'processing',
+      payoutPrizeType: prizeType,
+      payoutTotalUnits: plan.totalUnits,
+      payoutWinnerCount: plan.winners.length,
+      cashWinnerUserIds:
+        prizeType === 'USD'
+          ? plan.winners.map((winner) => winner.userId)
+          : admin.firestore.FieldValue.delete(),
+      payoutEligiblePlayerCount: eligibility.filter(
+        (entrant) => entrant.qualified
+      ).length,
+      payoutTopScore: plan.topScore,
+      cashEligibilityMinAnswers:
+        prizeType === 'USD' && game.isFeatured
+          ? CASH_ELIGIBILITY_MIN_ANSWERS
+          : null,
+      cashEligibilityMinRate:
+        prizeType === 'USD' && game.isFeatured
+          ? CASH_ELIGIBILITY_MIN_RATE
+          : null,
+      payoutStartedAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
   )
 
-  const batch = admin.firestore().batch()
-  const winnerNotifications: {
-    userId: string
-    amount: number
-    type: 'USD' | 'POINTS'
-  }[] = []
+  const newlyCreditedUserIds = new Set<string>()
+  await runInBatches(plan.winners, 10, async (winner) => {
+    const payoutRef = gameRef.collection('payouts').doc(winner.userId)
+    const userRef = db.collection('users').doc(winner.userId)
+    const credited = await db.runTransaction<boolean>(async (transaction) => {
+      const [payoutSnap, userSnap] = await Promise.all([
+        transaction.get(payoutRef),
+        transaction.get(userRef),
+      ])
+      if (payoutSnap.exists) return false
+      if (!userSnap.exists)
+        throw new Error(`PAYOUT_USER_MISSING:${winner.userId}`)
+      const user = userSnap.data() as PayoutUserDocument
 
-  winnerDocs.docs.forEach((winnerDoc) => {
-    const userId = winnerDoc.id
-    const userRef = admin.firestore().doc(`users/${userId}`)
-
-    if (prizeType === 'USD') {
-      batch.update(userRef, {
-        winnings: admin.firestore.FieldValue.increment(prizePerWinner),
+      if (prizeType === 'USD') {
+        const existingCents = Number.isFinite(user.winningsCents)
+          ? Math.round(user.winningsCents ?? 0)
+          : Math.round(finiteNumber(user.winnings) * 100)
+        const nextCents = existingCents + winner.amountUnits
+        transaction.update(userRef, {
+          winningsCents: nextCents,
+          winnings: nextCents / 100,
+          updatedAt: now,
+        })
+      } else {
+        transaction.update(userRef, {
+          points: finiteNumber(user.points) + winner.amountUnits,
+          updatedAt: now,
+        })
+      }
+      transaction.create(payoutRef, {
+        userId: winner.userId,
+        amountUnits: winner.amountUnits,
+        prizeType,
+        status: 'credited',
+        createdAt: now,
       })
-    } else {
-      batch.update(userRef, {
-        points: admin.firestore.FieldValue.increment(prizePerWinner),
-      })
-    }
-
-    winnerNotifications.push({
-      userId,
-      amount: prizePerWinner,
-      type: prizeType,
+      return true
     })
+    if (credited) newlyCreditedUserIds.add(winner.userId)
   })
 
-  await batch.commit()
-  console.log('Winnings distributed successfully')
+  await gameRef.set(
+    {
+      payoutStatus: 'completed',
+      payoutCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  )
+  console.log(
+    `[payout] game=${gameId} stage=completed type=${prizeType} units=${plan.totalUnits} winners=${plan.winners.length}`
+  )
 
-  return winnerNotifications
+  return plan.winners
+    .filter((winner) => newlyCreditedUserIds.has(winner.userId))
+    .map((winner) => ({
+      userId: winner.userId,
+      amount:
+        prizeType === 'USD' ? winner.amountUnits / 100 : winner.amountUnits,
+      type: prizeType,
+    }))
 }
 
 const notifyWinners = async (
@@ -2440,6 +2773,7 @@ const updateLeaderboard = async (gameId: string) => {
     .collection(`games/${gameId}/users`)
     .orderBy('score', 'desc')
     .orderBy('username', 'asc')
+    .select('score', 'username')
     .limit(100)
     .get()
 
@@ -2447,11 +2781,15 @@ const updateLeaderboard = async (gameId: string) => {
   const places = calculatePlaces(leaderboardQueryRes.docs)
 
   // Build new leaderboard
-  const newLeaderboard = leaderboardQueryRes.docs.map((doc, index) => ({
-    place: places[index],
-    userId: doc.id,
-    ...doc.data(),
-  }))
+  const newLeaderboard = leaderboardQueryRes.docs.map((doc, index) => {
+    const player = doc.data() as { score?: number; username?: string }
+    return {
+      place: places[index],
+      userId: doc.id,
+      score: finiteNumber(player.score),
+      username: player.username ?? 'Player',
+    }
+  })
 
   // Calculate hash of new leaderboard
   const newLeaderboardHash = createHash('sha256')
@@ -2537,29 +2875,32 @@ const sendNotificationsToGameUsers = async (
 
 export const endGameById = async (gameId: string, userId?: string) => {
   const gameRef = db.collection('games').doc(gameId)
-  const gameSnap = await gameRef.get()
-  if (!gameSnap.exists) {
-    return { status: 404 }
-  }
-  const game = gameSnap.data() as any
-  if (game?.state === 'resolved') {
+  const resolution = await db.runTransaction(async (transaction) => {
+    const gameSnap = await transaction.get(gameRef)
+    if (!gameSnap.exists) return null
+    const game = gameSnap.data() as PayoutGameDocument & {
+      homeTeam?: string
+      awayTeam?: string
+    }
+    const alreadyResolved = game.state === 'resolved'
+    if (!alreadyResolved) {
+      transaction.set(
+        gameRef,
+        {
+          state: 'resolved',
+          endedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+    return { game, alreadyResolved }
+  })
+  if (!resolution) return { status: 404 }
+  const { game, alreadyResolved } = resolution
+  if (alreadyResolved && game.payoutStatus === 'completed') {
     return { status: 200, alreadyResolved: true }
   }
-
-  await gameRef.set(
-    {
-      state: 'resolved',
-      endedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  )
-
-  await calculateGameStatistics(gameId)
-  const winnerNotifications = await distributeWinnings(gameId, game)
-  await notifyWinners(winnerNotifications, game)
-  const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing! Please click to submit feedback about the game.`
-  await sendNotificationsToGameUsers(gameId, message)
 
   const openQuestionsSnap = await gameRef
     .collection('questions')
@@ -2594,6 +2935,14 @@ export const endGameById = async (gameId: string, userId?: string) => {
     }
   }
 
+  await calculateGameStatistics(gameId)
+  const winnerNotifications = await distributeWinnings(gameId)
+  await notifyWinners(winnerNotifications, game)
+  if (!alreadyResolved) {
+    const message = `${game.homeTeam} vs. ${game.awayTeam} has ended. Thanks for playing! Please click to submit feedback about the game.`
+    await sendNotificationsToGameUsers(gameId, message)
+  }
+
   trackEvent(
     'game_ended',
     {
@@ -2606,5 +2955,5 @@ export const endGameById = async (gameId: string, userId?: string) => {
     userId
   )
 
-  return { status: 200 }
+  return { status: 200, alreadyResolved }
 }

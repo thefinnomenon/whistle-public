@@ -185,6 +185,11 @@ export default function HomePage() {
                         }`}>
                           {game.state}
                         </span>
+                        {game.isFeatured && (
+                          <span className="rounded bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-800">
+                            Featured
+                          </span>
+                        )}
                       </div>
                       <div className="text-sm text-gray-600 mt-1">
                         {game.startTime?.toDate?.()?.toLocaleString() || 'No date'}
@@ -204,6 +209,11 @@ export default function HomePage() {
                             })} points`}{' '}
                         prize
                       </div>
+                      {game.isFeatured && (
+                        <div className="text-xs font-medium text-blue-700">
+                          $25 → $50 at 50 → $100 at 100
+                        </div>
+                      )}
                     </div>
                   </div>
                 </Link>

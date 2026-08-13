@@ -1,6 +1,6 @@
 import { Asset } from 'expo-asset'
 import { Image as ExpoImage } from 'expo-image'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -8,24 +8,32 @@ import {
   Animated,
   FlatList,
   Platform,
+  Share,
   ScrollView,
   Text,
   View,
 } from 'react-native'
 
+import { FeaturedPoolProgress } from '@/components/FeaturedPoolProgress'
 import { Button } from '@/components/ui/button'
 import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { subscribeToGameTopic, unsubscribeFromGameTopic } from '@/lib/fcm'
+import { getGames, getUserGamesStream } from '@/lib/firebase'
 import {
-  deleteGamePlayer,
-  getGames,
-  joinGame,
-  getUserGamesStream,
-} from '@/lib/firebase'
+  getGameShareLink,
+  joinGameOnServer,
+  leaveGameOnServer,
+} from '@/lib/gameParticipation'
+import {
+  clearPendingGameAttribution,
+  GameShareAttribution,
+  getPendingGameAttribution,
+} from '@/lib/shareAttribution'
 import { cn } from '@/lib/utils'
 import { NBA, NFL } from '@/logos'
 import { Ionicons, MaterialCommunityIcons, Octicons } from '@expo/vector-icons'
+import { Timestamp } from '@react-native-firebase/firestore'
 import { cssInterop, useColorScheme } from 'nativewind'
 import { toast } from 'sonner-native'
 // This is needed since ExpoImage isn't supported by NativeWind
@@ -85,6 +93,32 @@ const sameDay = (a: Date, b: Date) =>
   a.getDate() === b.getDate()
 
 export default function GamesScreen() {
+  const params = useLocalSearchParams<{
+    gameId?: string | string[]
+    source?: string | string[]
+    ref?: string | string[]
+  }>()
+  const incomingGameId = Array.isArray(params.gameId)
+    ? params.gameId[0]
+    : params.gameId
+  const incomingSource = Array.isArray(params.source)
+    ? params.source[0]
+    : params.source
+  const incomingReferralCode = Array.isArray(params.ref)
+    ? params.ref[0]
+    : params.ref
+  const [shareAttribution, setShareAttribution] =
+    useState<GameShareAttribution | null>(() =>
+      incomingGameId
+        ? {
+            gameId: incomingGameId,
+            source: incomingSource || 'shared_link',
+            ...(incomingReferralCode
+              ? { referralCode: incomingReferralCode }
+              : {}),
+          }
+        : null
+    )
   const { colorScheme } = useColorScheme()
   const iconColor = colorScheme === 'dark' ? '#ffffff' : '#000000'
   const { user } = useAuth()
@@ -103,6 +137,19 @@ export default function GamesScreen() {
   )
   const fadeAnim = useRef(new Animated.Value(1)).current
   const isFirstRenderRef = useRef(true)
+  const handledIncomingGameRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (incomingGameId) {
+      setShareAttribution({
+        gameId: incomingGameId,
+        source: incomingSource || 'shared_link',
+        ...(incomingReferralCode ? { referralCode: incomingReferralCode } : {}),
+      })
+      return
+    }
+    void getPendingGameAttribution().then(setShareAttribution)
+  }, [incomingGameId, incomingReferralCode, incomingSource])
 
   useEffect(() => {
     Asset.loadAsync(logoAssets as any).catch((err) =>
@@ -169,8 +216,37 @@ export default function GamesScreen() {
         if (!sameDay(g.start as Date, selectedDay)) return false
         return (g.start as Date).getTime() >= cutoffMs
       })
-      .sort((a, b) => (a.start as Date).getTime() - (b.start as Date).getTime())
+      .sort(
+        (a, b) =>
+          Number(Boolean(b.isFeatured)) - Number(Boolean(a.isFeatured)) ||
+          (a.start as Date).getTime() - (b.start as Date).getTime()
+      )
   }, [games, selectedDay])
+
+  useEffect(() => {
+    if (
+      !shareAttribution?.gameId ||
+      handledIncomingGameRef.current === shareAttribution.gameId ||
+      games.length === 0
+    ) {
+      return
+    }
+    const incomingGame = games.find(
+      (game) => game.id === shareAttribution.gameId
+    )
+    const incomingStart = incomingGame?.startTime?.toDate?.()
+    if (incomingStart) {
+      const day = new Date(incomingStart)
+      day.setHours(0, 0, 0, 0)
+      setSelectedDay(day)
+      handledIncomingGameRef.current = shareAttribution.gameId
+      analytics.track('Shared Game Opened', {
+        game_id: shareAttribution.gameId,
+        source: shareAttribution.source,
+        has_referral: Boolean(shareAttribution.referralCode),
+      })
+    }
+  }, [games, shareAttribution])
 
   const handleJoin = async (game: Game & { start?: Date }) => {
     if (!user) {
@@ -195,10 +271,17 @@ export default function GamesScreen() {
           minute: '2-digit',
         })
 
-      await joinGame({
-        userId: user.id,
+      const joinResult = await joinGameOnServer({
         gameId: game.id,
-        username: user.username,
+        platform: Platform.OS,
+        source:
+          shareAttribution?.gameId === game.id
+            ? shareAttribution.source
+            : 'games_list',
+        referralCode:
+          shareAttribution?.gameId === game.id
+            ? shareAttribution.referralCode
+            : undefined,
       })
       await subscribeToGameTopic(game.id)
       analytics.track('Game Joined', {
@@ -206,17 +289,33 @@ export default function GamesScreen() {
         game_id: game.id,
         username: user.username,
         game_state: game.state,
+        source:
+          shareAttribution?.gameId === game.id
+            ? shareAttribution.source
+            : 'games_list',
+        has_referral: Boolean(
+          shareAttribution?.gameId === game.id && shareAttribution.referralCode
+        ),
       })
+      await clearPendingGameAttribution(game.id)
+      if (shareAttribution?.gameId === game.id) setShareAttribution(null)
       // Optimistic count + membership
       setUserGames((prev) => {
         const next = new Map(prev)
-        next.set(game.id, { score: 0, updatedAt: new Date() as any } as any)
+        next.set(game.id, { score: 0, updatedAt: Timestamp.now() })
         return next
       })
       setGames((prev) =>
         prev.map((g) =>
           g.id === game.id
-            ? { ...g, playerCount: Math.max(0, (g.playerCount || 0) + 1) }
+            ? {
+                ...g,
+                playerCount: joinResult.playerCount,
+                prizeAmount: joinResult.prizeAmount,
+                ...(joinResult.featuredPoolAmount !== null
+                  ? { featuredPoolAmount: joinResult.featuredPoolAmount }
+                  : {}),
+              }
             : g
         )
       )
@@ -245,7 +344,7 @@ export default function GamesScreen() {
             try {
               setLeavingGameId(game.id)
               await unsubscribeFromGameTopic(game.id)
-              await deleteGamePlayer(game.id, user.id)
+              const leaveResult = await leaveGameOnServer(game.id)
               setUserGames((prev) => {
                 const next = new Map(prev)
                 next.delete(game.id)
@@ -256,7 +355,7 @@ export default function GamesScreen() {
                   g.id === game.id
                     ? {
                         ...g,
-                        playerCount: Math.max(0, (g.playerCount || 1) - 1),
+                        playerCount: leaveResult.playerCount,
                       }
                     : g
                 )
@@ -275,6 +374,25 @@ export default function GamesScreen() {
       ],
       { cancelable: true }
     )
+  }
+
+  const handleShare = async (game: Game) => {
+    try {
+      const shareLink = await getGameShareLink(game.id)
+      const result = await Share.share({
+        title: `${game.awayTeam} vs ${game.homeTeam} on Whistle`,
+        message: `${shareLink.text}\n${shareLink.url}`,
+        url: shareLink.url,
+      })
+      analytics.track('Featured Game Shared', {
+        game_id: game.id,
+        referral_code: shareLink.referralCode,
+        completed: result.action === Share.sharedAction,
+      })
+    } catch (error) {
+      console.error('Share failed', error)
+      Alert.alert('Unable to share', 'Please try again in a moment.')
+    }
   }
 
   const renderGame = ({ item }: { item: Game & { start?: Date } }) => {
@@ -329,6 +447,15 @@ export default function GamesScreen() {
 
     return (
       <View className="bg-card border border-border rounded-2xl p-4 mb-4">
+        {item.isFeatured && (
+          <View className="mb-3">
+            <FeaturedPoolProgress
+              playerCount={item.playerCount || 0}
+              featuredPoolAmount={item.featuredPoolAmount}
+              compact
+            />
+          </View>
+        )}
         <View className="flex-row gap-2">
           <View className="flex-1 flex-row items-center gap-4 bg-background/60 rounded-xl relative">
             <View className="items-center">
@@ -372,7 +499,7 @@ export default function GamesScreen() {
                 </View>
               )}
               <View className="flex-row items-center gap-1">
-                <Ionicons name="people-outline" size={16} color="black" />
+                <Ionicons name="people-outline" size={16} color={iconColor} />
                 <Text className="text-sm font-semibold text-foreground">
                   {item.playerCount || 0}
                 </Text>
@@ -407,6 +534,20 @@ export default function GamesScreen() {
                     </Text>
                   )}
                 </Button>
+                {item.isFeatured &&
+                  (item.state === 'scheduled' || item.state === 'open') && (
+                    <Button
+                      variant="ghost"
+                      className="h-11 px-1"
+                      onPress={() => handleShare(item)}
+                    >
+                      <Ionicons
+                        name="person-add-outline"
+                        size={18}
+                        color="#2878ff"
+                      />
+                    </Button>
+                  )}
                 {item.state === 'scheduled' && (
                   <Button
                     variant="ghost"

@@ -1,5 +1,4 @@
 import { DocumentData } from '@google-cloud/firestore'
-import { getAuth, signOut } from '@react-native-firebase/auth'
 import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore'
 import {
   addDoc,
@@ -7,7 +6,6 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  getDocs,
   getFirestore,
   limit,
   onSnapshot,
@@ -16,13 +14,11 @@ import {
   serverTimestamp,
   setDoc,
   Timestamp,
-  updateDoc,
   where,
   writeBatch,
 } from '@react-native-firebase/firestore'
 
 const db = getFirestore()
-const auth = getAuth()
 
 export { db }
 
@@ -102,162 +98,6 @@ export const removeFCMToken = async (userId: string, deviceId: string) => {
       { merge: true }
     )
   }
-}
-
-export const leaveAllActiveGames = async (userId: string) => {
-  // Get all games the user has joined (from users/{userId}/games)
-  const userGamesQuery = query(collection(db, `users/${userId}/games`))
-  const userGamesSnapshot = await getDocs(userGamesQuery)
-
-  if (userGamesSnapshot.empty) {
-    console.log(`[Firebase] User ${userId} has no games to leave`)
-    return
-  }
-
-  const batch = writeBatch(db)
-
-  for (const userGameDoc of userGamesSnapshot.docs) {
-    const gameId = userGameDoc.id
-
-    // Get the game to check if it's active
-    const gameDoc = await getDoc(doc(db, 'games', gameId))
-    if (!gameDoc.exists()) continue
-
-    const gameState = gameDoc.data()?.state
-    if (gameState === 'scheduled' || gameState === 'open') {
-      console.log(
-        `[Firebase] Removing user ${userId} from active game ${gameId}`
-      )
-
-      // Delete from games/{gameId}/users/{userId}
-      batch.delete(doc(db, `games/${gameId}/users`, userId))
-    }
-  }
-
-  await batch.commit()
-  console.log(`[Firebase] User ${userId} removed from all active games`)
-}
-
-export const deleteUser = async (userId: string, username?: string) => {
-  // First, leave all active games
-  await leaveAllActiveGames(userId)
-
-  // Delete user's games subcollection
-  console.log(`[Firebase] Deleting games subcollection for user ${userId}`)
-  const userGamesQuery = query(collection(db, `users/${userId}/games`))
-  const userGamesSnapshot = await getDocs(userGamesQuery)
-
-  const batch = writeBatch(db)
-
-  // Delete all documents in users/{userId}/games subcollection
-  userGamesSnapshot.docs.forEach((gameDoc: any) => {
-    console.log(
-      `[Firebase] Deleting game ${gameDoc.id} from user subcollection`
-    )
-    batch.delete(gameDoc.ref)
-  })
-
-  // Delete user document
-  batch.delete(doc(db, 'users', userId))
-
-  // Delete username document if it exists
-  if (username) {
-    batch.delete(doc(db, 'usernames', username.toLowerCase()))
-  }
-
-  await batch.commit()
-  console.log(`[Firebase] User ${userId} and all subcollections deleted`)
-
-  // Delete Firebase Auth account
-  // const currentUser = auth.currentUser
-  // if (currentUser && currentUser.uid === userId) {
-  //   await currentUser.delete()
-  // }
-
-  // Sign the user out
-  await signOut(auth)
-}
-
-/***********************
-  USER GAMES COLLECTION
-************************/
-export const createUserGamesCollection = (userId: string) => {
-  return collection<UserGame, DocumentData>(db, `users/${userId}/games`)
-}
-
-export const updateUserGame = async (
-  userId: string,
-  gameId: string,
-  update: Partial<UserGame>
-) => {
-  await setDoc(
-    doc(db, `users/${userId}/games`, gameId),
-    { ...update, updatedAt: serverTimestamp() },
-    { merge: true }
-  )
-}
-
-export const joinGame = async (params: {
-  userId: string
-  gameId: string
-  username: string
-  platform?: string
-}) => {
-  const { userId, gameId, username, platform } = params
-
-  if (!username) {
-    throw new Error('Username is required to join a game.')
-  }
-
-  const batch = writeBatch(db)
-  const updatedAt = serverTimestamp()
-
-  batch.set(
-    doc(db, `users/${userId}/games`, gameId),
-    {
-      score: 0,
-      updatedAt,
-    },
-    { merge: true }
-  )
-
-  batch.set(
-    doc(db, `games/${gameId}/users`, userId),
-    {
-      score: 0,
-      username,
-      ...(platform ? { platform } : {}),
-      updatedAt,
-    },
-    { merge: true }
-  )
-
-  await batch.commit()
-}
-
-export const updateUserGamePrediction = async (
-  userId: string,
-  gameId: string,
-  update: Partial<UserGame>
-) => {
-  await updateDoc(doc(db, `users/${userId}/games`, gameId), {
-    ...update,
-    updatedAt: serverTimestamp(),
-  })
-}
-
-export const getUserGameStream = async (
-  userId: string,
-  gameId: string,
-  setUserGame: (userGame?: UserGame) => void
-): Promise<any> => {
-  return onSnapshot(doc(db, `users/${userId}/games`, gameId), (snapshot) => {
-    if (snapshot.exists()) {
-      setUserGame(snapshot.data() as UserGame | undefined)
-    } else {
-      setUserGame(undefined)
-    }
-  })
 }
 
 export const getUserGamesStream = async (
@@ -564,74 +404,5 @@ export const getGamePlayerStream = async (
     } else {
       setGamePlayer(undefined)
     }
-  })
-}
-
-export const deleteGamePlayer = async (gameId: string, playerId: string) => {
-  console.log(`[Firebase] Deleting player ${playerId} from game ${gameId}`)
-
-  // Get predictions to delete them individually
-  const predictionsRef = collection(
-    db,
-    `users/${playerId}/games/${gameId}/predictions`
-  )
-  const predictionsSnapshot = await getDocs(predictionsRef)
-
-  // Parallelize all deletes (predictions + game documents)
-  await Promise.all([
-    deleteDoc(doc(db, `games/${gameId}/users`, playerId)),
-    deleteDoc(doc(db, `users/${playerId}/games`, gameId)),
-    ...predictionsSnapshot.docs.map((predDoc: any) => deleteDoc(predDoc.ref)),
-  ])
-
-  console.log(
-    `[Firebase] Deleted player from both collections and ${predictionsSnapshot.size} predictions`
-  )
-}
-
-/*************
-  PREDICTIONS
-**************/
-export const addPrediction = async (
-  gameId: string,
-  questionId: string,
-  userId: string,
-  prediction: Omit<Prediction, 'createdAt' | 'source'>
-) => {
-  await setDoc(
-    doc(db, `games/${gameId}/questions/${questionId}/predictions`, userId),
-    { ...prediction, source: 'app', createdAt: serverTimestamp() }
-  )
-}
-
-export const getUserPredictionsStream = async (
-  gameId: string,
-  userId: string,
-  setPredictions: (predictions: Map<string, string>) => void
-): Promise<any> => {
-  const q = query(
-    collection(db, `users/${userId}/games/${gameId}/predictions`),
-    orderBy('createdAt', 'asc')
-  )
-
-  return onSnapshot(q, (predictionsSnap) => {
-    const predictionsMap = new Map<string, string>()
-
-    if (!predictionsSnap || predictionsSnap.empty) {
-      setPredictions(predictionsMap)
-      return
-    }
-
-    predictionsSnap.docs.forEach((predictionDoc: any) => {
-      const questionId = predictionDoc.id
-      const data = predictionDoc.data()
-      const value = data.prediction
-      predictionsMap.set(
-        questionId,
-        typeof value === 'string' ? value : String(value)
-      )
-    })
-
-    setPredictions(predictionsMap)
   })
 }

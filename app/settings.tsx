@@ -24,7 +24,10 @@ export default function SettingsScreen() {
   const { theme, setTheme, colorScheme } = useTheme()
   const insets = useSafeAreaInsets()
 
-  const winnings = user?.winnings || 0
+  const winnings =
+    typeof user?.winningsCents === 'number'
+      ? user.winningsCents / 100
+      : user?.winnings || 0
   const canWithdraw = winnings >= 10
   const build =
     Platform.OS === 'ios'

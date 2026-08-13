@@ -15,6 +15,9 @@
     "sim-game": "ts-node scripts/parseTestGames.ts testGames/playbyplay_0022400247.json",
     "sim": "env-cmd -f .env.development -- ts-node scripts/simGameFromDb.ts",
     "sim:nfl": "env-cmd -f .env.development -- ts-node scripts/simNflQuestions.ts",
+    "test:featured-game": "ts-node scripts/testFeaturedGame.ts",
+    "test:game-payout": "ts-node scripts/testGamePayout.ts",
+    "test:game-payout-integration": "ts-node scripts/testPayoutIntegration.ts",
     "test:nfl-questions": "ts-node scripts/testNflQuestions.ts"
   },
   "dependencies": {

@@ -4,11 +4,10 @@ import notifee, {
   EventType,
 } from '@notifee/react-native'
 import { getApp } from '@react-native-firebase/app'
-import { getAuth } from '@react-native-firebase/auth'
+import { getAuth, getIdToken } from '@react-native-firebase/auth'
 import {
   doc,
   getFirestore,
-  serverTimestamp,
   setDoc,
   Timestamp,
 } from '@react-native-firebase/firestore'
@@ -19,6 +18,24 @@ import {
   requestPermission,
 } from '@react-native-firebase/messaging'
 import { Linking, Platform } from 'react-native'
+import { env } from './env'
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+
+const parseJsonObject = (body: string): { [key: string]: JsonValue } => {
+  if (!body) return {}
+  const parsed = JSON.parse(body) as JsonValue
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+    return {}
+  }
+  return parsed
+}
 
 const toLatencyBucket = (latencyMs: number | null) => {
   if (typeof latencyMs !== 'number' || !Number.isFinite(latencyMs)) return null
@@ -234,16 +251,17 @@ export async function handleNotificationActionPress(
 
   try {
     const answeredAt = Date.now()
-    const prediction = actionId === 'yes'
+    const prediction = actionId
     const app = getApp()
     const auth = getAuth(app)
     const firestore = getFirestore(app)
-    const userId = auth.currentUser?.uid
+    const currentUser = auth.currentUser
 
-    if (!userId) {
+    if (!currentUser) {
       console.warn(`[Notification ${logContext}] No user ID available`)
       return
     }
+    const userId = currentUser.uid
 
     // Handle practice flows separately (no game collections)
     if (data?.practice === 'true') {
@@ -288,24 +306,30 @@ export async function handleNotificationActionPress(
       return
     }
 
-    // Write to question predictions collection (for scoring)
-    const predictionRef = doc(
-      firestore,
-      `games/${gameId}/questions/${questionId}/predictions/${userId}`
-    )
-
-    // Store timing metadata for delivery time calculations
-    const predictionData: any = {
+    if (!env.DOMAIN) {
+      throw new Error('Whistle API is not configured')
+    }
+    const authToken = await getIdToken(currentUser)
+    const predictionData: Record<
+      string,
+      string | number | boolean | undefined
+    > = {
       prediction,
-      createdAt: Timestamp.now(),
-      source: 'app',
+      source: `${Platform.OS}_notification`,
+      questionTimeoutAt: data?.timeoutAt,
+      notificationDisplayedAt: receivedAt,
+      notificationViewedAt: answeredAt,
+      choiceTappedAt: answeredAt,
+      predictionSentAt: answeredAt,
+      questionPayload: data?.questionPayload,
+      questionSignature: data?.questionSignature,
     }
 
     if (sentAt) {
-      predictionData.sentAt = parseInt(sentAt as string)
+      predictionData.notificationSentAt = parseInt(String(sentAt), 10)
     }
     if (receivedAt) {
-      predictionData.receivedAt = parseInt(receivedAt as string)
+      predictionData.notificationDisplayedAt = parseInt(String(receivedAt), 10)
     }
 
     console.log(
@@ -317,19 +341,26 @@ export async function handleNotificationActionPress(
       Object.keys(predictionData)
     )
 
-    await setDoc(predictionRef, predictionData)
-
-    // Write to user predictions subcollection (for UI display)
-    const userPredictionRef = doc(
-      firestore,
-      `users/${userId}/games/${gameId}/predictions/${questionId}`
+    const response = await fetch(
+      `${env.DOMAIN}/api/games/${gameId}/questions/${questionId}/prediction`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(predictionData),
+      }
     )
+    const responseData = parseJsonObject(await response.text())
+    if (!response.ok) {
+      throw new Error(`Prediction API response ${response.status}`)
+    }
 
-    await setDoc(userPredictionRef, {
-      prediction,
-      createdAt: serverTimestamp(),
-      source: 'app',
-    })
+    if (responseData.accepted === false) {
+      console.log(`[Notification ${logContext}] Duplicate answer ignored`)
+      return
+    }
 
     console.log(`[Notification ${logContext}] Submitted answer: ${prediction}`)
 

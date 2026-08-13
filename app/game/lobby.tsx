@@ -14,11 +14,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { toast } from 'sonner-native'
 
+import { FeaturedPoolProgress } from '@/components/FeaturedPoolProgress'
 import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
 import { useGame } from '@/lib/contexts/GameContext'
 import { subscribeToGameTopic } from '@/lib/fcm'
-import { getLatestGame, joinGame as joinGameAtomic } from '@/lib/firebase'
+import { getLatestGame } from '@/lib/firebase'
+import { joinGameOnServer } from '@/lib/gameParticipation'
 import { NBA, NFL } from '@/logos'
 
 export default function GameLobbyScreen() {
@@ -100,11 +102,18 @@ export default function GameLobbyScreen() {
         throw new Error('Username is required to join a game.')
       }
 
-      await joinGameAtomic({
-        userId: user.id,
+      const joinResult = await joinGameOnServer({
         gameId: game.id,
-        username: user.username,
         platform: Platform.OS,
+        source: 'latest_game_lobby',
+      })
+      setGame({
+        ...game,
+        playerCount: joinResult.playerCount,
+        prizeAmount: joinResult.prizeAmount,
+        ...(joinResult.featuredPoolAmount !== null
+          ? { featuredPoolAmount: joinResult.featuredPoolAmount }
+          : {}),
       })
 
       // Subscribe to game topic for notifications
@@ -116,6 +125,7 @@ export default function GameLobbyScreen() {
         game_id: game.id,
         username: user.username,
         game_state: game.state,
+        source: 'latest_game_lobby',
       })
 
       toast.success("You're in! We'll notify you when the game starts.")
@@ -193,6 +203,15 @@ export default function GameLobbyScreen() {
 
       {/* Game Info */}
       <View className="w-full items-center gap-6 mt-8">
+        {game.isFeatured && (
+          <View className="w-full">
+            <FeaturedPoolProgress
+              playerCount={game.playerCount || 0}
+              featuredPoolAmount={game.featuredPoolAmount}
+              showEligibilityRules
+            />
+          </View>
+        )}
         <View className="items-center">
           {game.prizeType === 'USD' ? (
             <Text className="text-4xl font-bold text-gray-900 dark:text-white">

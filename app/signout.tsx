@@ -1,7 +1,7 @@
 import { analytics } from '@/lib/analytics'
 import { useAuth } from '@/lib/contexts/AuthContext'
-import { deleteUser } from '@/lib/firebase'
 import { clearFCMToken, unsubscribeFromAllTopics } from '@/lib/fcm'
+import { deleteAccountOnServer } from '@/lib/gameParticipation'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
@@ -52,7 +52,7 @@ export default function SignOutScreen() {
           // Delete user data and Firebase Auth account
           // Note: Deleting the Firebase Auth account will automatically trigger signOut
           console.log('[SignOut] Deleting user account and data')
-          await deleteUser(user.id, user.username)
+          await deleteAccountOnServer()
           console.log('[SignOut] User deleted, waiting for auth state change')
 
           // Wait for the auth state change to propagate

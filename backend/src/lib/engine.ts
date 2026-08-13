@@ -78,6 +78,20 @@ export type EngineQuestionPayload = {
   clockMs: number
 }
 
+export type NflQuestionDedupe = {
+  redZoneDriveId?: string
+  redZonePeriodKey?: string
+  receiverQuestionKey?: string
+  completionReceiverHalfKey?: string
+  timeoutQuestionDriveId?: string
+  gameQuestionKey?: string
+  periodQuestionKey?: string
+}
+
+type QuestionPersistenceOptions = {
+  nflDedupe?: NflQuestionDedupe
+}
+
 type QuestionRecord = Partial<EngineQuestionPayload> & {
   resolutionContext?: ResolutionContext
   resolutionWindowMs?: number | null
@@ -984,7 +998,8 @@ export const buildQuestionChoices = (
 
 export const createAndSendEngineQuestion = async (
   gameId: string,
-  question: EngineQuestionPayload
+  question: EngineQuestionPayload,
+  options?: QuestionPersistenceOptions
 ): Promise<string> => {
   const { admin, db } = await import('../firebase')
   const isDev = process.env.NODE_ENV !== 'production'
@@ -1010,6 +1025,7 @@ export const createAndSendEngineQuestion = async (
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...(options?.nflDedupe ? { nflDedupe: options.nflDedupe } : {}),
   }
 
   const qRef = await db

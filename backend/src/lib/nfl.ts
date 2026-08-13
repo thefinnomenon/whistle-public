@@ -6,6 +6,7 @@ import { calculateScores, endGameById } from '../routes/game'
 import {
   createAndSendEngineQuestion,
   type EngineQuestionPayload,
+  type NflQuestionDedupe,
   type QuestionWindowType,
   type ResolutionContext,
 } from './engine'
@@ -19,6 +20,7 @@ import {
   NFL_QUESTION_RESPONSE_MS,
   resolveNflQuestionForPlay,
   type NflActiveQuestion,
+  type NflQuestionCandidate,
   type NflQuestionDecision,
 } from './nflQuestionEngine'
 import { sendDismissNotification } from './notifications'
@@ -29,7 +31,6 @@ const ESPN_NFL_SCOREBOARD_URL =
 const ESPN_NFL_SUMMARY_URL =
   'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary'
 const ESPN_NFL_TIMEOUT_MS = 15_000
-const NFL_LIVE_HEARTBEAT_MS = 30_000
 const NFL_OPEN_GAMES_REFRESH_MS = 60_000
 const NFL_OPEN_GAMES_WATCH_RESTART_MS = 30_000
 const NFL_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS = 5_000
@@ -164,6 +165,35 @@ type CachedOpenNflGame = {
   id: string
   ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
   data: FirebaseFirestore.DocumentData
+}
+
+type NflRuntimeState = {
+  playFingerprints: Record<string, string>
+  activeQuestions: NflActiveQuestion[]
+  redZoneAskedDriveIds: string[]
+  redZoneAskedPeriodKeys: string[]
+  receiverQuestionKeys: string[]
+  completionReceiverHalfKeys: string[]
+  timeoutQuestionDriveIds: string[]
+  gameQuestionKeys: string[]
+  periodQuestionKeys: string[]
+  questionCount: number
+  lastQuestionAtMs: number | null
+}
+
+type StoredNflEvent = {
+  id?: string
+  fingerprint?: string
+}
+
+type StoredNflQuestion = {
+  state?: string
+  engineTag?: string
+  windowType?: JsonValue
+  resolutionContext?: JsonValue
+  createdAt?: admin.firestore.Timestamp
+  triggeredAt?: admin.firestore.Timestamp
+  nflDedupe?: NflQuestionDedupe
 }
 
 export type NflLiveSyncStats = {
@@ -678,6 +708,8 @@ export const syncNflSchedule = async (daysAhead: number) => {
 }
 
 const OPEN_NFL_GAMES_CACHE = new Map<string, CachedOpenNflGame>()
+const NFL_RUNTIME_CACHE = new Map<string, NflRuntimeState>()
+const NFL_RUNTIME_LOADS = new Map<string, Promise<NflRuntimeState>>()
 let openNflGamesCacheReady = false
 let openNflGamesLastRefreshMs = 0
 let openNflGamesRefreshPromise: Promise<void> | null = null
@@ -695,6 +727,7 @@ const buildOpenNflGamesQuery = () =>
 const replaceOpenNflGamesCache = (
   docs: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]
 ) => {
+  const openGameIds = new Set(docs.map((doc) => doc.id))
   OPEN_NFL_GAMES_CACHE.clear()
   for (const doc of docs) {
     OPEN_NFL_GAMES_CACHE.set(doc.id, {
@@ -702,6 +735,12 @@ const replaceOpenNflGamesCache = (
       ref: doc.ref,
       data: doc.data(),
     })
+  }
+  for (const gameId of NFL_RUNTIME_CACHE.keys()) {
+    if (!openGameIds.has(gameId)) NFL_RUNTIME_CACHE.delete(gameId)
+  }
+  for (const gameId of NFL_RUNTIME_LOADS.keys()) {
+    if (!openGameIds.has(gameId)) NFL_RUNTIME_LOADS.delete(gameId)
   }
   openNflGamesCacheReady = true
   openNflGamesLastRefreshMs = Date.now()
@@ -718,6 +757,185 @@ const mergeOpenNflGameCacheData = (
 
 const removeOpenNflGameFromCache = (gameId: string) => {
   OPEN_NFL_GAMES_CACHE.delete(gameId)
+  NFL_RUNTIME_CACHE.delete(gameId)
+  NFL_RUNTIME_LOADS.delete(gameId)
+}
+
+const appendUnique = (values: string[], value: string | undefined): void => {
+  if (value && !values.includes(value)) values.push(value)
+}
+
+const contextString = (
+  context: ResolutionContext | null,
+  key: string
+): string | undefined => {
+  const value = context?.[key]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+const contextNumber = (
+  context: ResolutionContext | null,
+  key: string
+): number | undefined => {
+  const value = context?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+const normalizeDedupeToken = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+const deriveNflQuestionDedupe = (
+  templateId: string | undefined,
+  context: ResolutionContext | null
+): NflQuestionDedupe => {
+  const driveId = contextString(context, 'driveId')
+  const targetToken = contextString(context, 'targetToken')
+  const period = contextNumber(context, 'period')
+  if (templateId === 'NFL_GAME_WINNER') return { gameQuestionKey: 'winner' }
+  if (templateId?.startsWith('NFL_PERIOD_TEAM_COMPARE_') && period) {
+    return { periodQuestionKey: `team:${period}` }
+  }
+  if (templateId?.startsWith('NFL_PERIOD_PLAYER_') && period) {
+    return { periodQuestionKey: `player:${period}` }
+  }
+  if (templateId?.startsWith('NFL_RED_ZONE_')) {
+    return {
+      ...(driveId ? { redZoneDriveId: driveId } : {}),
+      ...(period ? { redZonePeriodKey: String(period) } : {}),
+    }
+  }
+  if (templateId === 'NFL_FOURTH_DOWN_CONVERSION') {
+    return {
+      ...(driveId ? { timeoutQuestionDriveId: driveId } : {}),
+      ...(period ? { periodQuestionKey: `fourth:${period}` } : {}),
+    }
+  }
+  if (templateId === 'NFL_NEXT_COMPLETION_RECEIVER') {
+    return {
+      ...(driveId ? { timeoutQuestionDriveId: driveId } : {}),
+      ...(period
+        ? {
+            completionReceiverHalfKey:
+              period <= 2 ? 'first_half' : 'second_half',
+          }
+        : {}),
+    }
+  }
+  if (
+    templateId === 'NFL_POSSESSION_FIELD_GOAL' ||
+    templateId === 'NFL_NEXT_OFFENSIVE_PLAY_PASS'
+  ) {
+    return driveId ? { timeoutQuestionDriveId: driveId } : {}
+  }
+  if (
+    templateId === 'NFL_RECEIVER_NEXT_TARGET_CAUGHT' &&
+    driveId &&
+    targetToken
+  ) {
+    return {
+      receiverQuestionKey: `${driveId}:${normalizeDedupeToken(targetToken)}`,
+    }
+  }
+  return {}
+}
+
+const timestampMillis = (
+  value: admin.firestore.Timestamp | undefined
+): number | null => value?.toMillis() ?? null
+
+const loadNflRuntimeState = async (
+  game: CachedOpenNflGame
+): Promise<NflRuntimeState> => {
+  const cached = NFL_RUNTIME_CACHE.get(game.id)
+  if (cached) return cached
+  const loading = NFL_RUNTIME_LOADS.get(game.id)
+  if (loading) return loading
+
+  const load = (async (): Promise<NflRuntimeState> => {
+    const [eventsSnapshot, questionsSnapshot] = await Promise.all([
+      game.ref.collection('nflEvents').get(),
+      game.ref.collection('questions').get(),
+    ])
+    const runtime: NflRuntimeState = {
+      playFingerprints: {},
+      activeQuestions: [],
+      redZoneAskedDriveIds: [],
+      redZoneAskedPeriodKeys: [],
+      receiverQuestionKeys: [],
+      completionReceiverHalfKeys: [],
+      timeoutQuestionDriveIds: [],
+      gameQuestionKeys: [],
+      periodQuestionKeys: [],
+      questionCount: questionsSnapshot.size,
+      lastQuestionAtMs: null,
+    }
+
+    for (const eventDoc of eventsSnapshot.docs) {
+      const event = eventDoc.data() as StoredNflEvent
+      if (event.id && event.fingerprint) {
+        runtime.playFingerprints[event.id] = event.fingerprint
+      }
+    }
+
+    for (const questionDoc of questionsSnapshot.docs) {
+      const question = questionDoc.data() as StoredNflQuestion
+      const resolutionContext = parseStoredResolutionContext(
+        question.resolutionContext
+      )
+      const createdAtMs =
+        timestampMillis(question.triggeredAt) ??
+        timestampMillis(question.createdAt) ??
+        0
+      if (
+        runtime.lastQuestionAtMs === null ||
+        createdAtMs > runtime.lastQuestionAtMs
+      ) {
+        runtime.lastQuestionAtMs = createdAtMs
+      }
+
+      if (question.state === 'open') {
+        const templateId = question.engineTag
+        const windowType = asNflQuestionWindowType(question.windowType)
+        if (templateId && windowType && resolutionContext) {
+          runtime.activeQuestions.push({
+            id: questionDoc.id,
+            templateId,
+            windowType,
+            resolutionContext,
+            createdAtMs,
+          })
+        }
+      }
+
+      const dedupe =
+        question.nflDedupe ??
+        deriveNflQuestionDedupe(question.engineTag, resolutionContext)
+      appendUnique(runtime.redZoneAskedDriveIds, dedupe?.redZoneDriveId)
+      appendUnique(runtime.redZoneAskedPeriodKeys, dedupe?.redZonePeriodKey)
+      appendUnique(runtime.receiverQuestionKeys, dedupe?.receiverQuestionKey)
+      appendUnique(
+        runtime.completionReceiverHalfKeys,
+        dedupe?.completionReceiverHalfKey
+      )
+      appendUnique(
+        runtime.timeoutQuestionDriveIds,
+        dedupe?.timeoutQuestionDriveId
+      )
+      appendUnique(runtime.gameQuestionKeys, dedupe?.gameQuestionKey)
+      appendUnique(runtime.periodQuestionKeys, dedupe?.periodQuestionKey)
+    }
+
+    NFL_RUNTIME_CACHE.set(game.id, runtime)
+    console.log(
+      `[nfl] runtime hydrated game=${game.id} plays=${eventsSnapshot.size} questions=${questionsSnapshot.size} active=${runtime.activeQuestions.length}`
+    )
+    return runtime
+  })().finally(() => {
+    NFL_RUNTIME_LOADS.delete(game.id)
+  })
+
+  NFL_RUNTIME_LOADS.set(game.id, load)
+  return load
 }
 
 const refreshOpenNflGamesCache = async (reason: string): Promise<void> => {
@@ -805,17 +1023,6 @@ const getOpenNflGamesForLiveSync = async (): Promise<CachedOpenNflGame[]> => {
 const fingerprintPlay = (play: EspnNflPlay): string =>
   createHash('sha1').update(JSON.stringify(play)).digest('hex')
 
-const readStoredFingerprints = (
-  value: Record<string, string> | undefined
-): Record<string, string> => {
-  if (!value || Array.isArray(value) || typeof value !== 'object') return {}
-  const fingerprints: Record<string, string> = {}
-  for (const [playId, fingerprint] of Object.entries(value)) {
-    if (typeof fingerprint === 'string') fingerprints[playId] = fingerprint
-  }
-  return fingerprints
-}
-
 const asNflQuestionWindowType = (
   value: JsonValue | undefined
 ): QuestionWindowType | null => {
@@ -888,28 +1095,6 @@ const parseStoredResolutionContext = (
   }
 }
 
-const readStoredActiveNflQuestions = (
-  value: JsonValue | undefined
-): NflActiveQuestion[] =>
-  asArray(value).flatMap((entry) => {
-    const question = asObject(entry)
-    const id = asString(question?.id)
-    const templateId = asString(question?.templateId)
-    const windowType = asNflQuestionWindowType(question?.windowType)
-    const createdAtMs = asNumber(question?.createdAtMs) ?? 0
-    const resolutionContext = parseStoredResolutionContext(
-      question?.resolutionContext
-    )
-    if (!id || !templateId || !windowType || !resolutionContext) return []
-    return [{ id, templateId, windowType, resolutionContext, createdAtMs }]
-  })
-
-const readStoredStringArray = (value: JsonValue | undefined): string[] =>
-  asArray(value).flatMap((entry) => {
-    const parsed = asString(entry)
-    return parsed ? [parsed] : []
-  })
-
 const toActiveNflQuestion = (
   id: string,
   payload: EngineQuestionPayload,
@@ -920,6 +1105,32 @@ const toActiveNflQuestion = (
   windowType: payload.windowType,
   resolutionContext: payload.resolutionContext ?? {},
   createdAtMs,
+})
+
+const toCandidateDedupe = (
+  candidate: NflQuestionCandidate
+): NflQuestionDedupe => ({
+  ...(candidate.redZoneDriveId
+    ? { redZoneDriveId: candidate.redZoneDriveId }
+    : {}),
+  ...(candidate.redZonePeriodKey
+    ? { redZonePeriodKey: candidate.redZonePeriodKey }
+    : {}),
+  ...(candidate.receiverQuestionKey
+    ? { receiverQuestionKey: candidate.receiverQuestionKey }
+    : {}),
+  ...(candidate.completionReceiverHalfKey
+    ? { completionReceiverHalfKey: candidate.completionReceiverHalfKey }
+    : {}),
+  ...(candidate.timeoutQuestionDriveId
+    ? { timeoutQuestionDriveId: candidate.timeoutQuestionDriveId }
+    : {}),
+  ...(candidate.gameQuestionKey
+    ? { gameQuestionKey: candidate.gameQuestionKey }
+    : {}),
+  ...(candidate.periodQuestionKey
+    ? { periodQuestionKey: candidate.periodQuestionKey }
+    : {}),
 })
 
 const persistNflQuestionDecision = async (
@@ -1073,9 +1284,8 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
 
   try {
     const summary = await fetchEspnNflSummary(eventId)
-    const storedFingerprints = readStoredFingerprints(
-      game.nflPlayFingerprints as Record<string, string> | undefined
-    )
+    const runtime = await loadNflRuntimeState(cachedGame)
+    const storedFingerprints = runtime.playFingerprints
     const nextFingerprints = { ...storedFingerprints }
     const writes: {
       ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
@@ -1110,40 +1320,19 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       })
     }
 
-    if (writes.length > 0) await commitNflPlayWrites(writes)
-
     const nowMs = Date.now()
     const latestPlay =
       summary.plays.length > 0 ? summary.plays[summary.plays.length - 1] : null
-    let activeQuestions = readStoredActiveNflQuestions(game.nflActiveQuestions)
-    let redZoneAskedDriveIds = readStoredStringArray(
-      game.nflQuestionedRedZoneDriveIds
-    )
-    let redZoneAskedPeriodKeys = readStoredStringArray(
-      game.nflQuestionedRedZonePeriodKeys
-    )
-    let receiverQuestionKeys = readStoredStringArray(
-      game.nflReceiverQuestionKeys
-    )
-    let completionReceiverHalfKeys = readStoredStringArray(
-      game.nflCompletionReceiverHalfKeys
-    )
-    let timeoutQuestionDriveIds = readStoredStringArray(
-      game.nflTimeoutQuestionDriveIds
-    )
-    let gameQuestionKeys = readStoredStringArray(game.nflGameQuestionKeys)
-    let periodQuestionKeys = readStoredStringArray(game.nflPeriodQuestionKeys)
-    let questionStateChanged = false
-    let questionCount =
-      typeof game.nflQuestionCount === 'number' &&
-      Number.isFinite(game.nflQuestionCount)
-        ? game.nflQuestionCount
-        : 0
-    let lastQuestionAtMs =
-      typeof game.nflLastQuestionAtMs === 'number' &&
-      Number.isFinite(game.nflLastQuestionAtMs)
-        ? game.nflLastQuestionAtMs
-        : null
+    let activeQuestions = runtime.activeQuestions
+    let redZoneAskedDriveIds = runtime.redZoneAskedDriveIds
+    let redZoneAskedPeriodKeys = runtime.redZoneAskedPeriodKeys
+    let receiverQuestionKeys = runtime.receiverQuestionKeys
+    let completionReceiverHalfKeys = runtime.completionReceiverHalfKeys
+    let timeoutQuestionDriveIds = runtime.timeoutQuestionDriveIds
+    let gameQuestionKeys = runtime.gameQuestionKeys
+    let periodQuestionKeys = runtime.periodQuestionKeys
+    let questionCount = runtime.questionCount
+    let lastQuestionAtMs = runtime.lastQuestionAtMs
     if (
       summary.plays.length === 0 &&
       !summary.completed &&
@@ -1156,12 +1345,13 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         typeof game.awayTeam === 'string' ? game.awayTeam.trim() : ''
       if (homeTeam && awayTeam) {
         const payload = buildNflPregameGameWinnerPayload(homeTeam, awayTeam)
-        const questionId = await createAndSendEngineQuestion(gameId, payload)
+        const questionId = await createAndSendEngineQuestion(gameId, payload, {
+          nflDedupe: { gameQuestionKey: 'winner' },
+        })
         activeQuestions.push(toActiveNflQuestion(questionId, payload, nowMs))
         gameQuestionKeys = [...gameQuestionKeys, 'winner'].slice(-20)
         questionCount += 1
         lastQuestionAtMs = nowMs
-        questionStateChanged = true
         console.log(
           `[nfl] question created game=${gameId} question=${questionId} play=pregame template=${payload.templateId} priority=GAME`
         )
@@ -1171,7 +1361,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       const playIndex = summary.plays.findIndex(
         (summaryPlay) => summaryPlay.id === play.id
       )
-      const previousActiveCount = activeQuestions.length
       activeQuestions = await resolveActiveNflQuestionsForPlay(
         gameId,
         activeQuestions,
@@ -1179,9 +1368,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         summary.plays.slice(0, Math.max(0, playIndex) + 1),
         summary.completed && play.id === latestPlay?.id
       )
-      if (activeQuestions.length !== previousActiveCount) {
-        questionStateChanged = true
-      }
     }
     const latestCreatedPlay = createdPlays[createdPlays.length - 1] ?? null
     if (
@@ -1190,7 +1376,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       latestCreatedPlay?.id !== latestPlay.id &&
       activeQuestions.length > 0
     ) {
-      const previousActiveCount = activeQuestions.length
       activeQuestions = await resolveActiveNflQuestionsForPlay(
         gameId,
         activeQuestions,
@@ -1198,9 +1383,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         summary.plays,
         true
       )
-      if (activeQuestions.length !== previousActiveCount) {
-        questionStateChanged = true
-      }
     }
 
     if (latestCreatedPlay && latestCreatedPlay.id === latestPlay?.id) {
@@ -1261,7 +1443,8 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         } else {
           const questionId = await createAndSendEngineQuestion(
             gameId,
-            candidate.payload
+            candidate.payload,
+            { nflDedupe: toCandidateDedupe(candidate) }
           )
           activeQuestions.push(
             toActiveNflQuestion(questionId, candidate.payload, nowMs)
@@ -1331,43 +1514,73 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       }
     }
 
-    const lastSyncMs =
-      typeof game.nflLastSyncAt?.toMillis === 'function'
-        ? game.nflLastSyncAt.toMillis()
-        : null
-    const persistedStatus =
-      typeof game.nflGameStatus === 'string' ? game.nflGameStatus : ''
-    const shouldUpdateGame =
-      writes.length > 0 ||
-      questionStateChanged ||
-      !lastSyncMs ||
-      nowMs - lastSyncMs >= NFL_LIVE_HEARTBEAT_MS ||
-      persistedStatus !== summary.statusName
+    // Persist plays only after question processing. On restart, the play
+    // documents are the durable marker that the engine processed each play.
+    if (writes.length > 0) await commitNflPlayWrites(writes)
 
-    if (shouldUpdateGame || summary.completed) {
+    runtime.playFingerprints = nextFingerprints
+    runtime.activeQuestions = activeQuestions
+    runtime.redZoneAskedDriveIds = redZoneAskedDriveIds
+    runtime.redZoneAskedPeriodKeys = redZoneAskedPeriodKeys
+    runtime.receiverQuestionKeys = receiverQuestionKeys
+    runtime.completionReceiverHalfKeys = completionReceiverHalfKeys
+    runtime.timeoutQuestionDriveIds = timeoutQuestionDriveIds
+    runtime.gameQuestionKeys = gameQuestionKeys
+    runtime.periodQuestionKeys = periodQuestionKeys
+    runtime.questionCount = questionCount
+    runtime.lastQuestionAtMs = lastQuestionAtMs
+
+    const hasLegacyRuntimeState =
+      game.nflLastSyncAt !== undefined ||
+      game.nflPlayFingerprints !== undefined ||
+      game.nflActiveQuestions !== undefined ||
+      game.nflQuestionedRedZoneDriveIds !== undefined ||
+      game.nflQuestionedRedZonePeriodKeys !== undefined ||
+      game.nflReceiverQuestionKeys !== undefined ||
+      game.nflCompletionReceiverHalfKeys !== undefined ||
+      game.nflTimeoutQuestionDriveIds !== undefined ||
+      game.nflGameQuestionKeys !== undefined ||
+      game.nflPeriodQuestionKeys !== undefined ||
+      game.nflLastQuestionAtMs !== undefined ||
+      game.nflQuestionCount !== undefined ||
+      game.nflLastPlayId !== undefined ||
+      game.nflLastPlayWallclock !== undefined
+    const publicGameChanged =
+      hasLegacyRuntimeState ||
+      game.nflGameStatus !== summary.statusName ||
+      game.nflGameStatusState !== summary.statusState ||
+      game.nflGameStatusText !== summary.statusText ||
+      game.period !== (latestPlay?.period ?? null) ||
+      game.gameClock !== (latestPlay?.clock ?? null) ||
+      game.homeScore !== summary.homeScore ||
+      game.awayScore !== summary.awayScore
+
+    if (publicGameChanged) {
       const cachedTimestamp = admin.firestore.Timestamp.now()
       const update = {
-        nflLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(hasLegacyRuntimeState
+          ? {
+              nflLastSyncAt: admin.firestore.FieldValue.delete(),
+              nflPlayFingerprints: admin.firestore.FieldValue.delete(),
+              nflActiveQuestions: admin.firestore.FieldValue.delete(),
+              nflQuestionedRedZoneDriveIds: admin.firestore.FieldValue.delete(),
+              nflQuestionedRedZonePeriodKeys:
+                admin.firestore.FieldValue.delete(),
+              nflReceiverQuestionKeys: admin.firestore.FieldValue.delete(),
+              nflCompletionReceiverHalfKeys:
+                admin.firestore.FieldValue.delete(),
+              nflTimeoutQuestionDriveIds: admin.firestore.FieldValue.delete(),
+              nflGameQuestionKeys: admin.firestore.FieldValue.delete(),
+              nflPeriodQuestionKeys: admin.firestore.FieldValue.delete(),
+              nflLastQuestionAtMs: admin.firestore.FieldValue.delete(),
+              nflQuestionCount: admin.firestore.FieldValue.delete(),
+              nflLastPlayId: admin.firestore.FieldValue.delete(),
+              nflLastPlayWallclock: admin.firestore.FieldValue.delete(),
+            }
+          : {}),
         nflGameStatus: summary.statusName,
         nflGameStatusState: summary.statusState,
         nflGameStatusText: summary.statusText,
-        ...(writes.length > 0 ? { nflPlayFingerprints: nextFingerprints } : {}),
-        ...(writes.length > 0 || questionStateChanged
-          ? {
-              nflActiveQuestions: activeQuestions,
-              nflQuestionedRedZoneDriveIds: redZoneAskedDriveIds,
-              nflQuestionedRedZonePeriodKeys: redZoneAskedPeriodKeys,
-              nflReceiverQuestionKeys: receiverQuestionKeys,
-              nflCompletionReceiverHalfKeys: completionReceiverHalfKeys,
-              nflTimeoutQuestionDriveIds: timeoutQuestionDriveIds,
-              nflGameQuestionKeys: gameQuestionKeys,
-              nflPeriodQuestionKeys: periodQuestionKeys,
-              nflLastQuestionAtMs: lastQuestionAtMs,
-              nflQuestionCount: questionCount,
-            }
-          : {}),
-        nflLastPlayId: latestPlay?.id ?? null,
-        nflLastPlayWallclock: latestPlay?.wallclock ?? null,
         period: latestPlay?.period ?? null,
         gameClock: latestPlay?.clock ?? null,
         homeScore: summary.homeScore,
@@ -1377,7 +1590,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       await cachedGame.ref.set(update, { merge: true })
       mergeOpenNflGameCacheData(gameId, {
         ...update,
-        nflLastSyncAt: cachedTimestamp,
         updatedAt: cachedTimestamp,
       })
     }
@@ -1395,12 +1607,15 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
     }
 
     return {
-      updated: shouldUpdateGame || summary.completed ? 1 : 0,
+      updated:
+        publicGameChanged || writes.length > 0 || summary.completed ? 1 : 0,
       created,
       revised,
       errors: 0,
     }
   } catch (error) {
+    NFL_RUNTIME_CACHE.delete(gameId)
+    NFL_RUNTIME_LOADS.delete(gameId)
     console.error(
       `[nfl] live sync error game=${gameId} event=${eventId} message=${String(error)}`
     )
