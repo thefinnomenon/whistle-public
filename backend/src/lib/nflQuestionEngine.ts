@@ -4,6 +4,7 @@ import type { EspnNflAthleteName, EspnNflPlay } from './nfl'
 export const NFL_QUESTION_RESPONSE_MS = 30_000
 export const NFL_QUESTION_MIN_INTERVAL_MS = 180_000
 export const NFL_QUESTION_MAX_SOURCE_AGE_MS = 15_000
+export const NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS = 90_000
 export const NFL_RECEIVER_TARGET_QUIET_MS = 120_000
 export const NFL_DRIVE_QUESTION_MIN_AGE_MS = 120_000
 export const NFL_MAX_QUESTIONS_PER_GAME = 20
@@ -29,6 +30,22 @@ export type NflQuestionCandidate = {
   timeoutQuestionDriveId: string | null
   gameQuestionKey: string | null
   periodQuestionKey: string | null
+}
+
+export type NflQuestionCandidateSkipReason =
+  | 'NO_LATEST_PLAY'
+  | 'ANCHOR_NOT_LATEST'
+  | 'NO_CANDIDATE'
+  | 'MISSING_SOURCE_WALLCLOCK'
+  | 'SOURCE_CLOCK_IN_FUTURE'
+  | 'SOURCE_TOO_OLD'
+
+export type NflQuestionCandidateDecision = {
+  candidate: NflQuestionCandidate | null
+  priority: NflQuestionPriority | null
+  sourceAgeMs: number | null
+  maxSourceAgeMs: number | null
+  skipReason: NflQuestionCandidateSkipReason | null
 }
 
 export type NflActiveQuestion = {
@@ -349,11 +366,16 @@ const possessionStayedWithDriveTeam = (
   )
 }
 
-const isFreshSourcePlay = (play: EspnNflPlay, nowMs: number): boolean => {
-  const wallclockMs = getNflPlayWallclockMs(play)
-  if (wallclockMs === null) return false
-  const ageMs = nowMs - wallclockMs
-  return ageMs >= -5_000 && ageMs <= NFL_QUESTION_MAX_SOURCE_AGE_MS
+const getMaxSourceAgeMs = (priority: NflQuestionPriority): number => {
+  if (
+    priority === 'GAME' ||
+    priority === 'PERIOD_TEAM' ||
+    priority === 'PERIOD_PLAYER' ||
+    priority === 'RED_ZONE'
+  ) {
+    return NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS
+  }
+  return NFL_QUESTION_MAX_SOURCE_AGE_MS
 }
 
 const isDriveTerminalPlay = (play: EspnNflPlay): boolean =>
@@ -388,10 +410,6 @@ const buildPayload = (
   timeoutMs: NFL_QUESTION_RESPONSE_MS,
   selectionReason: [
     { code: 'NFL_LATEST_PROVIDER_PLAY', detail: input.anchorPlay.id },
-    {
-      code: 'NFL_SOURCE_AGE_GUARD',
-      detail: `${NFL_QUESTION_MAX_SOURCE_AGE_MS}`,
-    },
   ],
   period: input.anchorPlay.period ?? 0,
   clockMs: parseClockMs(input.anchorPlay.clock),
@@ -1182,30 +1200,111 @@ const buildReceiverTargetCandidate = (
   }
 }
 
-export const buildNflQuestionCandidate = (
+export const buildNflQuestionCandidateDecision = (
   input: BuildCandidateInput
-): NflQuestionCandidate | null => {
+): NflQuestionCandidateDecision => {
   const latestPlay = input.plays[input.plays.length - 1]
-  if (
-    !latestPlay ||
-    latestPlay.id !== input.anchorPlay.id ||
-    !isFreshSourcePlay(input.anchorPlay, input.nowMs)
-  ) {
-    return null
+  if (!latestPlay) {
+    return {
+      candidate: null,
+      priority: null,
+      sourceAgeMs: null,
+      maxSourceAgeMs: null,
+      skipReason: 'NO_LATEST_PLAY',
+    }
+  }
+  if (latestPlay.id !== input.anchorPlay.id) {
+    return {
+      candidate: null,
+      priority: null,
+      sourceAgeMs: null,
+      maxSourceAgeMs: null,
+      skipReason: 'ANCHOR_NOT_LATEST',
+    }
   }
 
-  return (
-    buildGameWinnerCandidate(input) ??
-    buildRedZoneCandidate(input) ??
-    buildFourthDownCandidate(input) ??
-    buildFieldGoalCandidate(input) ??
-    buildPeriodTeamCandidate(input) ??
-    buildNextCompletionReceiverCandidate(input) ??
-    buildTimeoutNextPlayCandidate(input) ??
-    buildPeriodPlayerCandidate(input) ??
-    buildReceiverTargetCandidate(input)
+  const candidates = [
+    buildGameWinnerCandidate(input),
+    buildRedZoneCandidate(input),
+    buildFourthDownCandidate(input),
+    buildFieldGoalCandidate(input),
+    buildPeriodTeamCandidate(input),
+    buildNextCompletionReceiverCandidate(input),
+    buildTimeoutNextPlayCandidate(input),
+    buildPeriodPlayerCandidate(input),
+    buildReceiverTargetCandidate(input),
+  ].filter((candidate): candidate is NflQuestionCandidate => candidate !== null)
+
+  if (candidates.length === 0) {
+    return {
+      candidate: null,
+      priority: null,
+      sourceAgeMs: null,
+      maxSourceAgeMs: null,
+      skipReason: 'NO_CANDIDATE',
+    }
+  }
+
+  const wallclockMs = getNflPlayWallclockMs(input.anchorPlay)
+  if (wallclockMs === null) {
+    return {
+      candidate: null,
+      priority: candidates[0].priority,
+      sourceAgeMs: null,
+      maxSourceAgeMs: getMaxSourceAgeMs(candidates[0].priority),
+      skipReason: 'MISSING_SOURCE_WALLCLOCK',
+    }
+  }
+
+  const sourceAgeMs = input.nowMs - wallclockMs
+  if (sourceAgeMs < -5_000) {
+    return {
+      candidate: null,
+      priority: candidates[0].priority,
+      sourceAgeMs,
+      maxSourceAgeMs: getMaxSourceAgeMs(candidates[0].priority),
+      skipReason: 'SOURCE_CLOCK_IN_FUTURE',
+    }
+  }
+
+  const candidate = candidates.find(
+    (possibleCandidate) =>
+      sourceAgeMs <= getMaxSourceAgeMs(possibleCandidate.priority)
   )
+  if (!candidate) {
+    return {
+      candidate: null,
+      priority: candidates[0].priority,
+      sourceAgeMs,
+      maxSourceAgeMs: getMaxSourceAgeMs(candidates[0].priority),
+      skipReason: 'SOURCE_TOO_OLD',
+    }
+  }
+  const maxSourceAgeMs = getMaxSourceAgeMs(candidate.priority)
+
+  return {
+    candidate: {
+      ...candidate,
+      payload: {
+        ...candidate.payload,
+        selectionReason: [
+          ...(candidate.payload.selectionReason ?? []),
+          { code: 'NFL_SOURCE_AGE_MS', detail: `${sourceAgeMs}` },
+          { code: 'NFL_SOURCE_AGE_GUARD', detail: `${maxSourceAgeMs}` },
+        ],
+      },
+    },
+    priority: candidate.priority,
+    sourceAgeMs,
+    maxSourceAgeMs,
+    skipReason: null,
+  }
 }
+
+export const buildNflQuestionCandidate = (
+  input: BuildCandidateInput
+): NflQuestionCandidate | null =>
+  buildNflQuestionCandidateDecision(input).candidate
 
 const isSameDrive = (
   context: ResolutionContext,

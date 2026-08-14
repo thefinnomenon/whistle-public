@@ -12,9 +12,10 @@ import {
 } from './engine'
 import { trackEvent } from './mixpanel'
 import {
-  buildNflQuestionCandidate,
+  buildNflQuestionCandidateDecision,
   buildNflPregameGameWinnerPayload,
   extractNflPassTarget,
+  getNflPlayWallclockMs,
   NFL_MAX_QUESTIONS_PER_GAME,
   NFL_QUESTION_MIN_INTERVAL_MS,
   NFL_QUESTION_RESPONSE_MS,
@@ -1284,6 +1285,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
 
   try {
     const summary = await fetchEspnNflSummary(eventId)
+    const summaryReceivedAtMs = Date.now()
     const runtime = await loadNflRuntimeState(cachedGame)
     const storedFingerprints = runtime.playFingerprints
     const nextFingerprints = { ...storedFingerprints }
@@ -1292,6 +1294,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       data: FirebaseFirestore.DocumentData
     }[] = []
     const createdPlays: EspnNflPlay[] = []
+    const createdSourceAgesMs: number[] = []
     let created = 0
     let revised = 0
 
@@ -1300,11 +1303,17 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       const previousFingerprint = storedFingerprints[play.id]
       if (previousFingerprint === fingerprint) continue
       const isRevision = typeof previousFingerprint === 'string'
+      const wallclockMs = getNflPlayWallclockMs(play)
+      const sourceWallclockAgeAtFirstSeenMs =
+        wallclockMs === null ? null : summaryReceivedAtMs - wallclockMs
       nextFingerprints[play.id] = fingerprint
       if (isRevision) revised += 1
       else {
         created += 1
         createdPlays.push(play)
+        if (sourceWallclockAgeAtFirstSeenMs !== null) {
+          createdSourceAgesMs.push(sourceWallclockAgeAtFirstSeenMs)
+        }
       }
 
       writes.push({
@@ -1315,6 +1324,13 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
           providerEventId: eventId,
           fingerprint,
           isRevision,
+          ...(isRevision
+            ? {}
+            : {
+                firstSeenAt:
+                  admin.firestore.Timestamp.fromMillis(summaryReceivedAtMs),
+                sourceWallclockAgeAtFirstSeenMs,
+              }),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
       })
@@ -1390,7 +1406,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         typeof game.homeTeam === 'string' ? game.homeTeam.trim() : ''
       const awayTeam =
         typeof game.awayTeam === 'string' ? game.awayTeam.trim() : ''
-      const candidate = buildNflQuestionCandidate({
+      const candidateDecision = buildNflQuestionCandidateDecision({
         plays: summary.plays,
         anchorPlay: latestCreatedPlay,
         homeTeam,
@@ -1405,6 +1421,12 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         periodQuestionKeys,
         athletes: summary.athletes,
       })
+      const candidate = candidateDecision.candidate
+      if (!candidate && candidateDecision.skipReason !== 'NO_CANDIDATE') {
+        console.log(
+          `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidateDecision.priority ?? 'none'} reason=${candidateDecision.skipReason ?? 'unknown'} sourceAgeMs=${candidateDecision.sourceAgeMs ?? 'unknown'} sourceAgeLimitMs=${candidateDecision.maxSourceAgeMs ?? 'unknown'}`
+        )
+      }
       if (candidate?.priority === 'RED_ZONE') {
         activeQuestions = await cancelReceiverQuestionsForRedZone(
           gameId,
@@ -1508,7 +1530,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
             ].slice(-20)
           }
           console.log(
-            `[nfl] question created game=${gameId} question=${questionId} play=${latestCreatedPlay.id} template=${candidate.payload.templateId} priority=${candidate.priority}`
+            `[nfl] question created game=${gameId} question=${questionId} play=${latestCreatedPlay.id} template=${candidate.payload.templateId} priority=${candidate.priority} sourceAgeMs=${candidateDecision.sourceAgeMs ?? 'unknown'} sourceAgeLimitMs=${candidateDecision.maxSourceAgeMs ?? 'unknown'}`
           )
         }
       }
@@ -1595,8 +1617,12 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
     }
 
     if (writes.length > 0) {
+      const minSourceAgeMs =
+        createdSourceAgesMs.length > 0 ? Math.min(...createdSourceAgesMs) : null
+      const maxSourceAgeMs =
+        createdSourceAgesMs.length > 0 ? Math.max(...createdSourceAgesMs) : null
       console.log(
-        `[nfl] live sync game=${gameId} event=${eventId} created=${created} revised=${revised} status=${summary.statusName}`
+        `[nfl] live sync game=${gameId} event=${eventId} created=${created} revised=${revised} status=${summary.statusName} sourceAgeMinMs=${minSourceAgeMs ?? 'unknown'} sourceAgeMaxMs=${maxSourceAgeMs ?? 'unknown'}`
       )
     }
 

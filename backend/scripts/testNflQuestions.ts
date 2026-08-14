@@ -4,6 +4,7 @@ import { buildQuestionChoices } from '../src/lib/engine'
 import {
   buildNflQuestionCandidate,
   getNflPeriodStats,
+  NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS,
   NFL_QUESTION_MAX_SOURCE_AGE_MS,
   resolveNflQuestionForPlay,
   type NflActiveQuestion,
@@ -169,11 +170,26 @@ const duplicatePeriodRedZoneCandidate = buildNflQuestionCandidate({
 })
 assert.equal(duplicatePeriodRedZoneCandidate, null)
 
-const staleCandidate = buildCandidate(
+const delayedRedZoneCandidate = buildCandidate(
   [driveStart, redZoneEntry],
   BASE_TIME_MS + 130_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1
 )
-assert.equal(staleCandidate, null)
+assert.equal(delayedRedZoneCandidate?.priority, 'RED_ZONE')
+assert.deepEqual(delayedRedZoneCandidate?.payload.selectionReason?.slice(-2), [
+  {
+    code: 'NFL_SOURCE_AGE_MS',
+    detail: `${NFL_QUESTION_MAX_SOURCE_AGE_MS + 1}`,
+  },
+  {
+    code: 'NFL_SOURCE_AGE_GUARD',
+    detail: `${NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS}`,
+  },
+])
+const staleRedZoneCandidate = buildCandidate(
+  [driveStart, redZoneEntry],
+  BASE_TIME_MS + 130_000 + NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS + 1
+)
+assert.equal(staleRedZoneCandidate, null)
 
 const youngRedZoneEntry = buildPlay('young_red_zone_entry', 30_000, {
   end: redZoneEntry.end,
@@ -288,6 +304,27 @@ const fieldGoalCandidate = buildCandidate(
   BASE_TIME_MS + 132_000
 )
 assert.equal(fieldGoalCandidate?.priority, 'FIELD_GOAL')
+const staleFieldGoalCandidate = buildCandidate(
+  [driveStart, fourthDownPlay, fieldGoalTimeout],
+  BASE_TIME_MS + 131_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1
+)
+assert.equal(staleFieldGoalCandidate, null)
+const staleFieldGoalPeriodFallback = buildNflQuestionCandidate({
+  plays: [driveStart, fourthDownPlay, fieldGoalTimeout],
+  anchorPlay: fieldGoalTimeout,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: ['1'],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: [],
+  athletes,
+})
+assert.equal(staleFieldGoalPeriodFallback?.priority, 'PERIOD_TEAM')
 
 const fieldGoalQuestion: NflActiveQuestion = {
   id: 'question_field_goal',

@@ -17,7 +17,11 @@ type SimActiveQuestion = NflActiveQuestion & {
 
 const eventId = process.argv[2]?.trim()
 if (!eventId) {
-  throw new Error('Usage: yarn sim:nfl <espn-event-id>')
+  throw new Error('Usage: yarn sim:nfl <espn-event-id> [source-delay-ms]')
+}
+const sourceDelayMs = Number(process.argv[3] ?? 1_000)
+if (!Number.isFinite(sourceDelayMs) || sourceDelayMs < 0) {
+  throw new Error('source-delay-ms must be a non-negative number')
 }
 
 const run = async (): Promise<void> => {
@@ -80,7 +84,7 @@ const run = async (): Promise<void> => {
       anchorPlay: play,
       homeTeam: summary.homeTeam,
       awayTeam: summary.awayTeam,
-      nowMs: wallclockMs + 1_000,
+      nowMs: wallclockMs + sourceDelayMs,
       redZoneAskedDriveIds,
       redZoneAskedPeriodKeys,
       receiverQuestionKeys,
@@ -191,7 +195,7 @@ const run = async (): Promise<void> => {
   }
 
   console.log(
-    `[sim-nfl] complete event=${eventId} plays=${summary.plays.length} questions=${created} resolved=${resolved} cancelled=${cancelled} stillActive=${activeQuestions.length}`
+    `[sim-nfl] complete event=${eventId} sourceDelayMs=${sourceDelayMs} plays=${summary.plays.length} questions=${created} resolved=${resolved} cancelled=${cancelled} stillActive=${activeQuestions.length}`
   )
 }
 
