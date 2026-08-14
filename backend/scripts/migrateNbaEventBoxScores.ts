@@ -47,7 +47,7 @@ type GameRef =
 
 const CONFIRMATION = 'compress-nba-event-box-scores'
 const DEFAULT_PAGE_SIZE = 250
-const MAX_PAGE_SIZE = 400
+const MAX_PAGE_SIZE = 250
 const DEFAULT_CONCURRENCY = 5
 const MAX_CONCURRENCY = 8
 const MAX_ATTEMPTS = 8
