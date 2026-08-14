@@ -1,13 +1,13 @@
 import { db } from '../src/firebase'
 import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
+import {
   resolveQuestionForEvent,
   type DerivedStatsSnapshot,
 } from '../src/lib/engine'
-import {
-  EventType,
-  type EngineEvent,
-  type NbaEventContext,
-} from '../src/types/engine'
+import { EventType, type NbaEventContext } from '../src/types/engine'
 
 type TimestampLike =
   | { toDate: () => Date }
@@ -266,7 +266,7 @@ const main = async () => {
 
     if (questionsSnap.empty) continue
     const events = eventsSnap.docs
-      .map((doc) => doc.data() as EngineEvent)
+      .map((doc) => hydrateStoredEngineEvent(doc.data() as StoredEngineEvent))
       .filter((event) => typeof event.eventId === 'number')
       .sort((a, b) => a.eventId - b.eventId)
     if (!events.length) continue

@@ -11,6 +11,10 @@ import {
 } from '../lib/gamePayout'
 import { simulateStoredGame } from '../lib/gameSimulation'
 import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../lib/eventReplayStorage'
+import {
   identifyUser,
   incrementUserProperty,
   trackEvent,
@@ -616,21 +620,19 @@ router.get('/:gameId/events', isAdminMiddleware, async (req, res) => {
 
     let query = db
       .collection(`games/${gameId}/events`)
-      .orderBy('actionNumber', 'asc')
+      .orderBy('eventId', 'asc')
 
     if (rawSince !== undefined) {
-      query = query.where('actionNumber', '>', Number(rawSince))
+      query = query.where('eventId', '>', Number(rawSince))
     }
 
     const snap = await query.limit(limit).get()
     const events = snap.docs.map((doc) => ({
       id: doc.id,
-      ...(doc.data() as any),
+      ...hydrateStoredEngineEvent(doc.data() as StoredEngineEvent),
     }))
     const lastActionNumber =
-      events.length > 0
-        ? (events[events.length - 1]?.actionNumber ?? null)
-        : null
+      events.length > 0 ? (events[events.length - 1]?.eventId ?? null) : null
 
     return res.json({ ok: true, events, lastActionNumber })
   } catch (error) {

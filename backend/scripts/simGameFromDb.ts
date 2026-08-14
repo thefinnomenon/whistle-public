@@ -29,6 +29,10 @@ import type {
   FirestoreTimestampLike,
 } from '../src/types/engine'
 import { buildSimResult } from './simUtils'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -156,7 +160,7 @@ const loadGameEvents = async (gameId: string) => {
     .get()
 
   return eventsSnap.docs
-    .map((doc) => doc.data() as EngineEvent)
+    .map((doc) => hydrateStoredEngineEvent(doc.data() as StoredEngineEvent))
     .filter((evt) => typeof evt?.eventId === 'number')
     .sort((a, b) => a.eventId - b.eventId)
 }

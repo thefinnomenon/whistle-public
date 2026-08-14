@@ -1,4 +1,8 @@
 import { db } from '../src/firebase'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 
 type TimestampLike =
   | { toDate: () => Date }
@@ -110,7 +114,9 @@ const main = async () => {
     ])
     const lastEvent = lastEventSnap.empty
       ? null
-      : (lastEventSnap.docs[0].data() as EventDoc)
+      : hydrateStoredEngineEvent(
+          lastEventSnap.docs[0].data() as StoredEngineEvent
+        )
     const complete = isFinalStatus(lastEvent)
     const matchup = `${game.awayTeam ?? 'AWAY'} vs ${game.homeTeam ?? 'HOME'}`
     const count = countSnap.data().count

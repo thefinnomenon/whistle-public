@@ -9,6 +9,10 @@ import {
   type EngineQuestionPayload,
 } from './engine'
 import { buildSimResult } from './simResult'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from './eventReplayStorage'
 import { fetchSeasonProfilesOnce } from '../workers/seasonProfilesWorker'
 import type {
   BoxScore,
@@ -271,7 +275,7 @@ const loadGameEvents = async (gameId: string) => {
     .get()
 
   return eventsSnap.docs
-    .map((doc) => doc.data() as EngineEvent)
+    .map((doc) => hydrateStoredEngineEvent(doc.data() as StoredEngineEvent))
     .filter((evt) => typeof evt?.eventId === 'number')
     .sort((a, b) => a.eventId - b.eventId)
 }

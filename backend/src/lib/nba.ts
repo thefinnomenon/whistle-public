@@ -25,6 +25,7 @@ import {
 import { buildSimResult } from './simResult'
 import { sendDismissNotification } from '../lib/notifications'
 import { getSeasonProfilesById } from '../workers/seasonProfilesWorker'
+import { prepareEngineEventForStorage } from './eventReplayStorage'
 
 const NBA_SCHEDULE_URL =
   'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'
@@ -3209,7 +3210,10 @@ export const syncNbaLiveEvents = async () => {
         eventPayload.derivedStatsSnapshot =
           cloneDerivedStatsSnapshot(previewDerivedStats)
 
-        eventWrites.push({ ref: eventRef, data: eventPayload })
+        eventWrites.push({
+          ref: eventRef,
+          data: prepareEngineEventForStorage(eventPayload),
+        })
         newEventPayloads.push(eventPayload)
       }
 

@@ -1,5 +1,9 @@
 import { db } from '../src/firebase'
-import type { BoxScore, BoxScorePlayer, EngineEvent } from '../src/types/engine'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
+import type { BoxScore, BoxScorePlayer } from '../src/types/engine'
 
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -476,7 +480,9 @@ const main = async () => {
     if (lastBoxScore === undefined) {
       const event = eventsSnap.empty
         ? null
-        : (eventsSnap.docs[0].data() as EngineEvent)
+        : hydrateStoredEngineEvent(
+            eventsSnap.docs[0].data() as StoredEngineEvent
+          )
       lastBoxScore = event?.gameState?.boxScore ?? null
       gameToLastBoxScore.set(ref.gameId, lastBoxScore)
     }

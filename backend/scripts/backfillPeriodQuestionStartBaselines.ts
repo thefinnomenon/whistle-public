@@ -1,4 +1,8 @@
 import { admin, db } from '../src/firebase'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 import { EventType, type BoxScore, type EngineEvent } from '../src/types/engine'
 
 type TimestampLike =
@@ -523,7 +527,9 @@ const main = async () => {
         .get()
       const lastEvent = lastEventSnap.empty
         ? null
-        : (lastEventSnap.docs[0].data() as EngineEvent)
+        : hydrateStoredEngineEvent(
+            lastEventSnap.docs[0].data() as StoredEngineEvent
+          )
       if (!isFinalStatus(lastEvent)) continue
       selected.push(candidate)
     }
@@ -545,7 +551,7 @@ const main = async () => {
     ])
     const eventsById = new Map<number, EngineEvent>()
     for (const doc of eventsSnap.docs) {
-      const event = doc.data() as EngineEvent
+      const event = hydrateStoredEngineEvent(doc.data() as StoredEngineEvent)
       if (typeof event.eventId === 'number' && Number.isFinite(event.eventId)) {
         eventsById.set(event.eventId, event)
       }

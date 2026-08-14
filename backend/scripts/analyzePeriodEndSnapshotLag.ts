@@ -1,5 +1,9 @@
 import https from 'https'
 import { db } from '../src/firebase'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 
 type TimestampLike =
   | { toDate: () => Date }
@@ -36,17 +40,6 @@ type BoxScore = {
   game?: {
     homeTeam?: BoxScoreTeam | null
     awayTeam?: BoxScoreTeam | null
-  } | null
-}
-
-type EventDoc = {
-  eventId?: number
-  type?: string
-  description?: string | null
-  gameState?: {
-    period?: number | null
-    clockMs?: number | null
-    boxScore?: BoxScore | null
   } | null
 }
 
@@ -105,11 +98,6 @@ const asObject = (
   value: JsonValue | null | undefined
 ): { [key: string]: JsonValue } | null => {
   if (!value || Array.isArray(value) || typeof value !== 'object') return null
-  return value
-}
-
-const asArray = (value: JsonValue | null | undefined): JsonValue[] | null => {
-  if (!value || !Array.isArray(value)) return null
   return value
 }
 
@@ -341,11 +329,8 @@ const main = async () => {
       .get()
 
     const events = eventsSnap.docs
-      .map((doc) => doc.data() as EventDoc)
-      .filter(
-        (event): event is EventDoc & { eventId: number } =>
-          typeof event.eventId === 'number' && Number.isFinite(event.eventId)
-      )
+      .map((doc) => hydrateStoredEngineEvent(doc.data() as StoredEngineEvent))
+      .filter((event) => Number.isFinite(event.eventId))
     const periodEnds = events.filter(
       (event) =>
         event.type === 'PERIOD_END' &&

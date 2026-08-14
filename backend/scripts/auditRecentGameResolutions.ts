@@ -1,5 +1,9 @@
 import { db } from '../src/firebase'
 import { resolveQuestionForEvent } from '../src/lib/engine'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 import { buildSimResult } from '../src/lib/simResult'
 import { EventType, type BoxScore, type EngineEvent } from '../src/types/engine'
 
@@ -196,7 +200,9 @@ const main = async () => {
       .get()
     const lastEvent = lastEventSnap.empty
       ? null
-      : (lastEventSnap.docs[0].data() as EngineEvent)
+      : hydrateStoredEngineEvent(
+          lastEventSnap.docs[0].data() as StoredEngineEvent
+        )
     if (!isFinalStatus(lastEvent)) continue
     selectedGames.push(candidate)
   }
@@ -229,7 +235,7 @@ const main = async () => {
     ])
 
     const events = eventsSnap.docs
-      .map((doc) => doc.data() as EngineEvent)
+      .map((doc) => hydrateStoredEngineEvent(doc.data() as StoredEngineEvent))
       .filter((event) => typeof event.eventId === 'number')
       .sort((a, b) => a.eventId - b.eventId)
 

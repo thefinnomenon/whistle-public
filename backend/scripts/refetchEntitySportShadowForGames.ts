@@ -1,6 +1,10 @@
 import https from 'https'
 import { createHash } from 'crypto'
 import { admin, db } from '../src/firebase'
+import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
 
 type TimestampLike =
   | { toDate: () => Date }
@@ -247,7 +251,7 @@ const main = async () => {
 
     const eventMap = new Map<number, EventDoc>()
     for (const doc of eventsSnap.docs) {
-      const event = doc.data() as EventDoc
+      const event = hydrateStoredEngineEvent(doc.data() as StoredEngineEvent)
       if (typeof event.eventId === 'number' && Number.isFinite(event.eventId)) {
         eventMap.set(event.eventId, event)
       }

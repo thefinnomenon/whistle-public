@@ -1,8 +1,11 @@
 import https from 'https'
 import { db } from '../src/firebase'
 import {
+  hydrateStoredEngineEvent,
+  type StoredEngineEvent,
+} from '../src/lib/eventReplayStorage'
+import {
   EventType,
-  type EngineEvent,
   type OfficialCumulativeStatsSnapshot,
   type OfficialStatLine,
 } from '../src/types/engine'
@@ -291,7 +294,7 @@ const main = async () => {
 
   const events = eventsSnap.docs.map((doc) => ({
     id: doc.id,
-    data: doc.data() as EngineEvent,
+    data: hydrateStoredEngineEvent(doc.data() as StoredEngineEvent),
   }))
 
   const periodEndRows = events

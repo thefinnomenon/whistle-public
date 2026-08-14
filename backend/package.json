@@ -18,7 +18,8 @@
     "test:featured-game": "ts-node scripts/testFeaturedGame.ts",
     "test:game-payout": "ts-node scripts/testGamePayout.ts",
     "test:game-payout-integration": "ts-node scripts/testPayoutIntegration.ts",
-    "test:nfl-questions": "ts-node scripts/testNflQuestions.ts"
+    "test:nfl-questions": "ts-node scripts/testNflQuestions.ts",
+    "test:event-replay-storage": "ts-node scripts/testEventReplayStorage.ts"
   },
   "dependencies": {
     "@sentry/node": "^7.120.3",
