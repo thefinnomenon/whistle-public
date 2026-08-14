@@ -23,6 +23,7 @@ import {
   type NflActiveQuestion,
   type NflQuestionCandidate,
   type NflQuestionDecision,
+  type NflQuestionSourceAgePolicy,
 } from './nflQuestionEngine'
 import { sendDismissNotification } from './notifications'
 import { buildQuestionResolvedProps } from './questionAnalytics'
@@ -35,6 +36,8 @@ const ESPN_NFL_TIMEOUT_MS = 15_000
 const NFL_OPEN_GAMES_REFRESH_MS = 60_000
 const NFL_OPEN_GAMES_WATCH_RESTART_MS = 30_000
 const NFL_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS = 5_000
+const NFL_QUESTION_SOURCE_AGE_POLICY: NflQuestionSourceAgePolicy =
+  process.env.NFL_ENFORCE_QUESTION_SOURCE_AGE === '1' ? 'ENFORCE' : 'OBSERVE'
 
 const NFL_TEAM_CODES = new Set([
   'ARI',
@@ -1420,6 +1423,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         gameQuestionKeys,
         periodQuestionKeys,
         athletes: summary.athletes,
+        sourceAgePolicy: NFL_QUESTION_SOURCE_AGE_POLICY,
       })
       const candidate = candidateDecision.candidate
       if (!candidate && candidateDecision.skipReason !== 'NO_CANDIDATE') {
@@ -1530,7 +1534,7 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
             ].slice(-20)
           }
           console.log(
-            `[nfl] question created game=${gameId} question=${questionId} play=${latestCreatedPlay.id} template=${candidate.payload.templateId} priority=${candidate.priority} sourceAgeMs=${candidateDecision.sourceAgeMs ?? 'unknown'} sourceAgeLimitMs=${candidateDecision.maxSourceAgeMs ?? 'unknown'}`
+            `[nfl] question created game=${gameId} question=${questionId} play=${latestCreatedPlay.id} template=${candidate.payload.templateId} priority=${candidate.priority} sourceAgeMs=${candidateDecision.sourceAgeMs ?? 'unknown'} sourceAgeLimitMs=${candidateDecision.maxSourceAgeMs ?? 'unknown'} sourceAgePolicy=${NFL_QUESTION_SOURCE_AGE_POLICY}`
           )
         }
       }

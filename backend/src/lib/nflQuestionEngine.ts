@@ -20,6 +20,8 @@ export type NflQuestionPriority =
   | 'TIMEOUT_NEXT_PLAY'
   | 'RECEIVER_TARGET'
 
+export type NflQuestionSourceAgePolicy = 'OBSERVE' | 'ENFORCE'
+
 export type NflQuestionCandidate = {
   payload: EngineQuestionPayload
   priority: NflQuestionPriority
@@ -74,6 +76,7 @@ type BuildCandidateInput = {
   gameQuestionKeys: readonly string[]
   periodQuestionKeys: readonly string[]
   athletes: readonly EspnNflAthleteName[]
+  sourceAgePolicy?: NflQuestionSourceAgePolicy
 }
 
 type NflPeriodTeamStat = {
@@ -1246,7 +1249,8 @@ export const buildNflQuestionCandidateDecision = (
   }
 
   const wallclockMs = getNflPlayWallclockMs(input.anchorPlay)
-  if (wallclockMs === null) {
+  const sourceAgePolicy = input.sourceAgePolicy ?? 'ENFORCE'
+  if (wallclockMs === null && sourceAgePolicy === 'ENFORCE') {
     return {
       candidate: null,
       priority: candidates[0].priority,
@@ -1256,8 +1260,12 @@ export const buildNflQuestionCandidateDecision = (
     }
   }
 
-  const sourceAgeMs = input.nowMs - wallclockMs
-  if (sourceAgeMs < -5_000) {
+  const sourceAgeMs = wallclockMs === null ? null : input.nowMs - wallclockMs
+  if (
+    sourceAgePolicy === 'ENFORCE' &&
+    sourceAgeMs !== null &&
+    sourceAgeMs < -5_000
+  ) {
     return {
       candidate: null,
       priority: candidates[0].priority,
@@ -1267,10 +1275,14 @@ export const buildNflQuestionCandidateDecision = (
     }
   }
 
-  const candidate = candidates.find(
-    (possibleCandidate) =>
-      sourceAgeMs <= getMaxSourceAgeMs(possibleCandidate.priority)
-  )
+  const candidate =
+    sourceAgePolicy === 'OBSERVE'
+      ? candidates[0]
+      : candidates.find(
+          (possibleCandidate) =>
+            sourceAgeMs !== null &&
+            sourceAgeMs <= getMaxSourceAgeMs(possibleCandidate.priority)
+        )
   if (!candidate) {
     return {
       candidate: null,
@@ -1289,8 +1301,12 @@ export const buildNflQuestionCandidateDecision = (
         ...candidate.payload,
         selectionReason: [
           ...(candidate.payload.selectionReason ?? []),
-          { code: 'NFL_SOURCE_AGE_MS', detail: `${sourceAgeMs}` },
+          {
+            code: 'NFL_SOURCE_AGE_MS',
+            detail: sourceAgeMs === null ? 'unknown' : `${sourceAgeMs}`,
+          },
           { code: 'NFL_SOURCE_AGE_GUARD', detail: `${maxSourceAgeMs}` },
+          { code: 'NFL_SOURCE_AGE_POLICY', detail: sourceAgePolicy },
         ],
       },
     },

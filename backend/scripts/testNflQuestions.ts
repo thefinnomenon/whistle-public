@@ -177,13 +177,10 @@ const delayedRedZoneCandidate = buildCandidate(
 assert.equal(delayedRedZoneCandidate?.priority, 'RED_ZONE')
 assert.deepEqual(delayedRedZoneCandidate?.payload.selectionReason?.slice(-2), [
   {
-    code: 'NFL_SOURCE_AGE_MS',
-    detail: `${NFL_QUESTION_MAX_SOURCE_AGE_MS + 1}`,
-  },
-  {
     code: 'NFL_SOURCE_AGE_GUARD',
     detail: `${NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS}`,
   },
+  { code: 'NFL_SOURCE_AGE_POLICY', detail: 'ENFORCE' },
 ])
 const staleRedZoneCandidate = buildCandidate(
   [driveStart, redZoneEntry],
@@ -309,6 +306,23 @@ const staleFieldGoalCandidate = buildCandidate(
   BASE_TIME_MS + 131_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1
 )
 assert.equal(staleFieldGoalCandidate, null)
+const observedStaleFieldGoalCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, fourthDownPlay, fieldGoalTimeout],
+  anchorPlay: fieldGoalTimeout,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: ['1'],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['team:1', 'player:1'],
+  athletes,
+  sourceAgePolicy: 'OBSERVE',
+})
+assert.equal(observedStaleFieldGoalCandidate?.priority, 'FIELD_GOAL')
 const staleFieldGoalPeriodFallback = buildNflQuestionCandidate({
   plays: [driveStart, fourthDownPlay, fieldGoalTimeout],
   anchorPlay: fieldGoalTimeout,
