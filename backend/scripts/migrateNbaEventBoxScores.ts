@@ -20,6 +20,7 @@ import type { BoxScore } from '../src/types/engine'
 type MigrationOptions = {
   apply: boolean
   pageSize: number
+  concurrency: number
   maxDocs: number | null
   gameId: string | null
 }
@@ -47,6 +48,8 @@ type GameRef =
 const CONFIRMATION = 'compress-nba-event-box-scores'
 const DEFAULT_PAGE_SIZE = 250
 const MAX_PAGE_SIZE = 400
+const DEFAULT_CONCURRENCY = 5
+const MAX_CONCURRENCY = 8
 const MAX_ATTEMPTS = 8
 
 const sleep = (ms: number): Promise<void> =>
@@ -100,6 +103,15 @@ const parseOptions = (argv: string[]): MigrationOptions => {
       DEFAULT_PAGE_SIZE,
       MAX_PAGE_SIZE
     ),
+    concurrency:
+      maxDocsArg === null
+        ? parsePositiveIntegerArg(
+            argv,
+            'concurrency',
+            DEFAULT_CONCURRENCY,
+            MAX_CONCURRENCY
+          )
+        : 1,
     maxDocs:
       maxDocsArg === null
         ? null
@@ -275,13 +287,24 @@ const main = async (): Promise<void> => {
   }
 
   console.log(
-    `[migration/nba-event-box-scores] start mode=${options.apply ? 'apply' : 'dry-run'} games=${gameRefs.length} pageSize=${options.pageSize} maxDocs=${options.maxDocs ?? 'all'} gameId=${options.gameId ?? 'all'}`
+    `[migration/nba-event-box-scores] start mode=${options.apply ? 'apply' : 'dry-run'} games=${gameRefs.length} pageSize=${options.pageSize} concurrency=${options.concurrency} maxDocs=${options.maxDocs ?? 'all'} gameId=${options.gameId ?? 'all'}`
   )
 
-  for (const gameRef of gameRefs) {
-    if (options.maxDocs !== null && totals.scanned >= options.maxDocs) break
-    await migrateGame(gameRef, options, totals)
+  let nextGameIndex = 0
+  const migrateNextGame = async (): Promise<void> => {
+    while (nextGameIndex < gameRefs.length) {
+      if (options.maxDocs !== null && totals.scanned >= options.maxDocs) return
+      const gameRef = gameRefs[nextGameIndex]
+      nextGameIndex += 1
+      if (!gameRef) return
+      await migrateGame(gameRef, options, totals)
+    }
   }
+
+  const workerCount = Math.min(options.concurrency, gameRefs.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => await migrateNextGame())
+  )
 
   const bytesSaved = Math.max(0, totals.rawBytes - totals.compressedBytes)
   const ratio =
