@@ -5,71 +5,46 @@ import {
   evaluateCashEligibility,
 } from '../src/lib/gamePayout'
 
-const questions = Array.from({ length: 10 }, (_, index) => ({
-  id: `q${index + 1}`,
-  state: index === 9 ? 'cancelled' : 'resolved',
-  triggeredAtMs: 1_000 + index * 1_000,
-}))
-
-const eligibility = evaluateCashEligibility(
-  [
-    {
-      userId: 'early-qualified',
-      score: 40,
-      joinedAtMs: 500,
-      predictionsByQuestionId: {
-        q1: 'yes',
-        q2: 'yes',
-        q3: 'yes',
-        q4: 'yes',
-        q5: 'yes',
-      },
+const eligibility = evaluateCashEligibility([
+  {
+    userId: 'early-qualified',
+    score: 40,
+    predictionsByQuestionId: {
+      q1: 'yes',
+      q2: 'yes',
+      q3: 'yes',
+      q4: 'yes',
+      q5: 'yes',
     },
-    {
-      userId: 'late-qualified',
-      score: 40,
-      joinedAtMs: 4_500,
-      predictionsByQuestionId: {
-        q5: 'yes',
-        q6: 'yes',
-        q7: 'yes',
-        q8: 'yes',
-        q9: 'yes',
-      },
+  },
+  {
+    userId: 'late-qualified',
+    score: 40,
+    predictionsByQuestionId: {
+      q5: 'yes',
+      q6: 'yes',
+      q7: 'yes',
+      q8: 'yes',
+      q9: 'yes',
     },
-    {
-      userId: 'too-few',
-      score: 60,
-      joinedAtMs: 500,
-      predictionsByQuestionId: {
-        q1: 'yes',
-        q2: 'yes',
-        q3: 'yes',
-        q4: 'yes',
-      },
+  },
+  {
+    userId: 'too-few',
+    score: 60,
+    predictionsByQuestionId: {
+      q1: 'yes',
+      q2: 'yes',
+      q3: 'yes',
+      q4: 'yes',
     },
-    {
-      userId: 'missing-time',
-      score: 100,
-      joinedAtMs: null,
-      predictionsByQuestionId: {
-        q1: 'yes',
-        q2: 'yes',
-        q3: 'yes',
-        q4: 'yes',
-        q5: 'yes',
-      },
-    },
-  ],
-  questions
-)
+  },
+])
 
 assert.equal(CASH_ELIGIBILITY_MIN_ANSWERS, 5)
 assert.deepEqual(
-  eligibility.map(({ userId, answered, offered, qualified, reason }) => ({
+  eligibility.map(({ userId, answered, qualified, reason }) => ({
     userId,
     answered,
-    offered,
     qualified,
     reason,
   })),
@@ -77,30 +52,20 @@ assert.deepEqual(
     {
       userId: 'early-qualified',
       answered: 5,
-      offered: 9,
       qualified: true,
       reason: 'qualified',
     },
     {
       userId: 'late-qualified',
       answered: 5,
-      offered: 5,
       qualified: true,
       reason: 'qualified',
     },
     {
       userId: 'too-few',
       answered: 4,
-      offered: 9,
       qualified: false,
       reason: 'minimum_answers',
-    },
-    {
-      userId: 'missing-time',
-      answered: 0,
-      offered: 0,
-      qualified: false,
-      reason: 'missing_join_time',
     },
   ]
 )

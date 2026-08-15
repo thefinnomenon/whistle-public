@@ -578,7 +578,11 @@ router.post(
       for (const otherSnap of weekGamesSnap.docs) {
         if (otherSnap.id === gameId) continue
         const otherGame = otherSnap.data() as GameDocument
-        if (otherGame.isFeatured) {
+        if (
+          otherGame.isFeatured &&
+          otherGame.state !== 'resolved' &&
+          otherGame.state !== 'cancelled'
+        ) {
           batch.set(otherSnap.ref, unfeaturedGameUpdate(otherGame), {
             merge: true,
           })

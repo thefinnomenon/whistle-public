@@ -21,11 +21,16 @@ export function FeaturedPoolProgress({
 }: FeaturedPoolProgressProps) {
   const pool = getFeaturedPoolProgress(playerCount, featuredPoolAmount)
   const eligibilityLabel = (() => {
-    if (answersSubmitted === undefined) return 'Prize eligibility'
-    if (!cashEligibility) {
-      return `${answersSubmitted} / 5 answers toward prize eligibility`
+    if (cashEligibility) {
+      return cashEligibility.qualified
+        ? 'Prize eligible'
+        : `Not prize eligible. ${cashEligibility.answered} of 5 answered`
     }
-    return cashEligibility.qualified ? 'Prize eligible' : 'Not prize eligible'
+    if (answersSubmitted === undefined) return 'Answer 5 questions to qualify'
+
+    const answersRemaining = Math.max(0, 5 - answersSubmitted)
+    if (answersRemaining === 0) return 'Prize eligible'
+    return `${answersRemaining} more ${answersRemaining === 1 ? 'answer' : 'answers'} to qualify`
   })()
 
   return (
@@ -73,12 +78,9 @@ export function FeaturedPoolProgress({
         </>
       )}
       {(answersSubmitted !== undefined || showEligibilityRules) && (
-        <View className="mt-2 border-t border-blue-400/20 pt-2">
+        <View className="mt-3 border-t border-blue-400/20 pt-3">
           <Text className="text-xs font-semibold text-foreground">
             {eligibilityLabel}
-          </Text>
-          <Text className="mt-0.5 text-xs text-muted-foreground">
-            Answer at least 5 and 50% of questions offered after you join.
           </Text>
         </View>
       )}

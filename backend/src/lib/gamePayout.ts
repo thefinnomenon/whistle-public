@@ -1,32 +1,18 @@
 export const CASH_ELIGIBILITY_MIN_ANSWERS = 5
-export const CASH_ELIGIBILITY_MIN_RATE = 0.5
 
-export type CashEligibilityReason =
-  | 'qualified'
-  | 'missing_join_time'
-  | 'minimum_answers'
-  | 'answer_rate'
+export type CashEligibilityReason = 'qualified' | 'minimum_answers'
 
 export type CashEligibilityMember = {
   userId: string
   score: number
-  joinedAtMs: number | null
   predictionsByQuestionId: Record<string, string>
-}
-
-export type CashEligibilityQuestion = {
-  id: string
-  state: string
-  triggeredAtMs: number | null
 }
 
 export type CashEligibilityResult = {
   userId: string
   score: number
   answered: number
-  offered: number
   requiredAnswers: number
-  answerRate: number
   qualified: boolean
   reason: CashEligibilityReason
 }
@@ -42,60 +28,20 @@ export type PayoutPlan = {
   winners: PayoutPlanItem[]
 }
 
-const countRequiredAnswers = (offered: number): number =>
-  Math.max(
-    CASH_ELIGIBILITY_MIN_ANSWERS,
-    Math.ceil(offered * CASH_ELIGIBILITY_MIN_RATE)
-  )
-
 export const evaluateCashEligibility = (
-  members: CashEligibilityMember[],
-  questions: CashEligibilityQuestion[]
+  members: CashEligibilityMember[]
 ): CashEligibilityResult[] =>
   members.map((member) => {
-    if (member.joinedAtMs === null) {
-      return {
-        userId: member.userId,
-        score: member.score,
-        answered: 0,
-        offered: 0,
-        requiredAnswers: CASH_ELIGIBILITY_MIN_ANSWERS,
-        answerRate: 0,
-        qualified: false,
-        reason: 'missing_join_time',
-      }
-    }
-
-    const offeredQuestionIds = questions
-      .filter(
-        (question) =>
-          question.state === 'resolved' &&
-          question.triggeredAtMs !== null &&
-          question.triggeredAtMs >= member.joinedAtMs!
-      )
-      .map((question) => question.id)
-    const offered = offeredQuestionIds.length
-    const answered = offeredQuestionIds.filter(
-      (questionId) => member.predictionsByQuestionId[questionId] !== undefined
-    ).length
-    const answerRate = offered === 0 ? 0 : answered / offered
-    const meetsMinimum = answered >= CASH_ELIGIBILITY_MIN_ANSWERS
-    const meetsRate = offered > 0 && answerRate >= CASH_ELIGIBILITY_MIN_RATE
-    const qualified = meetsMinimum && meetsRate
+    const answered = Object.keys(member.predictionsByQuestionId).length
+    const qualified = answered >= CASH_ELIGIBILITY_MIN_ANSWERS
 
     return {
       userId: member.userId,
       score: member.score,
       answered,
-      offered,
-      requiredAnswers: countRequiredAnswers(offered),
-      answerRate,
+      requiredAnswers: CASH_ELIGIBILITY_MIN_ANSWERS,
       qualified,
-      reason: qualified
-        ? 'qualified'
-        : !meetsMinimum
-          ? 'minimum_answers'
-          : 'answer_rate',
+      reason: qualified ? 'qualified' : 'minimum_answers',
     }
   })
 

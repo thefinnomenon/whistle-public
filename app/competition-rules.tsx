@@ -50,7 +50,7 @@ const RULES: RuleSection[] = [
     paragraphs: ['To enter the Competition, users must:'],
     bullets: [
       'Join the Featured Game in the Whistle app during its Competition Period.',
-      'Submit at least five predictions and answer at least 50% of the resolved questions offered after joining the game.',
+      'Submit at least five predictions during the Featured Game.',
       'There is no random drawing or chance-based selection for recognition. Winners are determined solely on skill-based performance.',
     ],
   },

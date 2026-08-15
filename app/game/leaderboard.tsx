@@ -17,8 +17,7 @@ export default function LeaderboardScreen() {
       {showCashResults && (
         <Text className="px-4 py-3 text-xs text-muted-foreground">
           Prize winners are the highest-scoring eligible players. Eligibility
-          requires at least 5 answers and 50% of questions offered after
-          joining.
+          requires at least 5 answers.
         </Text>
       )}
       <FlashList

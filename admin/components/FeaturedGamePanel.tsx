@@ -152,8 +152,8 @@ export function FeaturedGamePanel({ game, gameId }: FeaturedGamePanelProps) {
           ) : (
             <p className="mt-1 max-w-2xl text-sm text-blue-800 dark:text-blue-200">
               Guarantee $25, unlock $50 at 50 players, and unlock $100 at 100
-              players. Enabling this will replace another featured game in the
-              same NFL week.
+              players. Enabling this will replace another upcoming or live
+              featured game in the same NFL week.
             </p>
           )}
         </div>

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { admin, db } from '../src/firebase'
+import { db } from '../src/firebase'
 import { distributeWinnings } from '../src/routes/game'
 
 const gameId = 'payout-integration-test'
@@ -20,7 +20,6 @@ const cleanup = async (): Promise<void> => {
 
 const run = async (): Promise<void> => {
   await cleanup()
-  const joinedAt = admin.firestore.Timestamp.fromMillis(1_000)
   const batch = db.batch()
   batch.set(gameRef, {
     state: 'resolved',
@@ -29,13 +28,6 @@ const run = async (): Promise<void> => {
     prizeAmount: 25,
     prizeAmountCents: 2_500,
   })
-
-  for (let index = 1; index <= 5; index += 1) {
-    batch.set(gameRef.collection('questions').doc(`q${index}`), {
-      state: 'resolved',
-      triggeredAt: admin.firestore.Timestamp.fromMillis(1_000 + index),
-    })
-  }
 
   for (const userId of userIds) {
     const isIneligible = userId === 'payout-high'
@@ -46,7 +38,6 @@ const run = async (): Promise<void> => {
     batch.set(gameRef.collection('users').doc(userId), {
       username: userId,
       score: isIneligible ? 100 : 50,
-      joinedAt,
       predictionsByQuestionId: Object.fromEntries(
         Array.from({ length: isIneligible ? 4 : 5 }, (_, index) => [
           `q${index + 1}`,

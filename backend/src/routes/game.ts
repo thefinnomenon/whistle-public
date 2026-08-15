@@ -5,7 +5,6 @@ import { scheduleGameStartQuestions } from '../lib/engine'
 import {
   buildPayoutPlan,
   CASH_ELIGIBILITY_MIN_ANSWERS,
-  CASH_ELIGIBILITY_MIN_RATE,
   CashEligibilityResult,
   evaluateCashEligibility,
 } from '../lib/gamePayout'
@@ -1909,7 +1908,6 @@ type PayoutGameDocument = {
 
 type PayoutMemberDocument = {
   score?: number
-  joinedAt?: TimestampLikeValue
   predictionsByQuestionId?: Record<string, string>
 }
 
@@ -1942,9 +1940,7 @@ const commitEligibilityResults = async (
           cashEligibility: {
             qualified: result.qualified,
             answered: result.answered,
-            offered: result.offered,
             requiredAnswers: result.requiredAnswers,
-            answerRate: result.answerRate,
             reason: result.reason,
           },
           cashEligibilityCalculatedAt:
@@ -1972,10 +1968,9 @@ export const distributeWinnings = async (
 ): Promise<WinnerNotification[]> => {
   console.log(`[payout] game=${gameId} stage=calculate`)
   const gameRef = db.collection('games').doc(gameId)
-  const [gameSnap, memberSnap, questionSnap] = await Promise.all([
+  const [gameSnap, memberSnap] = await Promise.all([
     gameRef.get(),
     gameRef.collection('users').get(),
-    gameRef.collection('questions').get(),
   ])
   if (!gameSnap.exists) return []
   const game = gameSnap.data() as PayoutGameDocument
@@ -1990,29 +1985,17 @@ export const distributeWinnings = async (
     return {
       userId: memberDoc.id,
       score: finiteNumber(data.score),
-      joinedAtMs: toMs(data.joinedAt),
       predictionsByQuestionId: data.predictionsByQuestionId ?? {},
-    }
-  })
-  const questions = questionSnap.docs.map((questionDoc) => {
-    const data = questionDoc.data() as QuestionDocData
-    return {
-      id: questionDoc.id,
-      state: data.state ?? 'unknown',
-      triggeredAtMs: toMs(data.triggeredAt ?? data.createdAt),
     }
   })
   const eligibility =
     prizeType === 'USD' && game.isFeatured
-      ? evaluateCashEligibility(members, questions)
+      ? evaluateCashEligibility(members)
       : members.map<CashEligibilityResult>((member) => ({
           userId: member.userId,
           score: member.score,
           answered: Object.keys(member.predictionsByQuestionId).length,
-          offered: questions.filter((question) => question.state === 'resolved')
-            .length,
           requiredAnswers: 0,
-          answerRate: 1,
           qualified: true,
           reason: 'qualified',
         }))
@@ -2053,10 +2036,7 @@ export const distributeWinnings = async (
         prizeType === 'USD' && game.isFeatured
           ? CASH_ELIGIBILITY_MIN_ANSWERS
           : null,
-      cashEligibilityMinRate:
-        prizeType === 'USD' && game.isFeatured
-          ? CASH_ELIGIBILITY_MIN_RATE
-          : null,
+      cashEligibilityMinRate: admin.firestore.FieldValue.delete(),
       payoutStartedAt: now,
       updatedAt: now,
     },

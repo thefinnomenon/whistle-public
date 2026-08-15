@@ -34,14 +34,8 @@ type GamePlayer = {
   cashEligibility?: {
     qualified: boolean
     answered: number
-    offered: number
     requiredAnswers: number
-    answerRate: number
-    reason:
-      | 'qualified'
-      | 'missing_join_time'
-      | 'minimum_answers'
-      | 'answer_rate'
+    reason: 'qualified' | 'minimum_answers'
   }
   updatedAt: FirestoreTimestamp
 }
@@ -110,7 +104,6 @@ type Game = {
   payoutStartedAt?: FirestoreTimestamp
   payoutCompletedAt?: FirestoreTimestamp
   cashEligibilityMinAnswers?: number
-  cashEligibilityMinRate?: number
 }
 
 type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'

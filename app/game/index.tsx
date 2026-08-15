@@ -452,7 +452,7 @@ export default function GameScreen() {
       />
       <GameInfoBar game={game} gamePlayer={gamePlayer} />
       {!isPracticeMode && game.isFeatured && (
-        <View className="px-4 pt-3">
+        <View className="px-4 py-3">
           <FeaturedPoolProgress
             playerCount={game.playerCount || 0}
             featuredPoolAmount={game.featuredPoolAmount}
