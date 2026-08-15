@@ -88,6 +88,7 @@ type Game = {
   league?: League
   isFeatured?: boolean
   featuredWeekKey?: string
+  featuredDayKey?: string
   featuredPoolAmount?: number
   featuredPoolAnnouncements?: Partial<
     Record<'25' | '50' | '100', FirestoreTimestamp>

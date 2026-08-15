@@ -91,6 +91,25 @@ export const getFeaturedWeekKey = (startTime: Date): string => {
   return tuesday.toISOString().slice(0, 10)
 }
 
+const FEATURED_TIME_ZONE = 'America/New_York'
+const featuredDayFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: FEATURED_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+export const getFeaturedDayKey = (startTime: Date): string => {
+  const parts = featuredDayFormatter.formatToParts(startTime)
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const day = parts.find((part) => part.type === 'day')?.value
+  if (!year || !month || !day) {
+    throw new Error('Unable to determine Featured Game day')
+  }
+  return `${year}-${month}-${day}`
+}
+
 export const buildFeaturedJoinAnalytics = (
   joins: FeaturedJoinRecord[],
   kickoffAtMs: number,

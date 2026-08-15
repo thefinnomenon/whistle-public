@@ -6,6 +6,7 @@ import {
   FeaturedAnnouncementTimes,
   FeaturedJoinRecord,
   FeaturedPoolAmount,
+  getFeaturedDayKey,
   getFeaturedPoolState,
   getFeaturedWeekKey,
   parseFeaturedPoolAmount,
@@ -44,6 +45,7 @@ type GameDocument = {
   prizeType?: 'USD' | 'POINTS'
   isFeatured?: boolean
   featuredWeekKey?: string
+  featuredDayKey?: string
   featuredPoolAmount?: number
   featuredOriginalPrizeAmount?: number
   featuredOriginalPrizeAmountCents?: number
@@ -155,6 +157,7 @@ const unfeaturedGameUpdate = (game: GameDocument) => ({
       : admin.firestore.FieldValue.delete(),
   prizeType: game.featuredOriginalPrizeType ?? game.prizeType ?? 'POINTS',
   featuredWeekKey: admin.firestore.FieldValue.delete(),
+  featuredDayKey: admin.firestore.FieldValue.delete(),
   featuredPoolAmount: admin.firestore.FieldValue.delete(),
   featuredOriginalPrizeAmount: admin.firestore.FieldValue.delete(),
   featuredOriginalPrizeAmountCents: admin.firestore.FieldValue.delete(),
@@ -537,6 +540,7 @@ router.post(
       const playerCount = playersSnap.size
       const poolState = getFeaturedPoolState(playerCount)
       const weekKey = getFeaturedWeekKey(startTime)
+      const dayKey = getFeaturedDayKey(startTime)
       const featuredAt = admin.firestore.FieldValue.serverTimestamp()
 
       const existingJoinEventIds = new Set(
@@ -578,8 +582,13 @@ router.post(
       for (const otherSnap of weekGamesSnap.docs) {
         if (otherSnap.id === gameId) continue
         const otherGame = otherSnap.data() as GameDocument
+        const otherStartTime = otherGame.startTime?.toDate()
+        const otherDayKey =
+          otherGame.featuredDayKey ??
+          (otherStartTime ? getFeaturedDayKey(otherStartTime) : null)
         if (
           otherGame.isFeatured &&
+          otherDayKey === dayKey &&
           otherGame.state !== 'resolved' &&
           otherGame.state !== 'cancelled'
         ) {
@@ -594,6 +603,7 @@ router.post(
         {
           isFeatured: true,
           featuredWeekKey: weekKey,
+          featuredDayKey: dayKey,
           featuredPoolAmount: poolState.amount,
           featuredOriginalPrizeAmount: game.isFeatured
             ? (game.featuredOriginalPrizeAmount ?? 0)
@@ -629,12 +639,13 @@ router.post(
       await batch.commit()
 
       console.log(
-        `[games/featured] game=${gameId} featured=1 week=${weekKey} playerCount=${playerCount} pool=${poolState.amount}`
+        `[games/featured] game=${gameId} featured=1 day=${dayKey} week=${weekKey} playerCount=${playerCount} pool=${poolState.amount}`
       )
       return res.json({
         ok: true,
         isFeatured: true,
         featuredWeekKey: weekKey,
+        featuredDayKey: dayKey,
         playerCount,
         pool: poolState,
       })

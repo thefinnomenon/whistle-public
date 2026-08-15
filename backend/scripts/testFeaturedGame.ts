@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   buildFeaturedJoinAnalytics,
+  getFeaturedDayKey,
   getFeaturedPoolState,
   getFeaturedWeekKey,
 } from '../src/lib/featuredGame'
@@ -32,6 +33,23 @@ assert.equal(
 assert.equal(
   getFeaturedWeekKey(new Date('2026-09-15T00:01:00.000Z')),
   '2026-09-15'
+)
+
+assert.equal(
+  getFeaturedDayKey(new Date('2026-08-15T03:59:59.999Z')),
+  '2026-08-14'
+)
+assert.equal(
+  getFeaturedDayKey(new Date('2026-08-15T04:00:00.000Z')),
+  '2026-08-15'
+)
+assert.equal(
+  getFeaturedDayKey(new Date('2026-11-01T05:30:00.000Z')),
+  '2026-11-01'
+)
+assert.equal(
+  getFeaturedDayKey(new Date('2026-11-01T06:30:00.000Z')),
+  '2026-11-01'
 )
 
 const analytics = buildFeaturedJoinAnalytics(
