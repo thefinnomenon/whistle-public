@@ -2,7 +2,6 @@ import { fetchEspnNflSummary, type EspnNflPlay } from '../src/lib/nfl'
 import { buildQuestionChoices } from '../src/lib/engine'
 import {
   buildNflQuestionCandidate,
-  extractNflPassTarget,
   getNflPlayWallclockMs,
   NFL_MAX_QUESTIONS_PER_GAME,
   NFL_QUESTION_MIN_INTERVAL_MS,
@@ -15,6 +14,11 @@ import {
 type SimActiveQuestion = NflActiveQuestion & {
   question: string
 }
+
+const formatProjectionNumber = (
+  value: NflActiveQuestion['resolutionContext'][string]
+): string =>
+  typeof value === 'number' ? String(Math.round(value * 100) / 100) : 'none'
 
 const eventId = process.argv[2]?.trim()
 if (!eventId) {
@@ -106,32 +110,6 @@ const run = async (): Promise<void> => {
     if (!candidate) continue
     if (created >= NFL_MAX_QUESTIONS_PER_GAME) continue
 
-    if (candidate.priority === 'RED_ZONE') {
-      const retained: SimActiveQuestion[] = []
-      for (const question of activeQuestions) {
-        if (question.resolutionContext.type === 'NFL_NEXT_TARGET') {
-          const expectedTarget = question.resolutionContext.targetToken
-          const actualTarget = extractNflPassTarget(play)
-          if (
-            typeof expectedTarget === 'string' &&
-            actualTarget &&
-            expectedTarget.toLowerCase().replace(/[^a-z0-9]/g, '') ===
-              actualTarget.toLowerCase().replace(/[^a-z0-9]/g, '')
-          ) {
-            retained.push(question)
-            continue
-          }
-          cancelled += 1
-          console.log(
-            `[sim-nfl] resolution question=${question.id} state=cancelled answer=null reason=RED_ZONE_PRIORITY play=${play.id} type=${play.type}`
-          )
-        } else {
-          retained.push(question)
-        }
-      }
-      activeQuestions = retained
-    }
-
     const cadenceReady =
       lastQuestionAtMs === null ||
       wallclockMs - lastQuestionAtMs >= NFL_QUESTION_MIN_INTERVAL_MS
@@ -194,8 +172,13 @@ const run = async (): Promise<void> => {
     if (candidate.periodQuestionKey) {
       periodQuestionKeys = [...periodQuestionKeys, candidate.periodQuestionKey]
     }
+    const context = candidate.payload.resolutionContext
+    const projectionLog =
+      context?.type === 'NFL_PERIOD_PLAYER_THRESHOLD'
+        ? ` projectionSource=${typeof context.projectionSource === 'string' ? context.projectionSource : 'none'} current=${formatProjectionNumber(context.currentValueAtAsk)} target=${formatProjectionNumber(context.target)} priorSeason=${formatProjectionNumber(context.priorSeasonYear)} priorAverage=${formatProjectionNumber(context.priorSeasonAveragePerGame)} projected=${formatProjectionNumber(context.projectedPeriodTotal)}`
+        : ''
     console.log(
-      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority} text=${candidate.payload.question} choices=${buildQuestionChoices(
+      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority}${projectionLog} text=${candidate.payload.question} choices=${buildQuestionChoices(
         candidate.payload
       )
         .map((choice) => choice.value)

@@ -100,6 +100,30 @@ export type NflPeriodStats = {
   players: Map<string, NflPeriodPlayerStat>
 }
 
+export type NflPeriodPlayerThresholdStatType =
+  | 'PASSING_YARDS'
+  | 'RUSHING_YARDS'
+  | 'RECEPTIONS'
+
+export type NflPeriodPlayerThresholdProjection = {
+  target: number
+  projectedPeriodTotal: number
+  priorSeasonYear: number | null
+  priorSeasonGames: number | null
+  priorSeasonAveragePerGame: number | null
+  historicalExpectedRemaining: number | null
+  fallbackExpectedRemaining: number | null
+  liveExpectedRemaining: number
+  projectionSource: 'PRIOR_SEASON_LIVE_BLEND' | 'POSITION_BASELINE_LIVE_BLEND'
+}
+
+export type NflPeriodPlayerThresholdProjectionInput = {
+  statType: NflPeriodPlayerThresholdStatType
+  currentValue: number
+  clockRemainingMs: number
+  athlete: EspnNflAthleteName
+}
+
 const TERMINAL_PLAY_PATTERN =
   /touchdown|field goal|punt|interception|end period|end of game/i
 const STOPPAGE_PLAY_PATTERN = /timeout|two-minute warning/i
@@ -146,6 +170,135 @@ const parseClockMs = (clock: string | null): number => {
   const match = /^(\d+):(\d{2})$/.exec(clock.trim())
   if (!match) return 0
   return Number(match[1]) * 60_000 + Number(match[2]) * 1_000
+}
+
+const NFL_PERIOD_MS = 15 * 60_000
+
+const getPriorSeasonStatBaseline = (
+  athlete: EspnNflAthleteName,
+  statType: NflPeriodPlayerThresholdStatType
+): {
+  seasonYear: number
+  games: number
+  averagePerGame: number
+} | null => {
+  const profile = athlete.priorSeasonProfile
+  if (!profile) return null
+  if (statType === 'PASSING_YARDS') {
+    return {
+      seasonYear: profile.seasonYear,
+      games: profile.passingGames,
+      averagePerGame: profile.passingYardsPerGame,
+    }
+  }
+  if (statType === 'RUSHING_YARDS') {
+    return {
+      seasonYear: profile.seasonYear,
+      games: profile.rushingGames,
+      averagePerGame: profile.rushingYardsPerGame,
+    }
+  }
+  return {
+    seasonYear: profile.seasonYear,
+    games: profile.receivingGames,
+    averagePerGame: profile.receptionsPerGame,
+  }
+}
+
+const getPeriodProjectionCeiling = (
+  statType: NflPeriodPlayerThresholdStatType
+): number => {
+  if (statType === 'PASSING_YARDS') return 125
+  if (statType === 'RUSHING_YARDS') return 60
+  return 5
+}
+
+const getMinimumExpectedRemaining = (
+  statType: NflPeriodPlayerThresholdStatType
+): number => {
+  if (statType === 'PASSING_YARDS') return 8
+  if (statType === 'RUSHING_YARDS') return 3
+  return 0.45
+}
+
+const getFallbackAveragePerGame = (
+  statType: NflPeriodPlayerThresholdStatType
+): number => {
+  if (statType === 'PASSING_YARDS') return 200
+  if (statType === 'RUSHING_YARDS') return 45
+  return 3
+}
+
+const roundPeriodPlayerTarget = (
+  statType: NflPeriodPlayerThresholdStatType,
+  currentValue: number,
+  projectedPeriodTotal: number
+): number => {
+  if (statType === 'RECEPTIONS') {
+    return Math.max(currentValue + 1, Math.floor(projectedPeriodTotal))
+  }
+  const increment = 5
+  const minimumIncrease = statType === 'PASSING_YARDS' ? 10 : 5
+  const minimumTarget =
+    Math.ceil((currentValue + minimumIncrease) / increment) * increment
+  const rounded = Math.floor(projectedPeriodTotal / increment) * increment
+  return Math.max(rounded, minimumTarget)
+}
+
+export const projectNflPeriodPlayerThreshold = (
+  input: NflPeriodPlayerThresholdProjectionInput
+): NflPeriodPlayerThresholdProjection | null => {
+  const clockRemainingMs = Math.min(
+    NFL_PERIOD_MS,
+    Math.max(0, input.clockRemainingMs)
+  )
+  const remainingFraction = clockRemainingMs / NFL_PERIOD_MS
+  const elapsedFraction = Math.max(0.25, 1 - remainingFraction)
+  const livePeriodProjection = Math.min(
+    input.currentValue / elapsedFraction,
+    getPeriodProjectionCeiling(input.statType)
+  )
+  const liveExpectedRemaining = Math.max(
+    0,
+    livePeriodProjection - input.currentValue
+  )
+  const priorSeason = getPriorSeasonStatBaseline(input.athlete, input.statType)
+  const usePriorSeason =
+    priorSeason !== null &&
+    priorSeason.games >= 4 &&
+    priorSeason.averagePerGame > 0
+  const historicalExpectedRemaining = usePriorSeason
+    ? (priorSeason.averagePerGame / 4) * remainingFraction
+    : null
+  const fallbackExpectedRemaining = usePriorSeason
+    ? null
+    : (getFallbackAveragePerGame(input.statType) / 4) * remainingFraction
+  const expectedRemaining = historicalExpectedRemaining
+    ? historicalExpectedRemaining * 0.65 + liveExpectedRemaining * 0.35
+    : (fallbackExpectedRemaining ?? 0) * 0.75 + liveExpectedRemaining * 0.25
+  if (expectedRemaining < getMinimumExpectedRemaining(input.statType)) {
+    return null
+  }
+
+  const projectedPeriodTotal = input.currentValue + expectedRemaining
+  const targetBasis = input.currentValue + expectedRemaining * 0.8
+  return {
+    target: roundPeriodPlayerTarget(
+      input.statType,
+      input.currentValue,
+      targetBasis
+    ),
+    projectedPeriodTotal,
+    priorSeasonYear: priorSeason?.seasonYear ?? null,
+    priorSeasonGames: priorSeason?.games ?? null,
+    priorSeasonAveragePerGame: priorSeason?.averagePerGame ?? null,
+    historicalExpectedRemaining,
+    fallbackExpectedRemaining,
+    liveExpectedRemaining,
+    projectionSource: usePriorSeason
+      ? 'PRIOR_SEASON_LIVE_BLEND'
+      : 'POSITION_BASELINE_LIVE_BLEND',
+  }
 }
 
 export const getNflPlayWallclockMs = (play: EspnNflPlay): number | null => {
@@ -563,11 +716,12 @@ const buildPeriodPlayerCandidate = (
   input: BuildCandidateInput
 ): NflQuestionCandidate | null => {
   const period = input.anchorPlay.period
+  const clockRemainingMs = parseClockMs(input.anchorPlay.clock)
   if (
     period === null ||
     period < 1 ||
     period > 4 ||
-    parseClockMs(input.anchorPlay.clock) < 4 * 60_000
+    clockRemainingMs < 4 * 60_000
   ) {
     return null
   }
@@ -591,14 +745,20 @@ const buildPeriodPlayerCandidate = (
   const receiverStats = receiverToken
     ? periodStats.players.get(normalizeTarget(receiverToken))
     : null
-  if (
+  const receiverProjection =
     receiverToken &&
     receiver?.roles.includes('RECEIVER') &&
     receiverStats &&
     receiverStats.receivingTargets >= 2 &&
-    receiverStats.receptions > 0 &&
-    receiverStats.receptions < 3
-  ) {
+    receiverStats.receptions > 0
+      ? projectNflPeriodPlayerThreshold({
+          statType: 'RECEPTIONS',
+          currentValue: receiverStats.receptions,
+          clockRemainingMs,
+          athlete: receiver,
+        })
+      : null
+  if (receiverToken && receiver && receiverStats && receiverProjection) {
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -610,7 +770,7 @@ const buildPeriodPlayerCandidate = (
       periodQuestionKey,
       payload: buildPayload(input, {
         templateId: 'NFL_PERIOD_PLAYER_RECEPTIONS',
-        question: `Will ${receiver.displayName} have at least 3 catches in the ${periodLabel}?`,
+        question: `Will ${receiver.displayName} have at least ${receiverProjection.target} catches in the ${periodLabel}?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
@@ -620,7 +780,20 @@ const buildPeriodPlayerCandidate = (
           playerToken: receiverToken,
           playerDisplayName: receiver.displayName,
           statType: 'RECEPTIONS',
-          target: 3,
+          target: receiverProjection.target,
+          currentValueAtAsk: receiverStats.receptions,
+          clockRemainingMs,
+          projectedPeriodTotal: receiverProjection.projectedPeriodTotal,
+          priorSeasonYear: receiverProjection.priorSeasonYear,
+          priorSeasonGames: receiverProjection.priorSeasonGames,
+          priorSeasonAveragePerGame:
+            receiverProjection.priorSeasonAveragePerGame,
+          historicalExpectedRemaining:
+            receiverProjection.historicalExpectedRemaining,
+          fallbackExpectedRemaining:
+            receiverProjection.fallbackExpectedRemaining,
+          liveExpectedRemaining: receiverProjection.liveExpectedRemaining,
+          projectionSource: receiverProjection.projectionSource,
           homeTricode: input.homeTeam,
           awayTricode: input.awayTeam,
         },
@@ -636,14 +809,20 @@ const buildPeriodPlayerCandidate = (
   const rusherStats = rusherToken
     ? periodStats.players.get(normalizeTarget(rusherToken))
     : null
-  if (
+  const rusherProjection =
     rusherToken &&
     rusher?.roles.includes('RUSHER') &&
     rusherStats &&
     rusherStats.rushingAttempts >= 2 &&
-    rusherStats.rushingYards >= 5 &&
-    rusherStats.rushingYards < 25
-  ) {
+    rusherStats.rushingYards >= 5
+      ? projectNflPeriodPlayerThreshold({
+          statType: 'RUSHING_YARDS',
+          currentValue: rusherStats.rushingYards,
+          clockRemainingMs,
+          athlete: rusher,
+        })
+      : null
+  if (rusherToken && rusher && rusherStats && rusherProjection) {
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -655,7 +834,7 @@ const buildPeriodPlayerCandidate = (
       periodQuestionKey,
       payload: buildPayload(input, {
         templateId: 'NFL_PERIOD_PLAYER_RUSHING_YARDS',
-        question: `Will ${rusher.displayName} rush for at least 25 yards in the ${periodLabel}?`,
+        question: `Will ${rusher.displayName} rush for at least ${rusherProjection.target} yards in the ${periodLabel}?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
@@ -665,7 +844,18 @@ const buildPeriodPlayerCandidate = (
           playerToken: rusherToken,
           playerDisplayName: rusher.displayName,
           statType: 'RUSHING_YARDS',
-          target: 25,
+          target: rusherProjection.target,
+          currentValueAtAsk: rusherStats.rushingYards,
+          clockRemainingMs,
+          projectedPeriodTotal: rusherProjection.projectedPeriodTotal,
+          priorSeasonYear: rusherProjection.priorSeasonYear,
+          priorSeasonGames: rusherProjection.priorSeasonGames,
+          priorSeasonAveragePerGame: rusherProjection.priorSeasonAveragePerGame,
+          historicalExpectedRemaining:
+            rusherProjection.historicalExpectedRemaining,
+          fallbackExpectedRemaining: rusherProjection.fallbackExpectedRemaining,
+          liveExpectedRemaining: rusherProjection.liveExpectedRemaining,
+          projectionSource: rusherProjection.projectionSource,
           homeTricode: input.homeTeam,
           awayTricode: input.awayTeam,
         },
@@ -681,14 +871,20 @@ const buildPeriodPlayerCandidate = (
   const passerStats = passerToken
     ? periodStats.players.get(normalizeTarget(passerToken))
     : null
-  if (
+  const passerProjection =
     passerToken &&
     passer?.roles.includes('PASSER') &&
     passerStats &&
     passerStats.passingAttempts >= 3 &&
-    passerStats.passingYards >= 10 &&
-    passerStats.passingYards < 75
-  ) {
+    passerStats.passingYards >= 10
+      ? projectNflPeriodPlayerThreshold({
+          statType: 'PASSING_YARDS',
+          currentValue: passerStats.passingYards,
+          clockRemainingMs,
+          athlete: passer,
+        })
+      : null
+  if (passerToken && passer && passerStats && passerProjection) {
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -700,7 +896,7 @@ const buildPeriodPlayerCandidate = (
       periodQuestionKey,
       payload: buildPayload(input, {
         templateId: 'NFL_PERIOD_PLAYER_PASSING_YARDS',
-        question: `Will ${passer.displayName} throw for at least 75 yards in the ${periodLabel}?`,
+        question: `Will ${passer.displayName} throw for at least ${passerProjection.target} yards in the ${periodLabel}?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
@@ -710,7 +906,18 @@ const buildPeriodPlayerCandidate = (
           playerToken: passerToken,
           playerDisplayName: passer.displayName,
           statType: 'PASSING_YARDS',
-          target: 75,
+          target: passerProjection.target,
+          currentValueAtAsk: passerStats.passingYards,
+          clockRemainingMs,
+          projectedPeriodTotal: passerProjection.projectedPeriodTotal,
+          priorSeasonYear: passerProjection.priorSeasonYear,
+          priorSeasonGames: passerProjection.priorSeasonGames,
+          priorSeasonAveragePerGame: passerProjection.priorSeasonAveragePerGame,
+          historicalExpectedRemaining:
+            passerProjection.historicalExpectedRemaining,
+          fallbackExpectedRemaining: passerProjection.fallbackExpectedRemaining,
+          liveExpectedRemaining: passerProjection.liveExpectedRemaining,
+          projectionSource: passerProjection.projectionSource,
           homeTricode: input.homeTeam,
           awayTricode: input.awayTeam,
         },
@@ -1009,7 +1216,7 @@ const buildNextCompletionReceiverCandidate = (
     return null
   }
 
-  const receivers = getReceiverUsage(input).slice(0, 4)
+  const receivers = getReceiverUsage(input).slice(0, 3)
   if (receivers.length < 3) return null
   const choices = [
     ...receivers.map(({ athlete }) => ({
@@ -1017,6 +1224,7 @@ const buildNextCompletionReceiverCandidate = (
       value: athlete.displayName,
     })),
     { id: 'other', value: 'Someone else' },
+    { id: 'no_completion', value: 'No completed pass' },
   ]
   const receiverChoiceByTarget = Object.fromEntries(
     receivers.map(({ athlete, targetKey }) => [targetKey, athlete.id])
@@ -1034,7 +1242,7 @@ const buildNextCompletionReceiverCandidate = (
     payload: buildPayload(input, {
       templateId: 'NFL_NEXT_COMPLETION_RECEIVER',
       question: `Who will catch ${teamCode}'s next completed pass on this drive?`,
-      windowType: 'NFL_NEXT_TARGET',
+      windowType: 'NFL_DRIVE',
       resolutionWindowMs: 5 * 60_000,
       resolutionContext: {
         ...buildBaseContext(input, 'NFL_NEXT_COMPLETION_RECEIVER'),
@@ -1177,7 +1385,7 @@ const buildReceiverTargetCandidate = (
     input.athletes
   )
   const resolutionContext = {
-    ...buildBaseContext(input, 'NFL_NEXT_TARGET'),
+    ...buildBaseContext(input, 'NFL_RECEIVER_ANOTHER_CATCH_DRIVE'),
     targetToken: target.token,
     targetDisplayName,
     targetLastSeenAtMs: target.wallclockMs,
@@ -1193,12 +1401,12 @@ const buildReceiverTargetCandidate = (
     gameQuestionKey: null,
     periodQuestionKey: null,
     payload: buildPayload(input, {
-      templateId: 'NFL_RECEIVER_NEXT_TARGET_CAUGHT',
-      question: `On ${teamCode}'s current drive, will ${targetDisplayName} catch his next target?`,
-      windowType: 'NFL_NEXT_TARGET',
+      templateId: 'NFL_RECEIVER_ANOTHER_CATCH_DRIVE',
+      question: `Will ${targetDisplayName} catch another pass on ${teamCode}'s current drive?`,
+      windowType: 'NFL_DRIVE',
       resolutionWindowMs: 5 * 60_000,
       resolutionContext,
-      trigger: 'nfl:receiver_target_quiet_window',
+      trigger: 'nfl:receiver_drive_catch_quiet_window',
     }),
   }
 }
@@ -1601,9 +1809,9 @@ export const resolveNflQuestionForPlay = (
       const target = extractNflPassTarget(completion)
       if (!target) {
         return {
-          state: 'cancelled',
-          answer: null,
-          reason: 'UNRESOLVED_PASS_TARGET',
+          state: 'resolved',
+          answer: 'other',
+          reason: null,
         }
       }
       const choiceByTarget = asContextStringRecord(
@@ -1618,17 +1826,43 @@ export const resolveNflQuestionForPlay = (
     }
     if (!sameDrive) {
       return {
-        state: 'cancelled',
-        answer: null,
-        reason: 'NO_COMPLETED_PASS',
+        state: 'resolved',
+        answer: 'no_completion',
+        reason: null,
       }
     }
     if (gameCompleted) {
       return {
-        state: 'cancelled',
-        answer: null,
-        reason: 'NO_COMPLETED_PASS',
+        state: 'resolved',
+        answer: 'no_completion',
+        reason: null,
       }
+    }
+    return null
+  }
+
+  if (contextType === 'NFL_RECEIVER_ANOTHER_CATCH_DRIVE') {
+    const expectedTarget = asContextString(context, 'targetToken')
+    const anchorIndex = playsThroughCurrent.findIndex(
+      (candidate) => candidate.id === anchorPlayId
+    )
+    const catchPlay =
+      expectedTarget && anchorIndex >= 0
+        ? playsThroughCurrent.slice(anchorIndex + 1).find((candidate) => {
+            const actualTarget = extractNflPassTarget(candidate)
+            return (
+              actualTarget !== null &&
+              normalizeTarget(expectedTarget) ===
+                normalizeTarget(actualTarget) &&
+              PASS_COMPLETION_PATTERN.test(candidate.type)
+            )
+          })
+        : null
+    if (catchPlay && (catchPlay.id !== play.id || gameCompleted)) {
+      return { state: 'resolved', answer: 'yes', reason: null }
+    }
+    if (!sameDrive || gameCompleted) {
+      return { state: 'resolved', answer: 'no', reason: null }
     }
     return null
   }

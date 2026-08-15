@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
-import type { EspnNflAthleteName, EspnNflPlay } from '../src/lib/nfl'
+import {
+  parseEspnNflPlayerPriorSeasonProfile,
+  type EspnNflAthleteName,
+  type EspnNflPlay,
+} from '../src/lib/nfl'
 import { buildQuestionChoices } from '../src/lib/engine'
 import {
   buildNflQuestionCandidate,
   getNflPeriodStats,
   NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS,
   NFL_QUESTION_MAX_SOURCE_AGE_MS,
+  projectNflPeriodPlayerThreshold,
   resolveNflQuestionForPlay,
   type NflActiveQuestion,
 } from '../src/lib/nflQuestionEngine'
@@ -67,6 +72,18 @@ const athletes: EspnNflAthleteName[] = [
     receptions: 2,
     receivingYards: 20,
     receivingTargets: 3,
+    priorSeasonProfile: {
+      seasonYear: 2025,
+      passingGames: 0,
+      passingAttemptsPerGame: 0,
+      passingYardsPerGame: 0,
+      rushingGames: 0,
+      rushingAttemptsPerGame: 0,
+      rushingYardsPerGame: 0,
+      receivingGames: 17,
+      receptionsPerGame: 4.2,
+      receivingTargetsPerGame: 6.5,
+    },
   },
   {
     id: 'athlete_2',
@@ -82,6 +99,7 @@ const athletes: EspnNflAthleteName[] = [
     receptions: 2,
     receivingYards: 24,
     receivingTargets: 3,
+    priorSeasonProfile: null,
   },
   {
     id: 'athlete_3',
@@ -97,6 +115,7 @@ const athletes: EspnNflAthleteName[] = [
     receptions: 1,
     receivingYards: 12,
     receivingTargets: 2,
+    priorSeasonProfile: null,
   },
 ]
 
@@ -114,6 +133,7 @@ const recentReceiver: EspnNflAthleteName = {
   receptions: 1,
   receivingYards: 9,
   receivingTargets: 1,
+  priorSeasonProfile: null,
 }
 
 const buildCandidate = (
@@ -246,12 +266,16 @@ const receiverCandidate = buildCandidate(
   BASE_TIME_MS + 132_000
 )
 assert.equal(receiverCandidate?.priority, 'RECEIVER_TARGET')
-assert.match(receiverCandidate?.payload.question ?? '', /Kyle Pitts Sr\./)
+assert.equal(
+  receiverCandidate?.payload.question,
+  "Will Kyle Pitts Sr. catch another pass on ATL's current drive?"
+)
+assert.equal(receiverCandidate?.payload.windowType, 'NFL_DRIVE')
 
 const receiverQuestion: NflActiveQuestion = {
   id: 'question_receiver',
   templateId: receiverCandidate?.payload.templateId ?? '',
-  windowType: 'NFL_NEXT_TARGET',
+  windowType: 'NFL_DRIVE',
   createdAtMs: BASE_TIME_MS + 131_000,
   resolutionContext: receiverCandidate?.payload.resolutionContext ?? {},
 }
@@ -277,6 +301,19 @@ assert.deepEqual(
     receiverCatchConfirmation,
   ]),
   { state: 'resolved', answer: 'yes', reason: null }
+)
+const receiverDriveEnd = buildPlay('receiver_drive_end', 180_000, {
+  driveId: 'drive_2',
+  driveTeamId: '2',
+  driveTeamAbbreviation: 'TB',
+  possessionTeamId: '2',
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(receiverQuestion, receiverDriveEnd, [
+    receiverAnchor,
+    receiverDriveEnd,
+  ]),
+  { state: 'resolved', answer: 'no', reason: null }
 )
 
 const fourthDownPlay = buildPlay('fourth_down', 0, {
@@ -607,6 +644,7 @@ assert.deepEqual(multiReceiverCandidate?.payload.resolutionContext?.choices, [
   { id: 'athlete_3', value: 'Darnell Mooney' },
   { id: 'athlete_1', value: 'Kyle Pitts Sr.' },
   { id: 'other', value: 'Someone else' },
+  { id: 'no_completion', value: 'No completed pass' },
 ])
 
 const staleLondonTargets = [0, 10_000, 20_000, 30_000].map((offset, index) =>
@@ -722,7 +760,7 @@ assert.equal(
 const multiReceiverQuestion: NflActiveQuestion = {
   id: 'question_multi_receiver',
   templateId: multiReceiverCandidate?.payload.templateId ?? '',
-  windowType: 'NFL_NEXT_TARGET',
+  windowType: 'NFL_DRIVE',
   createdAtMs: BASE_TIME_MS + 130_000,
   resolutionContext: multiReceiverCandidate?.payload.resolutionContext ?? {},
 }
@@ -753,6 +791,19 @@ assert.deepEqual(
     multiReceiverConfirmation,
   ]),
   { state: 'resolved', answer: 'athlete_3', reason: null }
+)
+const nextDrivePlay = buildPlay('next_drive_play', 190_000, {
+  driveId: 'drive_2',
+  driveTeamId: '2',
+  driveTeamAbbreviation: 'TB',
+  possessionTeamId: '2',
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(multiReceiverQuestion, nextDrivePlay, [
+    ...multiReceiverPlays,
+    nextDrivePlay,
+  ]),
+  { state: 'resolved', answer: 'no_completion', reason: null }
 )
 
 const gameStartPlay = buildPlay('game_start', 0, {
@@ -931,5 +982,138 @@ assert.deepEqual(
   ]),
   { state: 'resolved', answer: 'yes', reason: null }
 )
+
+const parsedPriorSeasonProfile = parseEspnNflPlayerPriorSeasonProfile(
+  {
+    categories: [
+      {
+        name: 'passing',
+        names: ['gamesPlayed', 'passingAttempts', 'passingYards'],
+        statistics: [
+          {
+            teamId: '5',
+            season: { year: 2025 },
+            stats: ['4', '160', '815'],
+          },
+          {
+            teamId: '4',
+            season: { year: 2025 },
+            stats: ['9', '256', '1,664'],
+          },
+          {
+            teamId: null,
+            teamSlug: '2025 Totals',
+            season: { year: 2025 },
+            stats: ['13', '416', '2,479'],
+          },
+        ],
+      },
+      {
+        name: 'rushing',
+        names: ['gamesPlayed', 'rushingAttempts', 'rushingYards'],
+        statistics: [
+          {
+            season: { year: 2025 },
+            stats: ['16', '58', '307'],
+          },
+        ],
+      },
+      {
+        name: 'receiving',
+        names: ['gamesPlayed', 'receptions', 'receivingTargets'],
+        statistics: [],
+      },
+    ],
+  },
+  2025
+)
+assert.equal(parsedPriorSeasonProfile?.passingGames, 13)
+assert.equal(parsedPriorSeasonProfile?.passingYardsPerGame, 2479 / 13)
+assert.equal(parsedPriorSeasonProfile?.rushingYardsPerGame, 19.1875)
+
+const passerWithHistory: EspnNflAthleteName = {
+  id: 'passer_with_history',
+  teamId: '1',
+  firstName: 'Test',
+  lastName: 'Passer',
+  displayName: 'Test Passer',
+  roles: ['PASSER'],
+  passingAttempts: 5,
+  passingYards: 20,
+  rushingAttempts: 0,
+  rushingYards: 0,
+  receptions: 0,
+  receivingYards: 0,
+  receivingTargets: 0,
+  priorSeasonProfile: {
+    seasonYear: 2025,
+    passingGames: 16,
+    passingAttemptsPerGame: 34,
+    passingYardsPerGame: 250,
+    rushingGames: 0,
+    rushingAttemptsPerGame: 0,
+    rushingYardsPerGame: 0,
+    receivingGames: 0,
+    receptionsPerGame: 0,
+    receivingTargetsPerGame: 0,
+  },
+}
+const tenMinutesRemainingProjection = projectNflPeriodPlayerThreshold({
+  statType: 'PASSING_YARDS',
+  currentValue: 20,
+  clockRemainingMs: 10 * 60_000,
+  athlete: passerWithHistory,
+})
+const fiveMinutesRemainingProjection = projectNflPeriodPlayerThreshold({
+  statType: 'PASSING_YARDS',
+  currentValue: 20,
+  clockRemainingMs: 5 * 60_000,
+  athlete: passerWithHistory,
+})
+assert.equal(tenMinutesRemainingProjection?.target, 50)
+assert.equal(fiveMinutesRemainingProjection?.target, 30)
+assert.equal(
+  tenMinutesRemainingProjection?.projectionSource,
+  'PRIOR_SEASON_LIVE_BLEND'
+)
+const rookiePasserProjection = projectNflPeriodPlayerThreshold({
+  statType: 'PASSING_YARDS',
+  currentValue: 50,
+  clockRemainingMs: 13 * 60_000,
+  athlete: {
+    ...passerWithHistory,
+    id: 'rookie_passer',
+    priorSeasonProfile: null,
+  },
+})
+assert.equal(rookiePasserProjection?.target, 90)
+assert.equal(
+  rookiePasserProjection?.projectionSource,
+  'POSITION_BASELINE_LIVE_BLEND'
+)
+
+const nearRushingIncrementProjection = projectNflPeriodPlayerThreshold({
+  statType: 'RUSHING_YARDS',
+  currentValue: 8,
+  clockRemainingMs: 9 * 60_000 + 51_000,
+  athlete: {
+    ...passerWithHistory,
+    id: 'rusher_near_increment',
+    roles: ['RUSHER'],
+    priorSeasonProfile: {
+      seasonYear: 2025,
+      passingGames: 0,
+      passingAttemptsPerGame: 0,
+      passingYardsPerGame: 0,
+      rushingGames: 17,
+      rushingAttemptsPerGame: 7.4,
+      rushingYardsPerGame: 31.76,
+      receivingGames: 17,
+      receptionsPerGame: 1.2,
+      receivingTargetsPerGame: 1.6,
+    },
+  },
+})
+assert.equal(nearRushingIncrementProjection?.target, 15)
 
 console.log('[test-nfl-questions] passed')

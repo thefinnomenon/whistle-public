@@ -14,7 +14,6 @@ import { trackEvent } from './mixpanel'
 import {
   buildNflQuestionCandidateDecision,
   buildNflPregameGameWinnerPayload,
-  extractNflPassTarget,
   getNflPlayWallclockMs,
   NFL_MAX_QUESTIONS_PER_GAME,
   NFL_QUESTION_MIN_INTERVAL_MS,
@@ -32,7 +31,12 @@ const ESPN_NFL_SCOREBOARD_URL =
   'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
 const ESPN_NFL_SUMMARY_URL =
   'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary'
+const ESPN_NFL_PLAYER_STATS_URL =
+  'https://site.web.api.espn.com/apis/common/v3/sports/football/nfl/athletes'
+const ESPN_NFL_TEAM_ROSTER_URL =
+  'https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams'
 const ESPN_NFL_TIMEOUT_MS = 15_000
+const NFL_PLAYER_PROFILE_COLLECTION = 'nflPlayerProfiles'
 const NFL_OPEN_GAMES_REFRESH_MS = 60_000
 const NFL_OPEN_GAMES_WATCH_RESTART_MS = 30_000
 const NFL_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS = 5_000
@@ -84,6 +88,16 @@ type JsonValue =
 
 type JsonObject = { [key: string]: JsonValue }
 
+class EspnNflRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    url: string
+  ) {
+    super(`ESPN NFL request failed status=${statusCode} url=${url}`)
+    this.name = 'EspnNflRequestError'
+  }
+}
+
 type NflFieldPosition = {
   down: number | null
   distance: number | null
@@ -123,6 +137,19 @@ export type EspnNflPlay = {
 
 export type NflPlayerRole = 'PASSER' | 'RUSHER' | 'RECEIVER'
 
+export type NflPlayerPriorSeasonProfile = {
+  seasonYear: number
+  passingGames: number
+  passingAttemptsPerGame: number
+  passingYardsPerGame: number
+  rushingGames: number
+  rushingAttemptsPerGame: number
+  rushingYardsPerGame: number
+  receivingGames: number
+  receptionsPerGame: number
+  receivingTargetsPerGame: number
+}
+
 export type EspnNflAthleteName = {
   id: string
   teamId: string
@@ -137,10 +164,12 @@ export type EspnNflAthleteName = {
   receptions: number
   receivingYards: number
   receivingTargets: number
+  priorSeasonProfile: NflPlayerPriorSeasonProfile | null
 }
 
 export type EspnNflSummary = {
   competitionId: string | null
+  seasonYear: number | null
   statusName: string
   statusState: string | null
   statusText: string
@@ -151,6 +180,13 @@ export type EspnNflSummary = {
   awayTeam: string
   plays: EspnNflPlay[]
   athletes: EspnNflAthleteName[]
+}
+
+export type EspnNflRosterPlayer = {
+  id: string
+  displayName: string
+  teamCode: string
+  position: 'QB' | 'RB' | 'FB' | 'WR' | 'TE'
 }
 
 export type EspnNflScheduledGame = {
@@ -200,6 +236,9 @@ type StoredNflQuestion = {
   nflDedupe?: NflQuestionDedupe
 }
 
+const nflPlayerProfileById = new Map<string, NflPlayerPriorSeasonProfile>()
+let nflPlayerProfilesLoad: Promise<void> | null = null
+
 export type NflLiveSyncStats = {
   openGames: number
   updatedGames: number
@@ -223,6 +262,15 @@ const asNumber = (value: JsonValue | undefined | null): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value !== 'string' || value.trim().length === 0) return null
   const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const asStatNumber = (value: JsonValue | undefined | null): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return null
+  const normalized = value.replace(/,/g, '').trim()
+  if (!normalized || normalized === '-') return null
+  const parsed = Number(normalized)
   return Number.isFinite(parsed) ? parsed : null
 }
 
@@ -258,11 +306,7 @@ const fetchEspnJson = (url: string): Promise<JsonObject> =>
         response.on('end', () => {
           const statusCode = response.statusCode ?? 0
           if (statusCode < 200 || statusCode >= 300) {
-            reject(
-              new Error(
-                `ESPN NFL request failed status=${statusCode} url=${url}`
-              )
-            )
+            reject(new EspnNflRequestError(statusCode, url))
             return
           }
 
@@ -520,6 +564,7 @@ const extractSummaryAthletes = (root: JsonObject): EspnNflAthleteName[] => {
           receptions: 0,
           receivingYards: 0,
           receivingTargets: 0,
+          priorSeasonProfile: null,
         }
         const stats = asArray(row?.stats)
         const readStat = (key: string): number => {
@@ -557,6 +602,7 @@ const extractSummaryAthletes = (root: JsonObject): EspnNflAthleteName[] => {
 
 export const parseEspnNflSummary = (root: JsonObject): EspnNflSummary => {
   const header = asObject(root.header)
+  const season = asObject(header?.season)
   const competition = asObject(asArray(header?.competitions)[0])
   const status = extractStatus(competition)
   const home = competition ? extractCompetitor(competition, 'home') : null
@@ -564,6 +610,7 @@ export const parseEspnNflSummary = (root: JsonObject): EspnNflSummary => {
 
   return {
     competitionId: asString(competition?.id),
+    seasonYear: asNumber(season?.year),
     statusName: status.name,
     statusState: status.state,
     statusText: status.text,
@@ -593,6 +640,321 @@ const buildSummaryUrl = (eventId: string): string => {
   return url.toString()
 }
 
+const buildNflPlayerStatsUrl = (athleteId: string): string => {
+  const url = new URL(`${ESPN_NFL_PLAYER_STATS_URL}/${athleteId}/stats`)
+  url.searchParams.set('region', 'us')
+  url.searchParams.set('lang', 'en')
+  url.searchParams.set('contentorigin', 'espn')
+  url.searchParams.set('seasontype', '2')
+  return url.toString()
+}
+
+const buildNflTeamRosterUrl = (teamCode: string): string =>
+  `${ESPN_NFL_TEAM_ROSTER_URL}/${teamCode === 'WAS' ? 'wsh' : teamCode.toLowerCase()}/roster`
+
+type NflSeasonCategoryTotals = {
+  games: number
+  primaryTotal: number
+  usageTotal: number
+}
+
+type NflSeasonCategoryRow = NflSeasonCategoryTotals & {
+  isSeasonTotal: boolean
+}
+
+const extractNflSeasonCategoryTotals = (
+  root: JsonObject,
+  categoryName: 'passing' | 'rushing' | 'receiving',
+  seasonYear: number,
+  primaryStatName: 'passingYards' | 'rushingYards' | 'receptions',
+  usageStatName: 'passingAttempts' | 'rushingAttempts' | 'receivingTargets'
+): NflSeasonCategoryTotals | null => {
+  const category = asArray(root.categories)
+    .map(asObject)
+    .find((candidate) => asString(candidate?.name) === categoryName)
+  if (!category) return null
+
+  const statNames = asArray(category.names).map(asString)
+  const gamesIndex = statNames.findIndex((name) => name === 'gamesPlayed')
+  const primaryIndex = statNames.findIndex((name) => name === primaryStatName)
+  const usageIndex = statNames.findIndex((name) => name === usageStatName)
+  if (gamesIndex < 0 || primaryIndex < 0 || usageIndex < 0) return null
+
+  const rows: NflSeasonCategoryRow[] = []
+  for (const statisticValue of asArray(category.statistics)) {
+    const statistic = asObject(statisticValue)
+    const season = asObject(statistic?.season)
+    if (asNumber(season?.year) !== seasonYear) continue
+    const stats = asArray(statistic?.stats)
+    const rowGames = asStatNumber(stats[gamesIndex])
+    const rowPrimaryTotal = asStatNumber(stats[primaryIndex])
+    const rowUsageTotal = asStatNumber(stats[usageIndex])
+    if (
+      rowGames === null ||
+      rowGames <= 0 ||
+      rowPrimaryTotal === null ||
+      rowUsageTotal === null
+    ) {
+      continue
+    }
+    rows.push({
+      games: rowGames,
+      primaryTotal: rowPrimaryTotal,
+      usageTotal: rowUsageTotal,
+      isSeasonTotal:
+        asString(statistic?.teamId) === null &&
+        /totals/i.test(asString(statistic?.teamSlug) ?? ''),
+    })
+  }
+
+  const seasonTotal = rows.find((row) => row.isSeasonTotal)
+  if (seasonTotal) {
+    return {
+      games: seasonTotal.games,
+      primaryTotal: seasonTotal.primaryTotal,
+      usageTotal: seasonTotal.usageTotal,
+    }
+  }
+  if (rows.length === 0) return null
+  return rows.reduce<NflSeasonCategoryTotals>(
+    (total, row) => ({
+      games: total.games + row.games,
+      primaryTotal: total.primaryTotal + row.primaryTotal,
+      usageTotal: total.usageTotal + row.usageTotal,
+    }),
+    { games: 0, primaryTotal: 0, usageTotal: 0 }
+  )
+}
+
+export const parseEspnNflPlayerPriorSeasonProfile = (
+  root: JsonObject,
+  seasonYear: number
+): NflPlayerPriorSeasonProfile | null => {
+  const passing = extractNflSeasonCategoryTotals(
+    root,
+    'passing',
+    seasonYear,
+    'passingYards',
+    'passingAttempts'
+  )
+  const rushing = extractNflSeasonCategoryTotals(
+    root,
+    'rushing',
+    seasonYear,
+    'rushingYards',
+    'rushingAttempts'
+  )
+  const receiving = extractNflSeasonCategoryTotals(
+    root,
+    'receiving',
+    seasonYear,
+    'receptions',
+    'receivingTargets'
+  )
+  if (!passing && !rushing && !receiving) return null
+
+  return {
+    seasonYear,
+    passingGames: passing?.games ?? 0,
+    passingAttemptsPerGame: passing ? passing.usageTotal / passing.games : 0,
+    passingYardsPerGame: passing ? passing.primaryTotal / passing.games : 0,
+    rushingGames: rushing?.games ?? 0,
+    rushingAttemptsPerGame: rushing ? rushing.usageTotal / rushing.games : 0,
+    rushingYardsPerGame: rushing ? rushing.primaryTotal / rushing.games : 0,
+    receivingGames: receiving?.games ?? 0,
+    receptionsPerGame: receiving ? receiving.primaryTotal / receiving.games : 0,
+    receivingTargetsPerGame: receiving
+      ? receiving.usageTotal / receiving.games
+      : 0,
+  }
+}
+
+export const fetchEspnNflPlayerPriorSeasonProfile = async (
+  athleteId: string,
+  seasonYear: number
+): Promise<NflPlayerPriorSeasonProfile | null> => {
+  try {
+    return parseEspnNflPlayerPriorSeasonProfile(
+      await fetchEspnJson(buildNflPlayerStatsUrl(athleteId)),
+      seasonYear
+    )
+  } catch (error) {
+    if (error instanceof EspnNflRequestError && error.statusCode === 404) {
+      return null
+    }
+    throw error
+  }
+}
+
+const isNflProfilePosition = (
+  value: string
+): value is EspnNflRosterPlayer['position'] =>
+  value === 'QB' ||
+  value === 'RB' ||
+  value === 'FB' ||
+  value === 'WR' ||
+  value === 'TE'
+
+const parseEspnNflRoster = (
+  root: JsonObject,
+  teamCode: string
+): EspnNflRosterPlayer[] => {
+  const playersById = new Map<string, EspnNflRosterPlayer>()
+  for (const groupValue of asArray(root.athletes)) {
+    const group = asObject(groupValue)
+    for (const playerValue of asArray(group?.items)) {
+      const player = asObject(playerValue)
+      const position = asObject(player?.position)
+      const id = asString(player?.id)
+      const displayName = asString(player?.displayName)
+      const positionCode = asString(position?.abbreviation)
+      if (
+        !id ||
+        !displayName ||
+        !positionCode ||
+        !isNflProfilePosition(positionCode)
+      ) {
+        continue
+      }
+      playersById.set(id, {
+        id,
+        displayName,
+        teamCode,
+        position: positionCode,
+      })
+    }
+  }
+  return [...playersById.values()]
+}
+
+export const fetchEspnNflRoster = async (
+  teamCode: string
+): Promise<EspnNflRosterPlayer[]> => {
+  const normalizedTeamCode = normalizeTeamCode(teamCode)
+  if (!NFL_TEAM_CODES.has(normalizedTeamCode)) {
+    throw new Error(`Invalid NFL team code: ${teamCode}`)
+  }
+  return parseEspnNflRoster(
+    await fetchEspnJson(buildNflTeamRosterUrl(normalizedTeamCode)),
+    normalizedTeamCode
+  )
+}
+
+export const getEspnNflTeamCodes = (): string[] =>
+  [...NFL_TEAM_CODES].sort((left, right) => left.localeCompare(right))
+
+const readStoredProfileNumber = (
+  data: FirebaseFirestore.DocumentData,
+  key: keyof NflPlayerPriorSeasonProfile
+): number | null => {
+  const value = data[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const parseStoredNflPlayerProfile = (
+  data: FirebaseFirestore.DocumentData
+): NflPlayerPriorSeasonProfile | null => {
+  if (data.hasPriorSeasonProfile !== true) return null
+  const seasonYear = readStoredProfileNumber(data, 'seasonYear')
+  const passingGames = readStoredProfileNumber(data, 'passingGames')
+  const passingAttemptsPerGame = readStoredProfileNumber(
+    data,
+    'passingAttemptsPerGame'
+  )
+  const passingYardsPerGame = readStoredProfileNumber(
+    data,
+    'passingYardsPerGame'
+  )
+  const rushingGames = readStoredProfileNumber(data, 'rushingGames')
+  const rushingAttemptsPerGame = readStoredProfileNumber(
+    data,
+    'rushingAttemptsPerGame'
+  )
+  const rushingYardsPerGame = readStoredProfileNumber(
+    data,
+    'rushingYardsPerGame'
+  )
+  const receivingGames = readStoredProfileNumber(data, 'receivingGames')
+  const receptionsPerGame = readStoredProfileNumber(data, 'receptionsPerGame')
+  const receivingTargetsPerGame = readStoredProfileNumber(
+    data,
+    'receivingTargetsPerGame'
+  )
+  if (
+    seasonYear === null ||
+    passingGames === null ||
+    passingAttemptsPerGame === null ||
+    passingYardsPerGame === null ||
+    rushingGames === null ||
+    rushingAttemptsPerGame === null ||
+    rushingYardsPerGame === null ||
+    receivingGames === null ||
+    receptionsPerGame === null ||
+    receivingTargetsPerGame === null
+  ) {
+    return null
+  }
+  return {
+    seasonYear,
+    passingGames,
+    passingAttemptsPerGame,
+    passingYardsPerGame,
+    rushingGames,
+    rushingAttemptsPerGame,
+    rushingYardsPerGame,
+    receivingGames,
+    receptionsPerGame,
+    receivingTargetsPerGame,
+  }
+}
+
+export const loadNflPlayerProfilesFromFirestore = (
+  force: boolean = false
+): Promise<void> => {
+  if (nflPlayerProfilesLoad && !force) return nflPlayerProfilesLoad
+  const startedAt = Date.now()
+  const load = db
+    .collection(NFL_PLAYER_PROFILE_COLLECTION)
+    .where('hasPriorSeasonProfile', '==', true)
+    .get()
+    .then((snapshot) => {
+      const nextProfiles = new Map<string, NflPlayerPriorSeasonProfile>()
+      for (const document of snapshot.docs) {
+        const profile = parseStoredNflPlayerProfile(document.data())
+        if (profile) nextProfiles.set(document.id, profile)
+      }
+      nflPlayerProfileById.clear()
+      for (const [athleteId, profile] of nextProfiles) {
+        nflPlayerProfileById.set(athleteId, profile)
+      }
+      console.log(
+        `[nfl-profile] cache loaded profiles=${nextProfiles.size} reads=${snapshot.size} durationMs=${Date.now() - startedAt}`
+      )
+    })
+    .catch((error: Error) => {
+      nflPlayerProfilesLoad = null
+      console.warn(`[nfl-profile] cache load failed message=${error.message}`)
+    })
+  nflPlayerProfilesLoad = load
+  return load
+}
+
+const enrichNflAthletesWithPriorSeasonProfiles = (
+  athletes: readonly EspnNflAthleteName[],
+  seasonYear: number | null
+): EspnNflAthleteName[] => {
+  if (seasonYear === null) return [...athletes]
+  const priorSeasonYear = seasonYear - 1
+  return athletes.map((athlete) => {
+    const profile = nflPlayerProfileById.get(athlete.id) ?? null
+    return {
+      ...athlete,
+      priorSeasonProfile:
+        profile?.seasonYear === priorSeasonYear ? profile : null,
+    }
+  })
+}
+
 export const fetchEspnNflScoreboard = async (
   date: Date
 ): Promise<EspnNflScheduledGame[]> =>
@@ -600,8 +962,20 @@ export const fetchEspnNflScoreboard = async (
 
 export const fetchEspnNflSummary = async (
   eventId: string
-): Promise<EspnNflSummary> =>
-  parseEspnNflSummary(await fetchEspnJson(buildSummaryUrl(eventId)))
+): Promise<EspnNflSummary> => {
+  const [summaryRoot] = await Promise.all([
+    fetchEspnJson(buildSummaryUrl(eventId)),
+    loadNflPlayerProfilesFromFirestore(),
+  ])
+  const summary = parseEspnNflSummary(summaryRoot)
+  return {
+    ...summary,
+    athletes: enrichNflAthletesWithPriorSeasonProfiles(
+      summary.athletes,
+      summary.seasonYear
+    ),
+  }
+}
 
 const isCancelledStatus = (statusName: string): boolean =>
   statusName === 'STATUS_CANCELED' || statusName === 'STATUS_POSTPONED'
@@ -832,7 +1206,8 @@ const deriveNflQuestionDedupe = (
     return driveId ? { timeoutQuestionDriveId: driveId } : {}
   }
   if (
-    templateId === 'NFL_RECEIVER_NEXT_TARGET_CAUGHT' &&
+    (templateId === 'NFL_RECEIVER_ANOTHER_CATCH_DRIVE' ||
+      templateId === 'NFL_RECEIVER_NEXT_TARGET_CAUGHT') &&
     driveId &&
     targetToken
   ) {
@@ -1229,37 +1604,6 @@ const resolveActiveNflQuestionsForPlay = async (
   return remaining
 }
 
-const cancelReceiverQuestionsForRedZone = async (
-  gameId: string,
-  activeQuestions: NflActiveQuestion[],
-  play: EspnNflPlay
-): Promise<NflActiveQuestion[]> => {
-  const remaining: NflActiveQuestion[] = []
-  for (const question of activeQuestions) {
-    if (question.resolutionContext.type !== 'NFL_NEXT_TARGET') {
-      remaining.push(question)
-      continue
-    }
-    const expectedTarget = question.resolutionContext.targetToken
-    const actualTarget = extractNflPassTarget(play)
-    if (
-      typeof expectedTarget === 'string' &&
-      actualTarget &&
-      expectedTarget.toLowerCase().replace(/[^a-z0-9]/g, '') ===
-        actualTarget.toLowerCase().replace(/[^a-z0-9]/g, '')
-    ) {
-      remaining.push(question)
-      continue
-    }
-    await persistNflQuestionDecision(gameId, question, play, {
-      state: 'cancelled',
-      answer: null,
-      reason: 'RED_ZONE_PRIORITY',
-    })
-  }
-  return remaining
-}
-
 const commitNflPlayWrites = async (
   writes: {
     ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>
@@ -1431,14 +1775,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
           `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidateDecision.priority ?? 'none'} reason=${candidateDecision.skipReason ?? 'unknown'} sourceAgeMs=${candidateDecision.sourceAgeMs ?? 'unknown'} sourceAgeLimitMs=${candidateDecision.maxSourceAgeMs ?? 'unknown'}`
         )
       }
-      if (candidate?.priority === 'RED_ZONE') {
-        activeQuestions = await cancelReceiverQuestionsForRedZone(
-          gameId,
-          activeQuestions,
-          latestCreatedPlay
-        )
-      }
-
       if (candidate && questionCount >= NFL_MAX_QUESTIONS_PER_GAME) {
         console.log(
           `[nfl] question skip game=${gameId} play=${latestCreatedPlay.id} candidate=${candidate.payload.templateId} reason=game_cap count=${questionCount} cap=${NFL_MAX_QUESTIONS_PER_GAME}`
