@@ -9,6 +9,7 @@ type FeaturedPoolProgressProps = {
   answersSubmitted?: number
   cashEligibility?: GamePlayer['cashEligibility']
   showEligibilityRules?: boolean
+  embedded?: boolean
 }
 
 export function FeaturedPoolProgress({
@@ -18,6 +19,7 @@ export function FeaturedPoolProgress({
   answersSubmitted,
   cashEligibility,
   showEligibilityRules = false,
+  embedded = false,
 }: FeaturedPoolProgressProps) {
   const pool = getFeaturedPoolProgress(playerCount, featuredPoolAmount)
   const eligibilityLabel = (() => {
@@ -36,9 +38,11 @@ export function FeaturedPoolProgress({
   return (
     <View
       className={
-        compact
-          ? 'rounded-xl border border-blue-400/40 bg-blue-500/10 px-3 py-2'
-          : 'rounded-2xl border border-blue-400/40 bg-blue-500/10 p-4'
+        embedded
+          ? ''
+          : compact
+            ? 'rounded-xl border border-blue-400/40 bg-blue-500/10 px-3 py-2'
+            : 'rounded-2xl border border-blue-400/40 bg-blue-500/10 p-4'
       }
     >
       <View className="flex-row items-center justify-between">

@@ -446,18 +446,31 @@ export default function GamesScreen() {
     )
 
     return (
-      <View className="bg-card border border-border rounded-2xl p-4 mb-4">
+      <View
+        className={cn(
+          'mb-4 rounded-2xl border p-4',
+          item.isFeatured
+            ? 'border-blue-400/40 bg-blue-500/10'
+            : 'border-border bg-card'
+        )}
+      >
         {item.isFeatured && (
           <View className="mb-3">
             <FeaturedPoolProgress
               playerCount={item.playerCount || 0}
               featuredPoolAmount={item.featuredPoolAmount}
               compact
+              embedded
             />
           </View>
         )}
         <View className="flex-row gap-2">
-          <View className="flex-1 flex-row items-center gap-4 bg-background/60 rounded-xl relative">
+          <View
+            className={cn(
+              'relative flex-1 flex-row items-center gap-4 rounded-xl',
+              item.isFeatured ? 'bg-transparent' : 'bg-background/60'
+            )}
+          >
             <View className="items-center">
               <ExpoImage
                 className="w-16 h-16"
@@ -482,7 +495,12 @@ export default function GamesScreen() {
               </Text>
             </View>
           </View>
-          <View className="h-28 w-36 justify-between bg-background/60 rounded-xl">
+          <View
+            className={cn(
+              'h-28 w-36 justify-between rounded-xl',
+              item.isFeatured ? 'bg-transparent' : 'bg-background/60'
+            )}
+          >
             <View className="items-end">
               <Text className="text-sm font-semibold text-foreground">
                 {kickoffTime || ''}
