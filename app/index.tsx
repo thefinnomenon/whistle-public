@@ -48,7 +48,7 @@ if (
 
 type DayOption = { label: string; date: Date; dayNum: number }
 
-const DISPLAY_WINDOW_MS = 5 * 60 * 60 * 1000
+const DISPLAY_WINDOW_MS = 24 * 60 * 60 * 1000
 
 const isVisibleNflGame = (game: Game) =>
   game.league === 'NFL' || game.sport === 'FOOTBALL'

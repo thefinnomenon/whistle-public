@@ -1802,6 +1802,47 @@ const normalizePredictionValue = (
   return str
 }
 
+type StoredQuestionMetric = {
+  avg?: number
+}
+
+type StoredQuestionStatistics = {
+  totalResponses?: number
+  correctCount?: number
+  incorrectCount?: number
+  responseRate?: number
+  delivery?: StoredQuestionMetric
+  open?: StoredQuestionMetric
+  respond?: StoredQuestionMetric
+}
+
+type StoredGameQuestion = {
+  state?: string
+  statistics?: StoredQuestionStatistics
+}
+
+type AggregateGameMetric = {
+  avg: number
+  p50: number
+  p95: number
+}
+
+type AggregateGameStatistics = {
+  totalQuestionsAsked: number
+  totalResolved: number
+  totalCancelled: number
+  totalResponses: number
+  avgResponsesPerQuestion: number
+  totalCorrect: number
+  totalIncorrect: number
+  accuracyRate: number
+  highestPlayerCount?: number
+  delivery?: AggregateGameMetric
+  open?: AggregateGameMetric
+  respond?: AggregateGameMetric
+  responseRateMetric?: AggregateGameMetric
+}
+
 const calculateGameStatistics = async (gameId: string) => {
   console.log('[games/end] calculating statistics', gameId)
   const questionsSnapshot = await admin
@@ -1809,19 +1850,20 @@ const calculateGameStatistics = async (gameId: string) => {
     .collection(`games/${gameId}/questions`)
     .get()
 
-  const questions = questionsSnapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }))
+  const questions = questionsSnapshot.docs.map(
+    (doc) => doc.data() as StoredGameQuestion
+  )
 
   if (questions.length === 0) {
     console.log('No questions found for game', gameId)
     return
   }
 
-  const resolvedQuestions = questions.filter((q: any) => q.state === 'resolved')
+  const resolvedQuestions = questions.filter(
+    (question) => question.state === 'resolved'
+  )
   const cancelledQuestions = questions.filter(
-    (q: any) => q.state === 'cancelled'
+    (question) => question.state === 'cancelled'
   )
 
   if (resolvedQuestions.length === 0) {
@@ -1840,8 +1882,8 @@ const calculateGameStatistics = async (gameId: string) => {
   const responseRates: number[] = []
   let highestPlayerCount: number | undefined
 
-  resolvedQuestions.forEach((q: any) => {
-    const stats = q.statistics || {}
+  resolvedQuestions.forEach((question) => {
+    const stats = question.statistics ?? {}
     totalResponses += stats.totalResponses || 0
     if (stats.correctCount !== undefined) totalCorrect += stats.correctCount
     if (stats.incorrectCount !== undefined)
@@ -1872,7 +1914,7 @@ const calculateGameStatistics = async (gameId: string) => {
   const accuracyRate =
     totalPredictions > 0 ? (totalCorrect / totalPredictions) * 100 : 0
 
-  const buildMetric = (arr: number[]) =>
+  const buildMetric = (arr: number[]): AggregateGameMetric | undefined =>
     arr.length
       ? {
           avg: arr.reduce((a, b) => a + b, 0) / arr.length,
@@ -1887,7 +1929,7 @@ const calculateGameStatistics = async (gameId: string) => {
         }
       : undefined
 
-  const gameStats: any = {
+  const gameStats: AggregateGameStatistics = {
     totalQuestionsAsked,
     totalResolved: resolvedQuestions.length,
     totalCancelled: cancelledQuestions.length,
@@ -1896,7 +1938,10 @@ const calculateGameStatistics = async (gameId: string) => {
     totalCorrect,
     totalIncorrect,
     accuracyRate: Math.round(accuracyRate * 100) / 100,
-    highestPlayerCount,
+  }
+
+  if (highestPlayerCount !== undefined) {
+    gameStats.highestPlayerCount = highestPlayerCount
   }
 
   const deliveryMetric = buildMetric(deliveryAvgs)
@@ -1925,7 +1970,7 @@ type PayoutGameDocument = {
   prizeAmountCents?: number
   prize?: number
   prizeType?: 'USD' | 'POINTS'
-  payoutStatus?: 'processing' | 'completed'
+  payoutStatus?: 'pending' | 'processing' | 'completed'
 }
 
 type PayoutMemberDocument = {
@@ -2956,7 +3001,17 @@ export const endGameById = async (gameId: string, userId?: string) => {
         gameRef,
         {
           state: 'resolved',
+          payoutStatus: game.payoutStatus ?? 'pending',
           endedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    } else if (!game.payoutStatus) {
+      transaction.set(
+        gameRef,
+        {
+          payoutStatus: 'pending',
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
@@ -3003,7 +3058,17 @@ export const endGameById = async (gameId: string, userId?: string) => {
     }
   }
 
-  await calculateGameStatistics(gameId)
+  try {
+    await calculateGameStatistics(gameId)
+  } catch (error) {
+    console.error(
+      `[game] statistics_failed game=${gameId} message=${String(error)}`
+    )
+    trackEvent('game_statistics_failed', {
+      gameId,
+      error: String(error),
+    })
+  }
   const winnerNotifications = await distributeWinnings(gameId)
   await notifyWinners(winnerNotifications, game)
   if (!alreadyResolved) {
@@ -3024,4 +3089,36 @@ export const endGameById = async (gameId: string, userId?: string) => {
   )
 
   return { status: 200, alreadyResolved }
+}
+
+export const retryPendingPayouts = async (): Promise<{
+  found: number
+  completed: number
+  failed: number
+}> => {
+  const pendingGamesSnap = await db
+    .collection('games')
+    .where('payoutStatus', 'in', ['pending', 'processing'])
+    .limit(10)
+    .get()
+  let completed = 0
+  let failed = 0
+
+  for (const gameDoc of pendingGamesSnap.docs) {
+    try {
+      await endGameById(gameDoc.id)
+      completed += 1
+    } catch (error) {
+      failed += 1
+      console.error(
+        `[payout-retry] game=${gameDoc.id} result=failed message=${String(error)}`
+      )
+    }
+  }
+
+  return {
+    found: pendingGamesSnap.size,
+    completed,
+    failed,
+  }
 }

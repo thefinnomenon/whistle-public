@@ -96,7 +96,7 @@ type Game = {
   >
   featuredPool50UnlockedAt?: FirestoreTimestamp
   featuredPool100UnlockedAt?: FirestoreTimestamp
-  payoutStatus?: 'processing' | 'completed'
+  payoutStatus?: 'pending' | 'processing' | 'completed'
   payoutPrizeType?: 'USD' | 'POINTS'
   payoutTotalUnits?: number
   payoutWinnerCount?: number

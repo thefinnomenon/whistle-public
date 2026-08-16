@@ -10,6 +10,7 @@ import analyticsRouter from './routes/analytics'
 import feedbackRouter from './routes/feedback'
 import gameRouter, {
   closeExpiredQuestions,
+  retryPendingPayouts,
   startScheduledGames,
   updatePlayerCountsForActiveGames,
 } from './routes/game'
@@ -179,6 +180,11 @@ const RUN_CLOSE_EXPIRED_QUESTIONS_WORKER = parseBooleanEnv(
   process.env.RUN_CLOSE_EXPIRED_QUESTIONS_WORKER,
   BACKGROUND_WORKERS_ENABLED
 )
+const RUN_PAYOUT_RETRY_WORKER = parseBooleanEnv(
+  'RUN_PAYOUT_RETRY_WORKER',
+  process.env.RUN_PAYOUT_RETRY_WORKER,
+  BACKGROUND_WORKERS_ENABLED
+)
 
 const NBA_SCHEDULE_DAYS_AHEAD = parsePositiveNumberEnv(
   'NBA_SCHEDULE_DAYS_AHEAD',
@@ -245,6 +251,12 @@ const CLOSE_EXPIRED_QUESTIONS_POLL_MS = parsePositiveNumberEnv(
   process.env.CLOSE_EXPIRED_QUESTIONS_POLL_MS,
   5_000,
   1_000
+)
+const PAYOUT_RETRY_POLL_MS = parsePositiveNumberEnv(
+  'PAYOUT_RETRY_POLL_MS',
+  process.env.PAYOUT_RETRY_POLL_MS,
+  5 * 60_000,
+  60_000
 )
 
 const startWorkerIfEnabled = (
@@ -449,6 +461,25 @@ const closeExpiredQuestionsWorker = () => {
   setInterval(run, CLOSE_EXPIRED_QUESTIONS_POLL_MS)
 }
 
+const startPayoutRetryWorker = () => {
+  console.log('[worker] Payout retry worker started')
+  const run = async () => {
+    try {
+      const result = await retryPendingPayouts()
+      if (result.found > 0) {
+        console.log(
+          `[worker] payout retry found=${result.found} completed=${result.completed} failed=${result.failed}`
+        )
+      }
+    } catch (error) {
+      console.error('[worker] payout retry error', error)
+      Sentry.captureException(error)
+    }
+  }
+  void run()
+  setInterval(run, PAYOUT_RETRY_POLL_MS)
+}
+
 startWorkerIfEnabled(
   'player-count',
   'RUN_PLAYER_COUNT_WORKER',
@@ -502,4 +533,10 @@ startWorkerIfEnabled(
   'RUN_CLOSE_EXPIRED_QUESTIONS_WORKER',
   RUN_CLOSE_EXPIRED_QUESTIONS_WORKER,
   closeExpiredQuestionsWorker
+)
+startWorkerIfEnabled(
+  'payout-retry',
+  'RUN_PAYOUT_RETRY_WORKER',
+  RUN_PAYOUT_RETRY_WORKER,
+  startPayoutRetryWorker
 )

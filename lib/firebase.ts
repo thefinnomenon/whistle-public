@@ -161,7 +161,7 @@ export const addGame = async (game: Omit<Game, 'id' | 'createdAt'>) => {
 export const getGame = async (gameId: string): Promise<Game | undefined> =>
   (await getDoc(doc(db, 'games', gameId))).data() as Game | undefined
 export const getGames = async (setGames: (games: Game[]) => void) => {
-  const cutoff = Timestamp.fromDate(new Date(Date.now() - 5 * 60 * 60 * 1000))
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - 24 * 60 * 60 * 1000))
   const q = query(
     collection(db, 'games'),
     where('league', '==', 'NFL'),

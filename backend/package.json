@@ -19,6 +19,7 @@
     "sync:nfl-player-profiles:prod": "env-cmd -f .env.production -- ts-node scripts/syncNflPlayerProfiles.ts",
     "test:featured-game": "ts-node scripts/testFeaturedGame.ts",
     "test:game-payout": "ts-node scripts/testGamePayout.ts",
+    "test:game-end-payout": "ts-node scripts/testGameEndPayout.ts",
     "test:game-payout-integration": "ts-node scripts/testPayoutIntegration.ts",
     "test:nfl-questions": "ts-node scripts/testNflQuestions.ts",
     "test:question-points": "ts-node scripts/testQuestionPoints.ts",
