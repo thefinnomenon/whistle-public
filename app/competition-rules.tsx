@@ -57,7 +57,7 @@ const RULES: RuleSection[] = [
   {
     title: '6. Competition Format (Skill-Based)',
     paragraphs: [
-      'Participants earn points based on the accuracy of their predictions, as calculated by the Whistle app.',
+      'Participants earn points for correct predictions. Questions with more answer choices are worth more points, and each question shows its point value before an answer is submitted.',
       'At the end of the Competition Period, the eligible participant or participants with the highest total points will be declared the Competition winners.',
       'If two or more eligible participants are tied for the highest score, the advertised prize pool will be divided among them as evenly as possible.',
       'No luck or chance component is involved. All results are based on in-app performance.',

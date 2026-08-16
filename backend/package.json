@@ -21,6 +21,7 @@
     "test:game-payout": "ts-node scripts/testGamePayout.ts",
     "test:game-payout-integration": "ts-node scripts/testPayoutIntegration.ts",
     "test:nfl-questions": "ts-node scripts/testNflQuestions.ts",
+    "test:question-points": "ts-node scripts/testQuestionPoints.ts",
     "test:event-replay-storage": "ts-node scripts/testEventReplayStorage.ts"
   },
   "dependencies": {

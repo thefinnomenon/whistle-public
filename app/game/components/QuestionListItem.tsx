@@ -2,6 +2,8 @@ import { Feather } from '@expo/vector-icons'
 import React from 'react'
 import { Text, TouchableOpacity, View, useColorScheme } from 'react-native'
 
+import { getQuestionPoints } from '@/lib/questionPoints'
+
 export type QuestionListItemProps = {
   question: Question
   prediction?: string
@@ -10,13 +12,11 @@ export type QuestionListItemProps = {
 }
 
 export const resolveChoiceLabel = (question: Question, choiceId: string) => {
-  const match = question.choices.find((c: any) =>
-    typeof c === 'string'
-      ? c === choiceId
-      : c.id === choiceId || c.value === choiceId
+  const match = question.choices.find(
+    (choice) => choice.id === choiceId || choice.value === choiceId
   )
   if (!match) return choiceId
-  return typeof match === 'string' ? match : match.value
+  return match.value
 }
 
 export function QuestionListItem({
@@ -107,6 +107,10 @@ export function QuestionListItem({
       />
       <View className="flex-1 ml-4 bg-transparent">
         <Text className={`${questionStyling.text}`}>{question.question}</Text>
+        <Text className={`${questionStyling.text} text-xs mt-1 font-semibold`}>
+          {questionState === 'correct' ? '+' : ''}
+          {getQuestionPoints(question)} pts
+        </Text>
         {(prediction !== undefined || resolvedLabel) && (
           <Text className={`${questionStyling.text} text-md mt-2`}>
             {prediction !== undefined ? (

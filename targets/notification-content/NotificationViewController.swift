@@ -6,6 +6,7 @@ import Network
 class NotificationViewController: UIViewController, UNNotificationContentExtension {
   private let titleLabel = UILabel()
   private let bodyLabel = UILabel()
+  private let pointsLabel = UILabel()
   private let gridStack = UIStackView()
   private let radialContainer = UIView()
   private let countdownLabel = UILabel()
@@ -274,13 +275,17 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     bodyLabel.font = .systemFont(ofSize: 18)
     bodyLabel.textAlignment = .center
     bodyLabel.numberOfLines = 0
+    pointsLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+    pointsLabel.textAlignment = .center
+    pointsLabel.textColor = .systemBlue
+    pointsLabel.isHidden = true
     gridStack.axis = .vertical
     gridStack.spacing = 16
     gridStack.alignment = .fill
     gridStack.translatesAutoresizingMaskIntoConstraints = false
     setupRadialTimer()
 
-    let stack = UIStackView(arrangedSubviews: [bodyLabel, gridStack])
+    let stack = UIStackView(arrangedSubviews: [bodyLabel, pointsLabel, gridStack])
     stack.axis = .vertical
     stack.spacing = 16
     stack.alignment = .fill
@@ -307,6 +312,19 @@ class NotificationViewController: UIViewController, UNNotificationContentExtensi
     lastNotificationContent = notification.request.content
     titleLabel.text = notification.request.content.title
     bodyLabel.text = notification.request.content.body
+    if let pointsString = notification.request.content.userInfo["points"] as? String,
+       let points = Int(pointsString),
+       points > 0 {
+      pointsLabel.text = "Worth \(points) points"
+      pointsLabel.isHidden = false
+    } else if let points = notification.request.content.userInfo["points"] as? NSNumber,
+              points.intValue > 0 {
+      pointsLabel.text = "Worth \(points.intValue) points"
+      pointsLabel.isHidden = false
+    } else {
+      pointsLabel.text = nil
+      pointsLabel.isHidden = true
+    }
     notificationId = notification.request.identifier
     questionId = notification.request.content.userInfo["questionId"] as? String
     gameId = notification.request.content.userInfo["gameId"] as? String

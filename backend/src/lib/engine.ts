@@ -16,6 +16,7 @@ import {
   buildQuestionSentProps,
   deriveQuestionDimensions,
 } from './questionAnalytics'
+import { calculateQuestionPoints } from './questionPoints'
 import type {
   PlayerSeasonProfile,
   TeamSeasonProfile,
@@ -951,6 +952,7 @@ type SignedQuestionPayload = {
   questionId: string
   question: string
   choices: { id: string; value: string }[]
+  points: number
   timeoutAt: number
   engineTag: string
   engineVersion: string
@@ -1006,13 +1008,17 @@ export const createAndSendEngineQuestion = async (
   const now = Date.now()
   const timeoutAt = now + question.timeoutMs
   const choices = buildQuestionChoices(question)
-  const type = MULTI_CHOICE_TEMPLATE_IDS.has(question.templateId)
-    ? 'MULTIPLE_CHOICE'
-    : 'YESNO'
+  const points = calculateQuestionPoints(choices.length)
+  const isYesNo =
+    choices.length === 2 &&
+    choices.some((choice) => choice.id === 'yes') &&
+    choices.some((choice) => choice.id === 'no')
+  const type = isYesNo ? 'YESNO' : 'MULTIPLE_CHOICE'
 
   const questionPayload = {
     question: question.question,
     choices,
+    points,
     type,
     state: 'open',
     timeoutAt,
@@ -1071,6 +1077,7 @@ export const createAndSendEngineQuestion = async (
     questionId: qRef.id,
     question: question.question,
     choices,
+    points,
     timeoutAt,
     engineTag: question.templateId,
     engineVersion: ENGINE_VERSION,
@@ -1098,6 +1105,7 @@ export const createAndSendEngineQuestion = async (
       engineVersion: ENGINE_VERSION,
       collapseId,
       choices: JSON.stringify(choices),
+      points: String(points),
       timeoutAt: String(timeoutAt),
       questionPayload: payloadString,
       questionSignature: signature,

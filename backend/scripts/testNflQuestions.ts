@@ -7,6 +7,7 @@ import {
 import { buildQuestionChoices } from '../src/lib/engine'
 import {
   buildNflQuestionCandidate,
+  buildNflStatRange,
   getNflPeriodStats,
   NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS,
   NFL_QUESTION_MAX_SOURCE_AGE_MS,
@@ -136,6 +137,34 @@ const recentReceiver: EspnNflAthleteName = {
   priorSeasonProfile: null,
 }
 
+const passerAthlete: EspnNflAthleteName = {
+  id: 'athlete_qb',
+  teamId: '1',
+  firstName: 'Quentin',
+  lastName: 'Player',
+  displayName: 'Quentin Player',
+  roles: ['PASSER'],
+  passingAttempts: 20,
+  passingYards: 240,
+  rushingAttempts: 2,
+  rushingYards: 8,
+  receptions: 0,
+  receivingYards: 0,
+  receivingTargets: 0,
+  priorSeasonProfile: {
+    seasonYear: 2025,
+    passingGames: 16,
+    passingAttemptsPerGame: 31,
+    passingYardsPerGame: 240,
+    rushingGames: 16,
+    rushingAttemptsPerGame: 3,
+    rushingYardsPerGame: 14,
+    receivingGames: 0,
+    receptionsPerGame: 0,
+    receivingTargetsPerGame: 0,
+  },
+}
+
 const buildCandidate = (
   plays: EspnNflPlay[],
   nowMs: number = Date.parse(plays[plays.length - 1].wallclock ?? '') + 1_000
@@ -213,16 +242,23 @@ const youngRedZoneEntry = buildPlay('young_red_zone_entry', 30_000, {
 })
 assert.equal(buildCandidate([driveStart, youngRedZoneEntry]), null)
 
-const passingRedZoneQuestion: NflActiveQuestion = {
+assert.deepEqual(buildQuestionChoices(redZoneCandidate!.payload), [
+  { id: 'touchdown', value: 'Touchdown' },
+  { id: 'field_goal', value: 'Made field goal' },
+  { id: 'turnover', value: 'Turnover or failed fourth down' },
+  { id: 'no_score', value: 'No score' },
+])
+
+const redZoneOutcomeQuestion: NflActiveQuestion = {
   id: 'question_red_zone',
-  templateId: 'NFL_RED_ZONE_PASSING_TOUCHDOWN',
+  templateId: 'NFL_RED_ZONE_OUTCOME',
   windowType: 'NFL_DRIVE',
   createdAtMs: BASE_TIME_MS,
   resolutionContext: {
-    type: 'NFL_RED_ZONE',
+    type: 'NFL_RED_ZONE_OUTCOME',
     anchorPlayId: redZoneEntry.id,
     driveId: 'drive_1',
-    redZoneVariant: 'PASSING_TOUCHDOWN',
+    teamId: '1',
   },
 }
 const passingTouchdown = buildPlay('passing_td', 10_000, {
@@ -231,7 +267,7 @@ const passingTouchdown = buildPlay('passing_td', 10_000, {
   scoreValue: 6,
 })
 assert.equal(
-  resolveNflQuestionForPlay(passingRedZoneQuestion, passingTouchdown, [
+  resolveNflQuestionForPlay(redZoneOutcomeQuestion, passingTouchdown, [
     redZoneEntry,
     passingTouchdown,
   ]),
@@ -241,12 +277,39 @@ const touchdownConfirmation = buildPlay('touchdown_confirmation', 20_000, {
   type: 'Official Timeout',
 })
 assert.deepEqual(
-  resolveNflQuestionForPlay(passingRedZoneQuestion, touchdownConfirmation, [
+  resolveNflQuestionForPlay(redZoneOutcomeQuestion, touchdownConfirmation, [
     redZoneEntry,
     passingTouchdown,
     touchdownConfirmation,
   ]),
-  { state: 'resolved', answer: 'yes', reason: null }
+  { state: 'resolved', answer: 'touchdown', reason: null }
+)
+
+const redZoneFieldGoal = buildPlay('red_zone_field_goal', 10_000, {
+  type: 'Field Goal Good',
+  scoringPlay: true,
+  scoreValue: 3,
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(redZoneOutcomeQuestion, touchdownConfirmation, [
+    redZoneEntry,
+    redZoneFieldGoal,
+    touchdownConfirmation,
+  ]),
+  { state: 'resolved', answer: 'field_goal', reason: null }
+)
+
+const redZoneInterception = buildPlay('red_zone_interception', 10_000, {
+  type: 'Interception',
+  turnover: true,
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(redZoneOutcomeQuestion, touchdownConfirmation, [
+    redZoneEntry,
+    redZoneInterception,
+    touchdownConfirmation,
+  ]),
+  { state: 'resolved', answer: 'turnover', reason: null }
 )
 
 const targetOne = buildPlay('target_1', 0, {
@@ -314,6 +377,96 @@ assert.deepEqual(
     receiverDriveEnd,
   ]),
   { state: 'resolved', answer: 'no', reason: null }
+)
+
+const drivePassOne = buildPlay('drive_pass_one', 30_000, {
+  type: 'Pass Reception',
+  text: 'Q.Player pass short right to K.Pitts for 12 yards.',
+  statYardage: 12,
+})
+const drivePassTwo = buildPlay('drive_pass_two', 60_000, {
+  type: 'Pass Incompletion',
+  text: 'Q.Player pass incomplete short left to K.Pitts.',
+})
+const drivePassThree = buildPlay('drive_pass_three', 100_000, {
+  type: 'Pass Reception',
+  text: 'Q.Player pass short left to K.Pitts for 8 yards.',
+  statYardage: 8,
+})
+const driveRangeSetup = buildPlay('drive_range_setup', 125_000, {
+  end: {
+    down: 2,
+    distance: 6,
+    yardLine: 60,
+    yardsToEndzone: 40,
+    downDistanceText: '2nd & 6 at TB 40',
+    possessionText: 'TB 40',
+    teamId: '1',
+  },
+})
+const driveRangeTimeout = buildPlay('drive_range_timeout', 130_000, {
+  type: 'Timeout',
+  text: 'Timeout #1 by ATL.',
+})
+const driveRangeCandidate = buildNflQuestionCandidate({
+  plays: [
+    driveStart,
+    drivePassOne,
+    drivePassTwo,
+    drivePassThree,
+    driveRangeSetup,
+    driveRangeTimeout,
+  ],
+  anchorPlay: driveRangeTimeout,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: ['1'],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: ['first_half'],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['team:1', 'player:1'],
+  athletes: [...athletes, passerAthlete],
+})
+assert.equal(driveRangeCandidate?.priority, 'DRIVE_PLAYER')
+assert.equal(
+  driveRangeCandidate?.payload.question,
+  'How many passing yards will Quentin Player finish this drive with?'
+)
+assert.deepEqual(buildQuestionChoices(driveRangeCandidate!.payload), [
+  { id: 'range_0', value: '29 yards or fewer' },
+  { id: 'range_1', value: '30-39 yards' },
+  { id: 'range_2', value: '40-49 yards' },
+  { id: 'range_3', value: '50 yards or more' },
+])
+const driveRangeQuestion: NflActiveQuestion = {
+  id: 'question_drive_range',
+  templateId: driveRangeCandidate!.payload.templateId,
+  windowType: 'NFL_DRIVE',
+  createdAtMs: BASE_TIME_MS + 130_000,
+  resolutionContext: driveRangeCandidate!.payload.resolutionContext ?? {},
+}
+const drivePunt = buildPlay('drive_punt', 150_000, { type: 'Punt' })
+const driveRangeNextDrivePlay = buildPlay('drive_range_next_play', 170_000, {
+  driveId: 'drive_2',
+  driveTeamId: '2',
+  driveTeamAbbreviation: 'TB',
+  possessionTeamId: '2',
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(driveRangeQuestion, driveRangeNextDrivePlay, [
+    driveStart,
+    drivePassOne,
+    drivePassTwo,
+    drivePassThree,
+    driveRangeSetup,
+    driveRangeTimeout,
+    drivePunt,
+    driveRangeNextDrivePlay,
+  ]),
+  { state: 'resolved', answer: 'range_0', reason: null }
 )
 
 const fourthDownPlay = buildPlay('fourth_down', 0, {
@@ -827,6 +980,15 @@ const gameWinnerCandidate = buildNflQuestionCandidate({
 })
 assert.equal(gameWinnerCandidate?.priority, 'GAME')
 assert.equal(gameWinnerCandidate?.payload.templateId, 'NFL_GAME_WINNER')
+assert.equal(
+  gameWinnerCandidate?.payload.question,
+  'What will the game result be?'
+)
+assert.deepEqual(buildQuestionChoices(gameWinnerCandidate!.payload), [
+  { id: 'ATL', value: 'ATL' },
+  { id: 'TB', value: 'TB' },
+  { id: 'tie', value: 'Tie' },
+])
 const gameWinnerQuestion: NflActiveQuestion = {
   id: 'question_game_winner',
   templateId: gameWinnerCandidate?.payload.templateId ?? '',
@@ -843,6 +1005,21 @@ const gameEnd = buildPlay('game_end', 60_000, {
 assert.deepEqual(
   resolveNflQuestionForPlay(gameWinnerQuestion, gameEnd, [gameEnd], true),
   { state: 'resolved', answer: 'ATL', reason: null }
+)
+const tiedGameEnd = buildPlay('tied_game_end', 60_000, {
+  period: 4,
+  type: 'End of Game',
+  homeScore: 20,
+  awayScore: 20,
+})
+assert.deepEqual(
+  resolveNflQuestionForPlay(
+    gameWinnerQuestion,
+    tiedGameEnd,
+    [tiedGameEnd],
+    true
+  ),
+  { state: 'resolved', answer: 'tie', reason: null }
 )
 
 const firstQuarterEnd = buildPlay('first_quarter_end', 0, {
@@ -879,6 +1056,11 @@ assert.equal(
   periodTeamCandidate?.payload.templateId,
   'NFL_PERIOD_TEAM_COMPARE_PASSING_YARDS'
 )
+assert.deepEqual(buildQuestionChoices(periodTeamCandidate!.payload), [
+  { id: 'ATL', value: 'ATL' },
+  { id: 'TB', value: 'TB' },
+  { id: 'tie', value: 'Tie' },
+])
 const secondQuarterRush = buildPlay('second_quarter_rush', 20_000, {
   period: 2,
   driveTeamId: '2',
@@ -950,10 +1132,16 @@ const playerPeriodCandidate = buildNflQuestionCandidate({
   athletes,
 })
 assert.equal(playerPeriodCandidate?.priority, 'PERIOD_PLAYER')
-assert.match(
-  playerPeriodCandidate?.payload.question ?? '',
-  /Kyle Pitts Sr\. have at least 3 catches in the second quarter/
+assert.equal(
+  playerPeriodCandidate?.payload.question,
+  'How many catches will Kyle Pitts Sr. finish the second quarter with?'
 )
+assert.deepEqual(buildQuestionChoices(playerPeriodCandidate!.payload), [
+  { id: 'range_0', value: '2 catches or fewer' },
+  { id: 'range_1', value: '3 catches' },
+  { id: 'range_2', value: '4 catches' },
+  { id: 'range_3', value: '5 catches or more' },
+])
 
 const secondQuarterCatchThree = buildPlay(
   'second_quarter_catch_three',
@@ -980,8 +1168,19 @@ assert.deepEqual(
     secondQuarterCatchThree,
     secondQuarterEnd,
   ]),
-  { state: 'resolved', answer: 'yes', reason: null }
+  { state: 'resolved', answer: 'range_1', reason: null }
 )
+
+assert.deepEqual(buildNflStatRange('PASSING_YARDS', 47, 71), {
+  bucketWidth: 15,
+  cutoffs: [59, 74, 89],
+  choices: [
+    { id: 'range_0', value: '59 yards or fewer' },
+    { id: 'range_1', value: '60-74 yards' },
+    { id: 'range_2', value: '75-89 yards' },
+    { id: 'range_3', value: '90 yards or more' },
+  ],
+})
 
 const parsedPriorSeasonProfile = parseEspnNflPlayerPriorSeasonProfile(
   {

@@ -1,5 +1,6 @@
 import { fetchEspnNflSummary, type EspnNflPlay } from '../src/lib/nfl'
 import { buildQuestionChoices } from '../src/lib/engine'
+import { calculateQuestionPoints } from '../src/lib/questionPoints'
 import {
   buildNflQuestionCandidate,
   getNflPlayWallclockMs,
@@ -174,13 +175,13 @@ const run = async (): Promise<void> => {
     }
     const context = candidate.payload.resolutionContext
     const projectionLog =
-      context?.type === 'NFL_PERIOD_PLAYER_THRESHOLD'
-        ? ` projectionSource=${typeof context.projectionSource === 'string' ? context.projectionSource : 'none'} current=${formatProjectionNumber(context.currentValueAtAsk)} target=${formatProjectionNumber(context.target)} priorSeason=${formatProjectionNumber(context.priorSeasonYear)} priorAverage=${formatProjectionNumber(context.priorSeasonAveragePerGame)} projected=${formatProjectionNumber(context.projectedPeriodTotal)}`
+      context?.type === 'NFL_PERIOD_PLAYER_THRESHOLD' ||
+      context?.type === 'NFL_PERIOD_PLAYER_RANGE'
+        ? ` projectionSource=${typeof context.projectionSource === 'string' ? context.projectionSource : 'none'} current=${formatProjectionNumber(context.currentValueAtAsk)} priorSeason=${formatProjectionNumber(context.priorSeasonYear)} priorAverage=${formatProjectionNumber(context.priorSeasonAveragePerGame)} projected=${formatProjectionNumber(context.projectedPeriodTotal)}`
         : ''
+    const choices = buildQuestionChoices(candidate.payload)
     console.log(
-      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority}${projectionLog} text=${candidate.payload.question} choices=${buildQuestionChoices(
-        candidate.payload
-      )
+      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority}${projectionLog} points=${calculateQuestionPoints(choices.length)} text=${candidate.payload.question} choices=${choices
         .map((choice) => choice.value)
         .join('|')}`
     )

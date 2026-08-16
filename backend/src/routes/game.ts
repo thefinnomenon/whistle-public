@@ -20,6 +20,11 @@ import {
 } from '../lib/mixpanel'
 import { sendDismissNotification } from '../lib/notifications'
 import {
+  calculateQuestionScoreUpdate,
+  calculateQuestionPoints,
+  getStoredQuestionPoints,
+} from '../lib/questionPoints'
+import {
   buildQuestionCreatedProps,
   buildQuestionResolvedProps,
   buildQuestionSentProps,
@@ -281,6 +286,7 @@ router.post('/onboarding/practice-question', async (req, res) => {
       { id: 'no', value: 'No' },
     ]
     const timeoutAt = now + 20 * 1000
+    const points = calculateQuestionPoints(payloadChoices.length)
 
     const baseQuestionPayload = {
       version: QUESTION_PAYLOAD_VERSION,
@@ -288,6 +294,7 @@ router.post('/onboarding/practice-question', async (req, res) => {
       questionId,
       question: payloadQuestion,
       choices: payloadChoices,
+      points,
       timeoutAt,
       engineTag: 'onboarding',
     }
@@ -339,6 +346,7 @@ router.post('/onboarding/practice-question', async (req, res) => {
         engineTag: 'onboarding',
         collapseId,
         choices: JSON.stringify(payloadChoices),
+        points: String(points),
         timeoutAt: String(timeoutAt),
         questionPayload: payloadString,
         questionSignature: signature,
@@ -463,6 +471,7 @@ router.post('/practice/question', async (req, res) => {
     const randomAnswer =
       payloadChoices[Math.floor(Math.random() * payloadChoices.length)]?.id
     const timeoutAt = now + 30_000
+    const points = calculateQuestionPoints(payloadChoices.length)
 
     // Persist the practice question for in-app listing
     await db
@@ -488,6 +497,7 @@ router.post('/practice/question', async (req, res) => {
         practice: true,
         question: payloadQuestion,
         choices: payloadChoices,
+        points,
         state: 'open',
         type: 'YESNO',
         timeoutAt,
@@ -503,6 +513,7 @@ router.post('/practice/question', async (req, res) => {
       questionId,
       question: payloadQuestion,
       choices: payloadChoices,
+      points,
       timeoutAt,
       engineTag: 'practice',
     }
@@ -521,6 +532,7 @@ router.post('/practice/question', async (req, res) => {
         collapseId,
         practice: 'true',
         choices: JSON.stringify(payloadChoices),
+        points: String(points),
         timeoutAt: String(timeoutAt),
         questionPayload: payloadString,
         questionSignature: signature,
@@ -831,6 +843,7 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
       { id: 'yes', value: 'Yes' },
       { id: 'no', value: 'No' },
     ]
+    const points = calculateQuestionPoints(choices.length)
 
     const baseQuestionPayload = {
       version: QUESTION_PAYLOAD_VERSION,
@@ -838,6 +851,7 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
       questionId,
       question: questionText,
       choices,
+      points,
       timeoutAt: now + 30_000,
       engineTag: 'manual_test',
     }
@@ -853,6 +867,7 @@ router.post('/test-question', isAdminMiddleware, async (_req, res) => {
       engineTag: 'manual_test',
       collapseId,
       choices: JSON.stringify(choices),
+      points: String(points),
       timeoutAt: (now + 30_000).toString(),
       questionPayload: payloadString,
       questionSignature: signature,
@@ -930,10 +945,13 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
     const awayTeam = game?.awayTeam ?? null
     const title =
       homeTeam && awayTeam ? `${homeTeam} vs ${awayTeam}` : 'New Question'
+    const submittedChoices = Array.isArray(choices) ? choices : []
+    const points = calculateQuestionPoints(submittedChoices.length)
 
     const questionPayload = {
       question,
-      choices,
+      choices: submittedChoices,
+      points,
       type,
       state: 'open',
       timeoutAt: timeoutAt ? timeoutAt : null,
@@ -960,7 +978,8 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       gameId,
       questionId: qRef.id,
       question,
-      choices: choices || [],
+      choices: submittedChoices,
+      points,
       timeoutAt: timeoutAt || null,
       engineTag: engineTag || '',
     }
@@ -976,7 +995,8 @@ router.post('/:gameId/questions', isAdminMiddleware, async (req, res) => {
       sentAt: now.toString(),
       engineTag: engineTag || '',
       collapseId,
-      choices: JSON.stringify(choices || []),
+      choices: JSON.stringify(submittedChoices),
+      points: String(points),
       timeoutAt: timeoutAt ? String(timeoutAt) : '',
       questionPayload: payloadString,
       questionSignature: signature,
@@ -1773,7 +1793,9 @@ const getPercentile = (sortedArray: number[], percentile: number): number => {
   return sortedArray[Math.max(0, index)]
 }
 
-const normalizePredictionValue = (value: any): string => {
+const normalizePredictionValue = (
+  value: string | number | boolean | null | undefined
+): string => {
   const str = String(value).toLowerCase()
   if (str === 'true' || str === 'yes' || str === '1') return 'true'
   if (str === 'false' || str === 'no' || str === '0') return 'false'
@@ -2198,70 +2220,131 @@ export const calculateScores = async (
   questionId: string,
   opts: { revertIfResolved?: boolean } = {}
 ) => {
-  const questionSnap = await admin
-    .firestore()
-    .doc(`games/${gameId}/questions/${questionId}`)
-    .get()
-  if (!questionSnap.exists) return
-  const question = questionSnap.data() as any
-
-  // Only revert if previously resolved and now cancelled
-  if (opts.revertIfResolved && question.state !== 'cancelled') return
-
-  const correctUsers = await getCorrectUsers(gameId, questionId, question)
-  const delta =
-    opts.revertIfResolved && question.state === 'cancelled' ? -10 : 10
-
-  if (correctUsers.length > 0) {
-    await updateScores(gameId, correctUsers, delta)
+  type ScoreQuestionData = {
+    state?: string
+    answer?: string | number | boolean | null
+    points?: number
+    scoredAnswer?: string | null
+  }
+  type ScorePredictionData = {
+    prediction?: string | number | boolean | null
+  }
+  type ScorePlayerData = {
+    score?: number
+    scoreByQuestionId?: Record<string, number>
   }
 
-  await calculateQuestionStatistics(gameId, questionId, question)
-  await updateLeaderboard(gameId)
-}
+  const firestore = admin.firestore()
+  const questionRef = firestore.doc(`games/${gameId}/questions/${questionId}`)
+  const questionSnap = await questionRef.get()
+  if (!questionSnap.exists) return
+  const question = questionSnap.data() as ScoreQuestionData
 
-const getCorrectUsers = async (
-  gameId: string,
-  questionId: string,
-  question: any
-): Promise<string[]> => {
-  if (question.answer === undefined) return []
+  if (opts.revertIfResolved && question.state !== 'cancelled') return
 
-  const predictionsSnap = await admin
-    .firestore()
+  const isCancellation =
+    opts.revertIfResolved === true && question.state === 'cancelled'
+  const points = getStoredQuestionPoints(question)
+  const desiredAnswer = isCancellation
+    ? null
+    : question.answer === undefined || question.answer === null
+      ? null
+      : normalizePredictionValue(question.answer)
+  const previousAnswer = question.scoredAnswer
+    ? normalizePredictionValue(question.scoredAnswer)
+    : null
+  const predictionsSnap = await firestore
     .collection(`games/${gameId}/questions/${questionId}/predictions`)
     .get()
+  const predictionsByUserId = new Map(
+    predictionsSnap.docs.map((predictionDoc) => [
+      predictionDoc.id,
+      (predictionDoc.data() as ScorePredictionData).prediction,
+    ])
+  )
+  const affectedUserIds = [...predictionsByUserId.entries()]
+    .filter(([, prediction]) => {
+      const normalizedPrediction = normalizePredictionValue(prediction)
+      return (
+        normalizedPrediction === desiredAnswer ||
+        normalizedPrediction === previousAnswer
+      )
+    })
+    .map(([userId]) => userId)
 
-  const normalizedAnswer = normalizePredictionValue(question.answer)
+  const applyUserScore = async (userId: string): Promise<boolean> => {
+    const userRef = firestore.doc(`games/${gameId}/users/${userId}`)
+    return firestore.runTransaction(async (transaction) => {
+      const userSnap = await transaction.get(userRef)
+      const player = userSnap.exists ? (userSnap.data() as ScorePlayerData) : {}
+      const storedAwards = player.scoreByQuestionId ?? {}
+      const previousAward = Number.isFinite(storedAwards[questionId])
+        ? storedAwards[questionId]
+        : 0
+      const prediction = predictionsByUserId.get(userId) ?? null
+      const desiredAward =
+        desiredAnswer !== null &&
+        normalizePredictionValue(prediction) === desiredAnswer
+          ? points
+          : 0
+      const currentScore =
+        typeof player.score === 'number' && Number.isFinite(player.score)
+          ? player.score
+          : 0
+      const scoreUpdate = calculateQuestionScoreUpdate(
+        currentScore,
+        previousAward,
+        desiredAward
+      )
+      if (!scoreUpdate.changed) return false
 
-  return predictionsSnap.docs
-    .filter(
-      (d) =>
-        normalizePredictionValue((d.data() as any).prediction) ===
-        normalizedAnswer
+      const nextAwards = { ...storedAwards }
+      if (desiredAward > 0) nextAwards[questionId] = desiredAward
+      else delete nextAwards[questionId]
+      transaction.set(
+        userRef,
+        {
+          score: scoreUpdate.score,
+          scoreByQuestionId: nextAwards,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+      return true
+    })
+  }
+  const transactionConcurrency = 25
+  for (
+    let offset = 0;
+    offset < affectedUserIds.length;
+    offset += transactionConcurrency
+  ) {
+    await Promise.all(
+      affectedUserIds
+        .slice(offset, offset + transactionConcurrency)
+        .map(applyUserScore)
     )
-    .map((d) => d.id)
-}
+  }
 
-const updateScores = async (
-  gameId: string,
-  userIds: string[],
-  delta: number
-) => {
-  const batch = admin.firestore().batch()
-
-  userIds.forEach((userId) => {
-    const userRef = admin.firestore().doc(`games/${gameId}/users/${userId}`)
-    batch.set(
-      userRef,
+  if (desiredAnswer !== null || isCancellation) {
+    await questionRef.set(
       {
-        score: admin.firestore.FieldValue.increment(delta),
+        scoredAnswer: desiredAnswer ?? previousAnswer,
+        scoredPoints: points,
+        scoreState: isCancellation ? 'cancelled' : 'resolved',
+        scoreUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     )
-  })
+  }
 
-  await batch.commit()
+  await calculateQuestionStatistics(
+    gameId,
+    questionId,
+    question,
+    predictionsSnap
+  )
+  await updateLeaderboard(gameId)
 }
 
 export const updatePlayerCountsForActiveGames = async (): Promise<number> => {
@@ -2554,13 +2637,16 @@ export const closeExpiredQuestions = async (): Promise<number> => {
 const calculateQuestionStatistics = async (
   gameId: string,
   questionId: string,
-  question: any
+  question: { answer?: string | number | boolean | null },
+  existingPredictions?: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>
 ) => {
   if (!question) return
-  const predsSnap = await admin
-    .firestore()
-    .collection(`games/${gameId}/questions/${questionId}/predictions`)
-    .get()
+  const predsSnap =
+    existingPredictions ??
+    (await admin
+      .firestore()
+      .collection(`games/${gameId}/questions/${questionId}/predictions`)
+      .get())
 
   const totalResponses = predsSnap.size
   const normalizedAnswer = normalizePredictionValue(question.answer)

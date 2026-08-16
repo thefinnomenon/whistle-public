@@ -9,6 +9,7 @@ import {
   type EngineQuestionPayload,
 } from './engine'
 import { buildSimResult } from './simResult'
+import { calculateQuestionPoints } from './questionPoints'
 import {
   hydrateStoredEngineEvent,
   type StoredEngineEvent,
@@ -57,6 +58,7 @@ export type SimQuestion = EngineQuestionPayload & {
   id: string
   engineVersion: string
   choices: { id: string; value: string }[]
+  points: number
   state: 'open' | 'closed' | 'resolved' | 'cancelled'
   answer?: string | null
   cancelReason?: string
@@ -343,10 +345,12 @@ export const simulateStoredGame = async (
   )
 
   for (const payload of gameStartQuestions) {
+    const choices = buildQuestionChoices(payload)
     const question: SimQuestion = {
       ...payload,
       engineVersion: ENGINE_VERSION,
-      choices: buildQuestionChoices(payload),
+      choices,
+      points: calculateQuestionPoints(choices.length),
       id: `q_${questions.length + 1}`,
       state: 'open',
       createdAtMs: 0,
@@ -396,10 +400,12 @@ export const simulateStoredGame = async (
     if (generated) {
       const createdAtMs = lastElapsedMs
       const timeoutAtMs = createdAtMs + generated.timeoutMs
+      const choices = buildQuestionChoices(generated)
       const simQuestion: SimQuestion = {
         ...generated,
         engineVersion: ENGINE_VERSION,
-        choices: buildQuestionChoices(generated),
+        choices,
+        points: calculateQuestionPoints(choices.length),
         id: `q_${questions.length + 1}`,
         state: 'open',
         createdAtMs,

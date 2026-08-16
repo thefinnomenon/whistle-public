@@ -31,6 +31,7 @@ type GamePlayer = {
   joinedAt?: FirestoreTimestamp
   answersSubmitted?: number
   predictionsByQuestionId?: Record<string, string>
+  scoreByQuestionId?: Record<string, number>
   cashEligibility?: {
     qualified: boolean
     answered: number
@@ -109,8 +110,16 @@ type Game = {
 
 type QuestionState = 'open' | 'closed' | 'resolved' | 'cancelled'
 type UserQuestionState = QuestionState | 'correct' | 'incorrect'
-type QuestionType = 'YESNO'
-type QuestionWindowType = 'PERIOD' | 'NEXT_N_MIN' | 'GAME' | 'JUMP_BALL'
+type QuestionType = 'YESNO' | 'MULTIPLE_CHOICE'
+type QuestionWindowType =
+  | 'PERIOD'
+  | 'NEXT_N_MIN'
+  | 'NEXT_EVENT'
+  | 'GAME'
+  | 'JUMP_BALL'
+  | 'NFL_NEXT_PLAY'
+  | 'NFL_DRIVE'
+  | 'NFL_NEXT_TARGET'
 type QuestionCancelReason = 'MANUAL' | 'VOID' | 'RESOLVED_WHILE_OPEN'
 
 type Choice = { id: string; value: string }
@@ -131,7 +140,8 @@ type Question = {
   type: QuestionType
   question: string
   choices: Choice[]
-  answer?: boolean
+  answer?: string
+  points?: number
   engineTag?: string
   nflDedupe?: NflQuestionDedupe
   timeoutAt: string

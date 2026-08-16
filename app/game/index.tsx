@@ -25,6 +25,7 @@ import {
   getQuestionsStream,
 } from '@/lib/firebase'
 import { createPracticeQuestion } from '@/lib/practice'
+import { getQuestionPoints } from '@/lib/questionPoints'
 import { GameInfoBar } from './components/GameInfoBar'
 import { GameNavbar } from './components/GameNavbar'
 import { QuestionAnswerModal } from './components/QuestionAnswerModal'
@@ -121,7 +122,7 @@ export default function GameScreen() {
           answerValue !== undefined &&
           String(pred).toLowerCase() === answerValue.toLowerCase()
         ) {
-          return acc + 10
+          return acc + getQuestionPoints(q ?? {})
         }
         return acc
       },

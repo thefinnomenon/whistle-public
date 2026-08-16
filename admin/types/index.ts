@@ -20,6 +20,7 @@ export type GamePlayer = {
   joinedAt?: FirestoreTimestamp
   answersSubmitted?: number
   predictionsByQuestionId?: Record<string, string>
+  scoreByQuestionId?: Record<string, number>
   cashEligibility?: {
     qualified: boolean
     answered: number
@@ -176,6 +177,7 @@ export type Question = {
   type: QuestionType
   question: string
   choices: Choice[]
+  points?: number
   answer?: string
   timeoutAt: string
   windowType?: QuestionWindowType
@@ -255,6 +257,7 @@ export type SimulationQuestion = {
   clockMs: number
   state: 'open' | 'closed' | 'resolved' | 'cancelled'
   choices: Choice[]
+  points?: number
   resolutionContext?: { [key: string]: SimulationJsonValue }
   answer?: string | null
   cancelReason?: string

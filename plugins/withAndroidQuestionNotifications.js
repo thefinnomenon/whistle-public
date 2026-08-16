@@ -87,6 +87,18 @@ const notificationLayout = `<?xml version="1.0" encoding="utf-8"?>
         android:paddingTop="8dp"
         android:paddingBottom="12dp" />
 
+    <TextView
+        android:id="@+id/question_points"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:gravity="center"
+        android:textColor="#2563EB"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:paddingBottom="8dp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/choices_container"
         android:layout_width="match_parent"
@@ -201,6 +213,7 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
     val buttonIndex = intent.getIntExtra("buttonIndex", -1)
     val questionText = intent.getStringExtra("questionText") ?: ""
     val choicesJson = intent.getStringExtra("choicesJson") ?: "[]"
+    val points = intent.getStringExtra("points")
     val notificationId = intent.getIntExtra("notificationId", questionId.hashCode())
     val collapsedTitle = intent.getStringExtra("collapsedTitle") ?: "Question"
     val notificationDisplayedAt = intent.getStringExtra("notificationDisplayedAt")?.toLongOrNull()
@@ -237,6 +250,8 @@ class ${RECEIVER_CLASS} : BroadcastReceiver() {
         (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
       applyThemeToRemoteViews(contentView, isDark, context)
       contentView.setTextViewText(R.id.question_text, questionText)
+      contentView.setTextViewText(R.id.question_points, points?.let { "Worth ${'$'}it points" } ?: "")
+      contentView.setViewVisibility(R.id.question_points, if (points.isNullOrBlank()) View.GONE else View.VISIBLE)
       val choices = parseChoices(choicesJson)
       contentView.removeAllViews(R.id.choices_container)
       choices.chunked(2).forEachIndexed { chunkIndex, chunk ->
@@ -536,6 +551,7 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
     if (domain.isNullOrEmpty()) return
 
     val choicesJson = data["choices"] ?: ""
+    val points = data["points"]
     val choices = parseChoices(choicesJson, domain, userToken)
     val sentAt = data["sentAt"]?.toLongOrNull()
     val notificationDisplayedAt = System.currentTimeMillis()
@@ -551,6 +567,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
     val isDark = isDarkModeEnabled()
     applyThemeToRemoteViews(contentView, isDark)
     contentView.setTextViewText(R.id.question_text, question)
+    contentView.setTextViewText(R.id.question_points, points?.let { "Worth ${'$'}it points" } ?: "")
+    contentView.setViewVisibility(R.id.question_points, if (points.isNullOrBlank()) View.GONE else View.VISIBLE)
 
     // Bind up to 3 choices for now
     contentView.removeAllViews(R.id.choices_container)
@@ -580,7 +598,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             collapsedTitle,
             notificationDisplayedAt,
             questionPayload,
-            questionSignature
+            questionSignature,
+            points
           )
         )
         contentView.addView(R.id.choices_container, single)
@@ -610,7 +629,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             collapsedTitle,
             notificationDisplayedAt,
             questionPayload,
-            questionSignature
+            questionSignature,
+            points
           )
         )
 
@@ -638,7 +658,8 @@ class ${SERVICE_CLASS} : FirebaseMessagingService() {
             collapsedTitle,
             notificationDisplayedAt,
             questionPayload,
-            questionSignature
+            questionSignature,
+            points
           )
         )
         contentView.addView(R.id.choices_container, row)
@@ -747,7 +768,8 @@ private fun buildActionIntent(
     collapsedTitle: String,
     notificationDisplayedAt: Long,
     questionPayload: String?,
-    questionSignature: String?
+    questionSignature: String?,
+    points: String?
   ): PendingIntent {
     val intent = Intent(context, ${RECEIVER_CLASS}::class.java).apply {
       putExtra("gameId", gameId)
@@ -766,6 +788,9 @@ private fun buildActionIntent(
       putExtra("notificationId", notificationId)
       putExtra("collapsedTitle", collapsedTitle)
       putExtra("notificationDisplayedAt", notificationDisplayedAt.toString())
+      if (!points.isNullOrEmpty()) {
+        putExtra("points", points)
+      }
       if (!questionPayload.isNullOrEmpty()) {
         putExtra("questionPayload", questionPayload)
       }

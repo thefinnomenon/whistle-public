@@ -17,6 +17,7 @@ export type NflQuestionPriority =
   | 'FIELD_GOAL'
   | 'FOURTH_DOWN'
   | 'NEXT_COMPLETION_RECEIVER'
+  | 'DRIVE_PLAYER'
   | 'TIMEOUT_NEXT_PLAY'
   | 'RECEIVER_TARGET'
 
@@ -124,6 +125,12 @@ export type NflPeriodPlayerThresholdProjectionInput = {
   athlete: EspnNflAthleteName
 }
 
+export type NflStatRange = {
+  choices: { id: string; value: string }[]
+  cutoffs: number[]
+  bucketWidth: number
+}
+
 const TERMINAL_PLAY_PATTERN =
   /touchdown|field goal|punt|interception|end period|end of game/i
 const STOPPAGE_PLAY_PATTERN = /timeout|two-minute warning/i
@@ -163,6 +170,17 @@ const asContextStringRecord = (
   const entries = Object.entries(value)
   if (!entries.every((entry) => typeof entry[1] === 'string')) return null
   return Object.fromEntries(entries) as Record<string, string>
+}
+
+const asContextNumberArray = (
+  context: ResolutionContext,
+  key: string
+): number[] | null => {
+  const value = context[key]
+  return Array.isArray(value) &&
+    value.every((item) => typeof item === 'number' && Number.isFinite(item))
+    ? (value as number[])
+    : null
 }
 
 const parseClockMs = (clock: string | null): number => {
@@ -299,6 +317,71 @@ export const projectNflPeriodPlayerThreshold = (
       ? 'PRIOR_SEASON_LIVE_BLEND'
       : 'POSITION_BASELINE_LIVE_BLEND',
   }
+}
+
+const getStatRangeBucketWidth = (
+  statType: NflPeriodPlayerThresholdStatType,
+  expectedRemaining: number
+): number => {
+  if (statType === 'RECEPTIONS') return 1
+  const minimum = statType === 'PASSING_YARDS' ? 10 : 5
+  const maximum = statType === 'PASSING_YARDS' ? 25 : 15
+  const rounded = Math.ceil(expectedRemaining / 2 / 5) * 5
+  return Math.min(maximum, Math.max(minimum, rounded))
+}
+
+export const buildNflStatRange = (
+  statType: NflPeriodPlayerThresholdStatType,
+  currentValue: number,
+  projectedTotal: number
+): NflStatRange => {
+  const normalizedCurrent = Math.max(0, Math.floor(currentValue))
+  const expectedRemaining = Math.max(0, projectedTotal - normalizedCurrent)
+  const bucketWidth = getStatRangeBucketWidth(statType, expectedRemaining)
+  const firstCutoff =
+    Math.floor(normalizedCurrent / bucketWidth) * bucketWidth + bucketWidth - 1
+  const cutoffs = [
+    firstCutoff,
+    firstCutoff + bucketWidth,
+    firstCutoff + bucketWidth * 2,
+  ]
+  const pluralize = (value: number): string =>
+    `${value} ${
+      statType === 'RECEPTIONS'
+        ? value === 1
+          ? 'catch'
+          : 'catches'
+        : value === 1
+          ? 'yard'
+          : 'yards'
+    }`
+  const rangeUnit = statType === 'RECEPTIONS' ? 'catches' : 'yards'
+  const formatRange = (lower: number, upper: number): string =>
+    lower === upper ? pluralize(lower) : `${lower}-${upper} ${rangeUnit}`
+  return {
+    bucketWidth,
+    cutoffs,
+    choices: [
+      { id: 'range_0', value: `${pluralize(cutoffs[0])} or fewer` },
+      {
+        id: 'range_1',
+        value: formatRange(cutoffs[0] + 1, cutoffs[1]),
+      },
+      {
+        id: 'range_2',
+        value: formatRange(cutoffs[1] + 1, cutoffs[2]),
+      },
+      {
+        id: 'range_3',
+        value: `${pluralize(cutoffs[2] + 1)} or more`,
+      },
+    ],
+  }
+}
+
+const getRangeAnswer = (value: number, cutoffs: readonly number[]): string => {
+  const bucketIndex = cutoffs.findIndex((cutoff) => value <= cutoff)
+  return `range_${bucketIndex < 0 ? cutoffs.length : bucketIndex}`
 }
 
 export const getNflPlayWallclockMs = (play: EspnNflPlay): number | null => {
@@ -471,6 +554,39 @@ export const getNflPeriodStats = (
   return { teams, players }
 }
 
+export const getNflDrivePlayerStats = (
+  plays: readonly EspnNflPlay[],
+  driveId: string
+): Map<string, NflPeriodPlayerStat> => {
+  const players = new Map<string, NflPeriodPlayerStat>()
+  for (const play of plays) {
+    if (
+      play.driveId !== driveId ||
+      play.penalty ||
+      NO_PLAY_PATTERN.test(play.text)
+    ) {
+      continue
+    }
+    const yards = play.statYardage ?? 0
+    const passer = extractNflPasser(play)
+    const target = extractNflPassTarget(play)
+    if (passer) ensurePlayerPeriodStat(players, passer).passingAttempts += 1
+    if (target) ensurePlayerPeriodStat(players, target).receivingTargets += 1
+    if (PASS_COMPLETION_PATTERN.test(play.type)) {
+      if (passer) ensurePlayerPeriodStat(players, passer).passingYards += yards
+      if (target) ensurePlayerPeriodStat(players, target).receptions += 1
+    } else if (RUSH_PLAY_PATTERN.test(play.type)) {
+      const rusher = extractNflRusher(play)
+      if (rusher) {
+        const rusherStat = ensurePlayerPeriodStat(players, rusher)
+        rusherStat.rushingAttempts += 1
+        rusherStat.rushingYards += yards
+      }
+    }
+  }
+  return players
+}
+
 const getPreviousDrivePlay = (
   plays: EspnNflPlay[],
   anchorPlay: EspnNflPlay
@@ -571,17 +687,6 @@ const buildPayload = (
   clockMs: parseClockMs(input.anchorPlay.clock),
 })
 
-const chooseRedZoneVariant = (
-  driveId: string
-): 'TOUCHDOWN' | 'PASSING_TOUCHDOWN' | 'RUSHING_TOUCHDOWN' => {
-  const bucket = [...driveId].reduce(
-    (sum, character) => sum + character.charCodeAt(0),
-    0
-  )
-  if (bucket % 4 < 2) return 'TOUCHDOWN'
-  return bucket % 4 === 2 ? 'PASSING_TOUCHDOWN' : 'RUSHING_TOUCHDOWN'
-}
-
 const getPeriodLabel = (period: number): string => {
   if (period === 1) return 'first quarter'
   if (period === 2) return 'second quarter'
@@ -595,7 +700,7 @@ export const buildNflPregameGameWinnerPayload = (
   awayTeam: string
 ): EngineQuestionPayload => ({
   templateId: 'NFL_GAME_WINNER',
-  question: 'Who will win the game?',
+  question: 'What will the game result be?',
   windowType: 'GAME',
   timeoutMs: NFL_QUESTION_RESPONSE_MS,
   resolutionWindowMs: 4 * 60 * 60_000,
@@ -607,6 +712,7 @@ export const buildNflPregameGameWinnerPayload = (
     choices: [
       { id: homeTeam, value: homeTeam },
       { id: awayTeam, value: awayTeam },
+      { id: 'tie', value: 'Tie' },
     ],
   },
   selectionReason: [{ code: 'NFL_PREGAME_WINDOW' }],
@@ -637,7 +743,7 @@ const buildGameWinnerCandidate = (
     periodQuestionKey: null,
     payload: buildPayload(input, {
       templateId: 'NFL_GAME_WINNER',
-      question: 'Who will win the game?',
+      question: 'What will the game result be?',
       windowType: 'GAME',
       resolutionWindowMs: 4 * 60 * 60_000,
       resolutionContext: {
@@ -648,6 +754,7 @@ const buildGameWinnerCandidate = (
         choices: [
           { id: input.homeTeam, value: input.homeTeam },
           { id: input.awayTeam, value: input.awayTeam },
+          { id: 'tie', value: 'Tie' },
         ],
       },
       trigger: 'nfl:game_start',
@@ -705,6 +812,7 @@ const buildPeriodTeamCandidate = (
         choices: [
           { id: input.homeTeam, value: input.homeTeam },
           { id: input.awayTeam, value: input.awayTeam },
+          { id: 'tie', value: 'Tie' },
         ],
       },
       trigger: 'nfl:period_team_compare',
@@ -759,6 +867,11 @@ const buildPeriodPlayerCandidate = (
         })
       : null
   if (receiverToken && receiver && receiverStats && receiverProjection) {
+    const range = buildNflStatRange(
+      'RECEPTIONS',
+      receiverStats.receptions,
+      receiverProjection.projectedPeriodTotal
+    )
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -769,18 +882,21 @@ const buildPeriodPlayerCandidate = (
       gameQuestionKey: null,
       periodQuestionKey,
       payload: buildPayload(input, {
-        templateId: 'NFL_PERIOD_PLAYER_RECEPTIONS',
-        question: `Will ${receiver.displayName} have at least ${receiverProjection.target} catches in the ${periodLabel}?`,
+        templateId: 'NFL_PERIOD_PLAYER_RECEPTIONS_RANGE',
+        question: `How many catches will ${receiver.displayName} finish the ${periodLabel} with?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
-          type: 'NFL_PERIOD_PLAYER_THRESHOLD',
+          type: 'NFL_PERIOD_PLAYER_RANGE',
           anchorPlayId: input.anchorPlay.id,
           period,
           playerToken: receiverToken,
           playerDisplayName: receiver.displayName,
           statType: 'RECEPTIONS',
           target: receiverProjection.target,
+          choices: range.choices,
+          rangeCutoffs: range.cutoffs,
+          rangeBucketWidth: range.bucketWidth,
           currentValueAtAsk: receiverStats.receptions,
           clockRemainingMs,
           projectedPeriodTotal: receiverProjection.projectedPeriodTotal,
@@ -823,6 +939,11 @@ const buildPeriodPlayerCandidate = (
         })
       : null
   if (rusherToken && rusher && rusherStats && rusherProjection) {
+    const range = buildNflStatRange(
+      'RUSHING_YARDS',
+      rusherStats.rushingYards,
+      rusherProjection.projectedPeriodTotal
+    )
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -833,18 +954,21 @@ const buildPeriodPlayerCandidate = (
       gameQuestionKey: null,
       periodQuestionKey,
       payload: buildPayload(input, {
-        templateId: 'NFL_PERIOD_PLAYER_RUSHING_YARDS',
-        question: `Will ${rusher.displayName} rush for at least ${rusherProjection.target} yards in the ${periodLabel}?`,
+        templateId: 'NFL_PERIOD_PLAYER_RUSHING_YARDS_RANGE',
+        question: `How many rushing yards will ${rusher.displayName} finish the ${periodLabel} with?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
-          type: 'NFL_PERIOD_PLAYER_THRESHOLD',
+          type: 'NFL_PERIOD_PLAYER_RANGE',
           anchorPlayId: input.anchorPlay.id,
           period,
           playerToken: rusherToken,
           playerDisplayName: rusher.displayName,
           statType: 'RUSHING_YARDS',
           target: rusherProjection.target,
+          choices: range.choices,
+          rangeCutoffs: range.cutoffs,
+          rangeBucketWidth: range.bucketWidth,
           currentValueAtAsk: rusherStats.rushingYards,
           clockRemainingMs,
           projectedPeriodTotal: rusherProjection.projectedPeriodTotal,
@@ -885,6 +1009,11 @@ const buildPeriodPlayerCandidate = (
         })
       : null
   if (passerToken && passer && passerStats && passerProjection) {
+    const range = buildNflStatRange(
+      'PASSING_YARDS',
+      passerStats.passingYards,
+      passerProjection.projectedPeriodTotal
+    )
     return {
       priority: 'PERIOD_PLAYER',
       redZoneDriveId: null,
@@ -895,18 +1024,21 @@ const buildPeriodPlayerCandidate = (
       gameQuestionKey: null,
       periodQuestionKey,
       payload: buildPayload(input, {
-        templateId: 'NFL_PERIOD_PLAYER_PASSING_YARDS',
-        question: `Will ${passer.displayName} throw for at least ${passerProjection.target} yards in the ${periodLabel}?`,
+        templateId: 'NFL_PERIOD_PLAYER_PASSING_YARDS_RANGE',
+        question: `How many passing yards will ${passer.displayName} finish the ${periodLabel} with?`,
         windowType: 'PERIOD',
         resolutionWindowMs: 20 * 60_000,
         resolutionContext: {
-          type: 'NFL_PERIOD_PLAYER_THRESHOLD',
+          type: 'NFL_PERIOD_PLAYER_RANGE',
           anchorPlayId: input.anchorPlay.id,
           period,
           playerToken: passerToken,
           playerDisplayName: passer.displayName,
           statType: 'PASSING_YARDS',
           target: passerProjection.target,
+          choices: range.choices,
+          rangeCutoffs: range.cutoffs,
+          rangeBucketWidth: range.bucketWidth,
           currentValueAtAsk: passerStats.passingYards,
           clockRemainingMs,
           projectedPeriodTotal: passerProjection.projectedPeriodTotal,
@@ -951,16 +1083,15 @@ const buildRedZoneCandidate = (
     return null
   }
 
-  const variant = chooseRedZoneVariant(driveId)
-  const question =
-    variant === 'PASSING_TOUCHDOWN'
-      ? `Will ${teamCode} score a passing touchdown on this red-zone trip?`
-      : variant === 'RUSHING_TOUCHDOWN'
-        ? `Will ${teamCode} score a rushing touchdown on this red-zone trip?`
-        : `Will ${teamCode} score a touchdown on this red-zone trip?`
+  const choices = [
+    { id: 'touchdown', value: 'Touchdown' },
+    { id: 'field_goal', value: 'Made field goal' },
+    { id: 'turnover', value: 'Turnover or failed fourth down' },
+    { id: 'no_score', value: 'No score' },
+  ]
   const resolutionContext = {
-    ...buildBaseContext(input, 'NFL_RED_ZONE'),
-    redZoneVariant: variant,
+    ...buildBaseContext(input, 'NFL_RED_ZONE_OUTCOME'),
+    choices,
   }
 
   return {
@@ -973,8 +1104,8 @@ const buildRedZoneCandidate = (
     gameQuestionKey: null,
     periodQuestionKey: null,
     payload: buildPayload(input, {
-      templateId: `NFL_RED_ZONE_${variant}`,
-      question,
+      templateId: 'NFL_RED_ZONE_OUTCOME',
+      question: `How will ${teamCode}'s red-zone possession end?`,
       windowType: 'NFL_DRIVE',
       resolutionWindowMs: 8 * 60_000,
       resolutionContext,
@@ -1301,6 +1432,93 @@ const buildTimeoutNextPlayCandidate = (
   }
 }
 
+const buildDrivePlayerCandidate = (
+  input: BuildCandidateInput
+): NflQuestionCandidate | null => {
+  const play = input.anchorPlay
+  const driveId = play.driveId
+  if (
+    !STOPPAGE_PLAY_PATTERN.test(play.type) ||
+    !driveId ||
+    input.timeoutQuestionDriveIds.includes(driveId) ||
+    !hasStableDriveContext(input)
+  ) {
+    return null
+  }
+  const previousPlay = getPreviousDrivePlay(input.plays, play)
+  if (
+    !previousPlay ||
+    isDriveTerminalPlay(previousPlay) ||
+    !possessionStayedWithDriveTeam(play, previousPlay)
+  ) {
+    return null
+  }
+
+  const driveStats = getNflDrivePlayerStats(input.plays, driveId)
+  const passerStats = [...driveStats.values()]
+    .filter((stats) => stats.passingAttempts >= 3)
+    .sort(
+      (left, right) =>
+        right.passingAttempts - left.passingAttempts ||
+        right.passingYards - left.passingYards
+    )[0]
+  if (!passerStats) return null
+  const passer = findAthleteForToken(
+    passerStats.token,
+    play.driveTeamId,
+    input.athletes
+  )
+  if (!passer?.roles.includes('PASSER')) return null
+
+  const priorSeason = getPriorSeasonStatBaseline(passer, 'PASSING_YARDS')
+  const expectedPerDrive =
+    priorSeason && priorSeason.games >= 4 ? priorSeason.averagePerGame / 10 : 20
+  const fieldPositionExpected =
+    typeof previousPlay.end?.yardsToEndzone === 'number'
+      ? Math.min(35, Math.max(10, previousPlay.end.yardsToEndzone * 0.3))
+      : expectedPerDrive
+  const expectedRemaining = expectedPerDrive * 0.6 + fieldPositionExpected * 0.4
+  const projectedDriveTotal =
+    passerStats.passingYards + Math.max(10, expectedRemaining)
+  const range = buildNflStatRange(
+    'PASSING_YARDS',
+    passerStats.passingYards,
+    projectedDriveTotal
+  )
+
+  return {
+    priority: 'DRIVE_PLAYER',
+    redZoneDriveId: null,
+    redZonePeriodKey: null,
+    receiverQuestionKey: null,
+    completionReceiverHalfKey: null,
+    timeoutQuestionDriveId: driveId,
+    gameQuestionKey: null,
+    periodQuestionKey: null,
+    payload: buildPayload(input, {
+      templateId: 'NFL_DRIVE_PLAYER_PASSING_YARDS_RANGE',
+      question: `How many passing yards will ${passer.displayName} finish this drive with?`,
+      windowType: 'NFL_DRIVE',
+      resolutionWindowMs: 5 * 60_000,
+      resolutionContext: {
+        ...buildBaseContext(input, 'NFL_DRIVE_PLAYER_RANGE'),
+        playerToken: passerStats.token,
+        playerDisplayName: passer.displayName,
+        statType: 'PASSING_YARDS',
+        currentValueAtAsk: passerStats.passingYards,
+        projectedDriveTotal,
+        priorSeasonYear: priorSeason?.seasonYear ?? null,
+        priorSeasonGames: priorSeason?.games ?? null,
+        priorSeasonAveragePerGame: priorSeason?.averagePerGame ?? null,
+        choices: range.choices,
+        rangeCutoffs: range.cutoffs,
+        rangeBucketWidth: range.bucketWidth,
+      },
+      trigger: 'nfl:timeout_drive_passing_yards',
+    }),
+  }
+}
+
 const isFinalTwoMinutesOfHalf = (play: EspnNflPlay): boolean =>
   (play.period === 2 || play.period === 4) &&
   parseClockMs(play.clock) <= 120_000
@@ -1441,6 +1659,7 @@ export const buildNflQuestionCandidateDecision = (
     buildFieldGoalCandidate(input),
     buildPeriodTeamCandidate(input),
     buildNextCompletionReceiverCandidate(input),
+    buildDrivePlayerCandidate(input),
     buildTimeoutNextPlayCandidate(input),
     buildPeriodPlayerCandidate(input),
     buildReceiverTargetCandidate(input),
@@ -1541,6 +1760,46 @@ const isSameDrive = (
 const isTouchdown = (play: EspnNflPlay): boolean =>
   play.scoringPlay && /touchdown/i.test(play.type)
 
+const getLastDrivePlay = (
+  context: ResolutionContext,
+  playsThroughCurrent: readonly EspnNflPlay[]
+): EspnNflPlay | null => {
+  const driveId = asContextString(context, 'driveId')
+  if (!driveId) return null
+  for (let index = playsThroughCurrent.length - 1; index >= 0; index -= 1) {
+    const candidate = playsThroughCurrent[index]
+    if (
+      candidate.driveId === driveId &&
+      !candidate.penalty &&
+      !NO_PLAY_PATTERN.test(candidate.text)
+    ) {
+      return candidate
+    }
+  }
+  return null
+}
+
+const getRedZoneOutcome = (
+  context: ResolutionContext,
+  finalDrivePlay: EspnNflPlay
+): 'touchdown' | 'field_goal' | 'turnover' | 'no_score' => {
+  const offenseTeamId = asContextString(context, 'teamId')
+  if (finalDrivePlay.turnover || /interception/i.test(finalDrivePlay.type)) {
+    return 'turnover'
+  }
+  if (isTouchdown(finalDrivePlay)) return 'touchdown'
+  if (FIELD_GOAL_GOOD_PATTERN.test(finalDrivePlay.type)) return 'field_goal'
+  if (
+    finalDrivePlay.start?.down === 4 &&
+    offenseTeamId &&
+    finalDrivePlay.end?.teamId &&
+    finalDrivePlay.end.teamId !== offenseTeamId
+  ) {
+    return 'turnover'
+  }
+  return 'no_score'
+}
+
 const getConfirmedDriveTerminalPlay = (
   context: ResolutionContext,
   currentPlay: EspnNflPlay,
@@ -1578,7 +1837,8 @@ export const resolveNflQuestionForPlay = (
     play.id === anchorPlayId &&
     contextType !== 'NFL_GAME_WINNER' &&
     contextType !== 'NFL_PERIOD_TEAM_COMPARE' &&
-    contextType !== 'NFL_PERIOD_PLAYER_THRESHOLD'
+    contextType !== 'NFL_PERIOD_PLAYER_THRESHOLD' &&
+    contextType !== 'NFL_PERIOD_PLAYER_RANGE'
   ) {
     return null
   }
@@ -1599,25 +1859,25 @@ export const resolveNflQuestionForPlay = (
       if (homeScore === null) homeScore = scorePlay.homeScore
       if (awayScore === null) awayScore = scorePlay.awayScore
     }
-    if (
-      !homeTeam ||
-      !awayTeam ||
-      homeScore === null ||
-      awayScore === null ||
-      homeScore === awayScore
-    ) {
-      return { state: 'cancelled', answer: null, reason: 'TIE_OR_NO_SCORE' }
+    if (!homeTeam || !awayTeam || homeScore === null || awayScore === null) {
+      return { state: 'cancelled', answer: null, reason: 'MISSING_STATS' }
     }
     return {
       state: 'resolved',
-      answer: homeScore > awayScore ? homeTeam : awayTeam,
+      answer:
+        homeScore === awayScore
+          ? 'tie'
+          : homeScore > awayScore
+            ? homeTeam
+            : awayTeam,
       reason: null,
     }
   }
 
   if (
     contextType === 'NFL_PERIOD_TEAM_COMPARE' ||
-    contextType === 'NFL_PERIOD_PLAYER_THRESHOLD'
+    contextType === 'NFL_PERIOD_PLAYER_THRESHOLD' ||
+    contextType === 'NFL_PERIOD_PLAYER_RANGE'
   ) {
     const period = asContextNumber(context, 'period')
     if (period === null) {
@@ -1659,7 +1919,7 @@ export const resolveNflQuestionForPlay = (
             ? awayStats.rushingYards
             : awayStats.points
       if (homeValue === awayValue) {
-        return { state: 'cancelled', answer: null, reason: 'TIE' }
+        return { state: 'resolved', answer: 'tie', reason: null }
       }
       return {
         state: 'resolved',
@@ -1671,7 +1931,7 @@ export const resolveNflQuestionForPlay = (
     const playerToken = asContextString(context, 'playerToken')
     const statType = asContextString(context, 'statType')
     const target = asContextNumber(context, 'target')
-    if (!playerToken || !statType || target === null) {
+    if (!playerToken || !statType) {
       return { state: 'cancelled', answer: null, reason: 'MISSING_STATS' }
     }
     const playerStats = periodStats.players.get(normalizeTarget(playerToken))
@@ -1681,11 +1941,52 @@ export const resolveNflQuestionForPlay = (
         : statType === 'RUSHING_YARDS'
           ? (playerStats?.rushingYards ?? 0)
           : (playerStats?.passingYards ?? 0)
+    if (contextType === 'NFL_PERIOD_PLAYER_RANGE') {
+      const cutoffs = asContextNumberArray(context, 'rangeCutoffs')
+      if (!cutoffs || cutoffs.length !== 3) {
+        return { state: 'cancelled', answer: null, reason: 'MISSING_STATS' }
+      }
+      return {
+        state: 'resolved',
+        answer: getRangeAnswer(value, cutoffs),
+        reason: null,
+      }
+    }
+    if (target === null) {
+      return { state: 'cancelled', answer: null, reason: 'MISSING_STATS' }
+    }
     return {
       state: 'resolved',
       answer: value >= target ? 'yes' : 'no',
       reason: null,
     }
+  }
+
+  if (contextType === 'NFL_RED_ZONE_OUTCOME') {
+    const terminalPlay = getConfirmedDriveTerminalPlay(
+      context,
+      play,
+      playsThroughCurrent,
+      gameCompleted
+    )
+    if (terminalPlay) {
+      return {
+        state: 'resolved',
+        answer: getRedZoneOutcome(context, terminalPlay),
+        reason: null,
+      }
+    }
+    if (!sameDrive || gameCompleted) {
+      const finalDrivePlay = getLastDrivePlay(context, playsThroughCurrent)
+      return {
+        state: 'resolved',
+        answer: finalDrivePlay
+          ? getRedZoneOutcome(context, finalDrivePlay)
+          : 'no_score',
+        reason: null,
+      }
+    }
+    return null
   }
 
   if (contextType === 'NFL_RED_ZONE') {
@@ -1709,6 +2010,38 @@ export const resolveNflQuestionForPlay = (
       return { state: 'resolved', answer: 'no', reason: null }
     }
     return null
+  }
+
+  if (contextType === 'NFL_DRIVE_PLAYER_RANGE') {
+    const terminalPlay = getConfirmedDriveTerminalPlay(
+      context,
+      play,
+      playsThroughCurrent,
+      gameCompleted
+    )
+    if (!terminalPlay && sameDrive && !gameCompleted) return null
+    const driveId = asContextString(context, 'driveId')
+    const playerToken = asContextString(context, 'playerToken')
+    const statType = asContextString(context, 'statType')
+    const cutoffs = asContextNumberArray(context, 'rangeCutoffs')
+    if (!driveId || !playerToken || !statType || cutoffs?.length !== 3) {
+      return { state: 'cancelled', answer: null, reason: 'MISSING_STATS' }
+    }
+    const playerStats = getNflDrivePlayerStats(
+      playsThroughCurrent,
+      driveId
+    ).get(normalizeTarget(playerToken))
+    const value =
+      statType === 'RECEPTIONS'
+        ? (playerStats?.receptions ?? 0)
+        : statType === 'RUSHING_YARDS'
+          ? (playerStats?.rushingYards ?? 0)
+          : (playerStats?.passingYards ?? 0)
+    return {
+      state: 'resolved',
+      answer: getRangeAnswer(value, cutoffs),
+      reason: null,
+    }
   }
 
   if (contextType === 'NFL_FIELD_GOAL') {
@@ -1757,9 +2090,9 @@ export const resolveNflQuestionForPlay = (
     }
     if (!sameDrive) {
       return {
-        state: 'cancelled',
-        answer: null,
-        reason: 'NO_FOURTH_DOWN_PLAY',
+        state: 'resolved',
+        answer: 'no',
+        reason: null,
       }
     }
     return null

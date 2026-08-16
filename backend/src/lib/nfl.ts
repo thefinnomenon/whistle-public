@@ -1201,7 +1201,8 @@ const deriveNflQuestionDedupe = (
   }
   if (
     templateId === 'NFL_POSSESSION_FIELD_GOAL' ||
-    templateId === 'NFL_NEXT_OFFENSIVE_PLAY_PASS'
+    templateId === 'NFL_NEXT_OFFENSIVE_PLAY_PASS' ||
+    templateId === 'NFL_DRIVE_PLAYER_PASSING_YARDS_RANGE'
   ) {
     return driveId ? { timeoutQuestionDriveId: driveId } : {}
   }
@@ -1442,6 +1443,16 @@ const parseStoredStringRecord = (
   return entries.length > 0 ? Object.fromEntries(entries) : null
 }
 
+const parseStoredNumberArray = (
+  value: JsonValue | undefined
+): number[] | null => {
+  const values = asArray(value)
+  return values.length > 0 &&
+    values.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+    ? (values as number[])
+    : null
+}
+
 const parseStoredResolutionContext = (
   value: JsonValue | undefined
 ): ResolutionContext | null => {
@@ -1469,6 +1480,7 @@ const parseStoredResolutionContext = (
     playerToken: asString(context.playerToken),
     playerDisplayName: asString(context.playerDisplayName),
     choices: parseStoredChoices(context.choices) ?? undefined,
+    rangeCutoffs: parseStoredNumberArray(context.rangeCutoffs) ?? undefined,
     receiverChoiceByTarget:
       parseStoredStringRecord(context.receiverChoiceByTarget) ?? undefined,
   }

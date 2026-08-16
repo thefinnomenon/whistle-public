@@ -20,6 +20,7 @@ import Svg, { Circle } from 'react-native-svg'
 
 import { analytics } from '@/lib/analytics'
 import { env } from '@/lib/env'
+import { getQuestionPoints } from '@/lib/questionPoints'
 
 type Props = {
   question: Question | null
@@ -249,6 +250,9 @@ export function QuestionAnswerModal({
         <Pressable className="bg-white dark:bg-gray-800 rounded-2xl p-6 mx-6 w-5/6 max-w-md">
           <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 text-center">
             {question.question}
+          </Text>
+          <Text className="text-sm font-semibold text-blue-600 dark:text-blue-300 mb-4 text-center">
+            Worth {getQuestionPoints(question)} points
           </Text>
 
           <View className="gap-3">
