@@ -9,8 +9,10 @@ import {
   buildNflQuestionCandidate,
   buildNflStatRange,
   getNflPeriodStats,
+  NFL_DRIVE_QUESTION_MIN_AGE_MS,
   NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS,
   NFL_QUESTION_MAX_SOURCE_AGE_MS,
+  NFL_TEMPLATE_COOLDOWN_MS,
   projectNflPeriodPlayerThreshold,
   resolveNflQuestionForPlay,
   type NflActiveQuestion,
@@ -182,6 +184,7 @@ const buildCandidate = (
     timeoutQuestionDriveIds: [],
     gameQuestionKeys: ['winner'],
     periodQuestionKeys: ['team:1', 'player:1'],
+    templateUseCounts: { NFL_RED_ZONE_SCORING_METHOD: 1 },
     athletes,
   })
 
@@ -201,6 +204,31 @@ const redZoneCandidate = buildCandidate([driveStart, redZoneEntry])
 assert.equal(redZoneCandidate?.priority, 'RED_ZONE')
 assert.equal(redZoneCandidate?.redZoneDriveId, 'drive_1')
 assert.equal(redZoneCandidate?.redZonePeriodKey, '1')
+
+const redZoneCooldownCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, redZoneEntry],
+  anchorPlay: redZoneEntry,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  athletes,
+  templateUseCounts: {
+    NFL_RED_ZONE_OUTCOME: 2,
+    NFL_RED_ZONE_SCORING_METHOD: 1,
+  },
+  templateLastUsedAtMs: {
+    NFL_RED_ZONE_SCORING_METHOD:
+      BASE_TIME_MS + 131_000 - NFL_TEMPLATE_COOLDOWN_MS + 1,
+  },
+})
+assert.equal(redZoneCooldownCandidate, null)
 
 const duplicatePeriodRedZoneCandidate = buildNflQuestionCandidate({
   plays: [driveStart, redZoneEntry],
@@ -223,14 +251,55 @@ const delayedRedZoneCandidate = buildCandidate(
   [driveStart, redZoneEntry],
   BASE_TIME_MS + 130_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1
 )
-assert.equal(delayedRedZoneCandidate?.priority, 'RED_ZONE')
-assert.deepEqual(delayedRedZoneCandidate?.payload.selectionReason?.slice(-2), [
-  {
-    code: 'NFL_SOURCE_AGE_GUARD',
-    detail: `${NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS}`,
-  },
-  { code: 'NFL_SOURCE_AGE_POLICY', detail: 'ENFORCE' },
-])
+assert.equal(delayedRedZoneCandidate, null)
+
+const observedDelayedRedZoneCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, redZoneEntry],
+  anchorPlay: redZoneEntry,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 130_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  athletes,
+  sourceAgePolicy: 'OBSERVE',
+})
+assert.equal(observedDelayedRedZoneCandidate?.priority, 'RED_ZONE')
+
+const delayedFeedRedZoneCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, redZoneEntry],
+  anchorPlay: redZoneEntry,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  athletes,
+  allowShortHorizonQuestions: false,
+})
+assert.equal(delayedFeedRedZoneCandidate, null)
+assert.equal(
+  observedDelayedRedZoneCandidate?.payload.selectionReason?.find(
+    (reason) => reason.code === 'NFL_SOURCE_AGE_GUARD'
+  )?.detail,
+  `${NFL_QUESTION_MAX_SOURCE_AGE_MS}`
+)
+assert.equal(
+  observedDelayedRedZoneCandidate?.payload.selectionReason?.find(
+    (reason) => reason.code === 'NFL_TEMPLATE_USE_COUNT_BEFORE'
+  )?.detail,
+  '0'
+)
 const staleRedZoneCandidate = buildCandidate(
   [driveStart, redZoneEntry],
   BASE_TIME_MS + 130_000 + NFL_QUESTION_MAX_LONG_HORIZON_SOURCE_AGE_MS + 1
@@ -241,6 +310,23 @@ const youngRedZoneEntry = buildPlay('young_red_zone_entry', 30_000, {
   end: redZoneEntry.end,
 })
 assert.equal(buildCandidate([driveStart, youngRedZoneEntry]), null)
+
+const justBeforeDrivePreWindow = buildPlay(
+  'just_before_drive_pre_window',
+  NFL_DRIVE_QUESTION_MIN_AGE_MS - 1,
+  { end: redZoneEntry.end }
+)
+assert.equal(buildCandidate([driveStart, justBeforeDrivePreWindow]), null)
+
+const atDrivePreWindow = buildPlay(
+  'at_drive_pre_window',
+  NFL_DRIVE_QUESTION_MIN_AGE_MS,
+  { end: redZoneEntry.end }
+)
+assert.equal(
+  buildCandidate([driveStart, atDrivePreWindow])?.priority,
+  'RED_ZONE'
+)
 
 assert.deepEqual(buildQuestionChoices(redZoneCandidate!.payload), [
   { id: 'touchdown', value: 'Touchdown' },
@@ -312,6 +398,72 @@ assert.deepEqual(
   { state: 'resolved', answer: 'turnover', reason: null }
 )
 
+const redZoneScoringMethodCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, redZoneEntry],
+  anchorPlay: redZoneEntry,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 131_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  templateUseCounts: { NFL_RED_ZONE_OUTCOME: 1 },
+  athletes,
+})
+assert.equal(
+  redZoneScoringMethodCandidate?.payload.templateId,
+  'NFL_RED_ZONE_SCORING_METHOD'
+)
+assert.deepEqual(buildQuestionChoices(redZoneScoringMethodCandidate!.payload), [
+  { id: 'passing_touchdown', value: 'Passing touchdown' },
+  { id: 'rushing_touchdown', value: 'Rushing touchdown' },
+  { id: 'other_touchdown', value: 'Other touchdown' },
+  { id: 'field_goal', value: 'Made field goal' },
+  { id: 'no_score', value: 'No score' },
+])
+const redZoneScoringMethodQuestion: NflActiveQuestion = {
+  id: 'question_red_zone_scoring_method',
+  templateId: redZoneScoringMethodCandidate!.payload.templateId,
+  windowType: 'NFL_DRIVE',
+  createdAtMs: BASE_TIME_MS + 130_000,
+  resolutionContext:
+    redZoneScoringMethodCandidate!.payload.resolutionContext ?? {},
+}
+assert.deepEqual(
+  resolveNflQuestionForPlay(
+    redZoneScoringMethodQuestion,
+    touchdownConfirmation,
+    [redZoneEntry, passingTouchdown, touchdownConfirmation]
+  ),
+  { state: 'resolved', answer: 'passing_touchdown', reason: null }
+)
+assert.equal(
+  buildNflQuestionCandidate({
+    plays: [driveStart, redZoneEntry],
+    anchorPlay: redZoneEntry,
+    homeTeam: 'ATL',
+    awayTeam: 'TB',
+    nowMs: BASE_TIME_MS + 131_000,
+    redZoneAskedDriveIds: [],
+    redZoneAskedPeriodKeys: [],
+    receiverQuestionKeys: [],
+    completionReceiverHalfKeys: [],
+    timeoutQuestionDriveIds: [],
+    gameQuestionKeys: ['winner'],
+    periodQuestionKeys: ['period:1'],
+    templateUseCounts: {
+      NFL_RED_ZONE_OUTCOME: 2,
+      NFL_RED_ZONE_SCORING_METHOD: 2,
+    },
+    athletes,
+  }),
+  null
+)
+
 const targetOne = buildPlay('target_1', 0, {
   type: 'Pass Reception',
   text: 'Q.Player pass short right to K.Pitts for 8 yards.',
@@ -328,56 +480,7 @@ const receiverCandidate = buildCandidate(
   [targetOne, targetTwo, receiverAnchor],
   BASE_TIME_MS + 132_000
 )
-assert.equal(receiverCandidate?.priority, 'RECEIVER_TARGET')
-assert.equal(
-  receiverCandidate?.payload.question,
-  "Will Kyle Pitts Sr. catch another pass on ATL's current drive?"
-)
-assert.equal(receiverCandidate?.payload.windowType, 'NFL_DRIVE')
-
-const receiverQuestion: NflActiveQuestion = {
-  id: 'question_receiver',
-  templateId: receiverCandidate?.payload.templateId ?? '',
-  windowType: 'NFL_DRIVE',
-  createdAtMs: BASE_TIME_MS + 131_000,
-  resolutionContext: receiverCandidate?.payload.resolutionContext ?? {},
-}
-const receiverCatch = buildPlay('target_3', 150_000, {
-  type: 'Pass Reception',
-  text: 'Q.Player pass short left to K.Pitts for 5 yards.',
-})
-assert.equal(
-  resolveNflQuestionForPlay(receiverQuestion, receiverCatch, [
-    receiverAnchor,
-    receiverCatch,
-  ]),
-  null
-)
-const receiverCatchConfirmation = buildPlay(
-  'receiver_catch_confirmation',
-  170_000
-)
-assert.deepEqual(
-  resolveNflQuestionForPlay(receiverQuestion, receiverCatchConfirmation, [
-    receiverAnchor,
-    receiverCatch,
-    receiverCatchConfirmation,
-  ]),
-  { state: 'resolved', answer: 'yes', reason: null }
-)
-const receiverDriveEnd = buildPlay('receiver_drive_end', 180_000, {
-  driveId: 'drive_2',
-  driveTeamId: '2',
-  driveTeamAbbreviation: 'TB',
-  possessionTeamId: '2',
-})
-assert.deepEqual(
-  resolveNflQuestionForPlay(receiverQuestion, receiverDriveEnd, [
-    receiverAnchor,
-    receiverDriveEnd,
-  ]),
-  { state: 'resolved', answer: 'no', reason: null }
-)
+assert.equal(receiverCandidate, null)
 
 const drivePassOne = buildPlay('drive_pass_one', 30_000, {
   type: 'Pass Reception',
@@ -408,7 +511,7 @@ const driveRangeTimeout = buildPlay('drive_range_timeout', 130_000, {
   type: 'Timeout',
   text: 'Timeout #1 by ATL.',
 })
-const driveRangeCandidate = buildNflQuestionCandidate({
+const driveOutcomeCandidate = buildNflQuestionCandidate({
   plays: [
     driveStart,
     drivePassOne,
@@ -430,23 +533,24 @@ const driveRangeCandidate = buildNflQuestionCandidate({
   periodQuestionKeys: ['team:1', 'player:1'],
   athletes: [...athletes, passerAthlete],
 })
-assert.equal(driveRangeCandidate?.priority, 'DRIVE_PLAYER')
+assert.equal(driveOutcomeCandidate?.priority, 'DRIVE_OUTCOME')
 assert.equal(
-  driveRangeCandidate?.payload.question,
-  'How many passing yards will Quentin Player finish this drive with?'
+  driveOutcomeCandidate?.payload.question,
+  "How will ATL's current drive end?"
 )
-assert.deepEqual(buildQuestionChoices(driveRangeCandidate!.payload), [
-  { id: 'range_0', value: '29 yards or fewer' },
-  { id: 'range_1', value: '30-39 yards' },
-  { id: 'range_2', value: '40-49 yards' },
-  { id: 'range_3', value: '50 yards or more' },
+assert.deepEqual(buildQuestionChoices(driveOutcomeCandidate!.payload), [
+  { id: 'touchdown', value: 'Touchdown' },
+  { id: 'field_goal', value: 'Made field goal' },
+  { id: 'punt', value: 'Punt' },
+  { id: 'turnover', value: 'Turnover or failed fourth down' },
+  { id: 'no_score', value: 'Missed field goal or end of period' },
 ])
-const driveRangeQuestion: NflActiveQuestion = {
-  id: 'question_drive_range',
-  templateId: driveRangeCandidate!.payload.templateId,
+const driveOutcomeQuestion: NflActiveQuestion = {
+  id: 'question_drive_outcome',
+  templateId: driveOutcomeCandidate!.payload.templateId,
   windowType: 'NFL_DRIVE',
   createdAtMs: BASE_TIME_MS + 130_000,
-  resolutionContext: driveRangeCandidate!.payload.resolutionContext ?? {},
+  resolutionContext: driveOutcomeCandidate!.payload.resolutionContext ?? {},
 }
 const drivePunt = buildPlay('drive_punt', 150_000, { type: 'Punt' })
 const driveRangeNextDrivePlay = buildPlay('drive_range_next_play', 170_000, {
@@ -456,7 +560,7 @@ const driveRangeNextDrivePlay = buildPlay('drive_range_next_play', 170_000, {
   possessionTeamId: '2',
 })
 assert.deepEqual(
-  resolveNflQuestionForPlay(driveRangeQuestion, driveRangeNextDrivePlay, [
+  resolveNflQuestionForPlay(driveOutcomeQuestion, driveRangeNextDrivePlay, [
     driveStart,
     drivePassOne,
     drivePassTwo,
@@ -466,7 +570,7 @@ assert.deepEqual(
     drivePunt,
     driveRangeNextDrivePlay,
   ]),
-  { state: 'resolved', answer: 'range_0', reason: null }
+  { state: 'resolved', answer: 'punt', reason: null }
 )
 
 const fourthDownPlay = buildPlay('fourth_down', 0, {
@@ -483,6 +587,7 @@ const fourthDownPlay = buildPlay('fourth_down', 0, {
 const fieldGoalTimeout = buildPlay('field_goal_timeout', 1_000, {
   type: 'Timeout',
   text: 'Timeout #2 by TB.',
+  clock: '8:00',
 })
 fourthDownPlay.wallclock = new Date(BASE_TIME_MS + 130_000).toISOString()
 fieldGoalTimeout.wallclock = new Date(BASE_TIME_MS + 131_000).toISOString()
@@ -490,7 +595,14 @@ const fieldGoalCandidate = buildCandidate(
   [driveStart, fourthDownPlay, fieldGoalTimeout],
   BASE_TIME_MS + 132_000
 )
-assert.equal(fieldGoalCandidate?.priority, 'FIELD_GOAL')
+assert.equal(fieldGoalCandidate?.priority, 'FOURTH_DOWN')
+assert.equal(fieldGoalCandidate?.payload.templateId, 'NFL_FOURTH_DOWN_RESULT')
+assert.deepEqual(buildQuestionChoices(fieldGoalCandidate!.payload), [
+  { id: 'first_down', value: 'First down or touchdown' },
+  { id: 'field_goal', value: 'Made field goal' },
+  { id: 'punt', value: 'Punt' },
+  { id: 'stopped', value: 'Stopped or missed kick' },
+])
 const staleFieldGoalCandidate = buildCandidate(
   [driveStart, fourthDownPlay, fieldGoalTimeout],
   BASE_TIME_MS + 131_000 + NFL_QUESTION_MAX_SOURCE_AGE_MS + 1
@@ -512,7 +624,7 @@ const observedStaleFieldGoalCandidate = buildNflQuestionCandidate({
   athletes,
   sourceAgePolicy: 'OBSERVE',
 })
-assert.equal(observedStaleFieldGoalCandidate?.priority, 'FIELD_GOAL')
+assert.equal(observedStaleFieldGoalCandidate?.priority, 'FOURTH_DOWN')
 const staleFieldGoalPeriodFallback = buildNflQuestionCandidate({
   plays: [driveStart, fourthDownPlay, fieldGoalTimeout],
   anchorPlay: fieldGoalTimeout,
@@ -526,6 +638,11 @@ const staleFieldGoalPeriodFallback = buildNflQuestionCandidate({
   timeoutQuestionDriveIds: [],
   gameQuestionKeys: ['winner'],
   periodQuestionKeys: [],
+  templateUseCounts: {
+    NFL_PERIOD_TEAM_COMPARE_POINTS: 2,
+    NFL_PERIOD_TEAM_COMPARE_RUSHING_YARDS: 2,
+    NFL_PERIOD_TOTAL_POINTS_RANGE: 2,
+  },
   athletes,
 })
 assert.equal(staleFieldGoalPeriodFallback?.priority, 'PERIOD_TEAM')
@@ -533,7 +650,7 @@ assert.equal(staleFieldGoalPeriodFallback?.priority, 'PERIOD_TEAM')
 const fieldGoalQuestion: NflActiveQuestion = {
   id: 'question_field_goal',
   templateId: fieldGoalCandidate?.payload.templateId ?? '',
-  windowType: 'NFL_DRIVE',
+  windowType: 'NFL_NEXT_PLAY',
   createdAtMs: BASE_TIME_MS + 1_000,
   resolutionContext: fieldGoalCandidate?.payload.resolutionContext ?? {},
 }
@@ -541,6 +658,15 @@ const madeFieldGoal = buildPlay('made_field_goal', 20_000, {
   type: 'Field Goal Good',
   scoringPlay: true,
   scoreValue: 3,
+  start: {
+    down: 4,
+    distance: 6,
+    yardLine: 83,
+    yardsToEndzone: 17,
+    downDistanceText: '4th & 6 at TB 17',
+    possessionText: 'TB 17',
+    teamId: '1',
+  },
 })
 assert.equal(
   resolveNflQuestionForPlay(fieldGoalQuestion, madeFieldGoal, [
@@ -558,7 +684,7 @@ assert.deepEqual(
     madeFieldGoal,
     fieldGoalConfirmation,
   ]),
-  { state: 'resolved', answer: 'yes', reason: null }
+  { state: 'resolved', answer: 'field_goal', reason: null }
 )
 
 const shortFourthDownPlay = buildPlay('short_fourth_down', 130_000, {
@@ -584,7 +710,7 @@ const fourthDownCandidate = buildCandidate([
 assert.equal(fourthDownCandidate?.priority, 'FOURTH_DOWN')
 assert.equal(
   fourthDownCandidate?.payload.question,
-  'Will ATL convert this 4th & 1?'
+  "How will ATL's 4th & 1 end?"
 )
 assert.equal(
   buildNflQuestionCandidate({
@@ -647,7 +773,7 @@ assert.deepEqual(
     convertedFourthDown,
     fourthDownConfirmation,
   ]),
-  { state: 'resolved', answer: 'yes', reason: null }
+  { state: 'resolved', answer: 'first_down', reason: null }
 )
 
 const failedFourthDown = buildPlay('failed_fourth_down', 150_000, {
@@ -686,7 +812,7 @@ assert.deepEqual(
     failedFourthDown,
     failedFourthDownConfirmation,
   ]),
-  { state: 'resolved', answer: 'no', reason: null }
+  { state: 'resolved', answer: 'stopped', reason: null }
 )
 
 const puntRangeFourthDown = buildPlay('punt_range_fourth_down', 0, {
@@ -710,15 +836,22 @@ assert.equal(
   buildCandidate(
     [driveStart, puntRangeFourthDown, puntTimeout],
     BASE_TIME_MS + 132_000
-  ),
-  null
+  )?.priority,
+  'FOURTH_DOWN'
 )
 
-const youngDriveSetup = buildPlay('young_drive_setup', 90_000)
-const youngDriveTimeout = buildPlay('young_drive_timeout', 100_000, {
-  type: 'Timeout',
-  text: 'Timeout #1 by ATL.',
-})
+const youngDriveSetup = buildPlay(
+  'young_drive_setup',
+  NFL_DRIVE_QUESTION_MIN_AGE_MS - 10_000
+)
+const youngDriveTimeout = buildPlay(
+  'young_drive_timeout',
+  NFL_DRIVE_QUESTION_MIN_AGE_MS - 1,
+  {
+    type: 'Timeout',
+    text: 'Timeout #1 by ATL.',
+  }
+)
 assert.equal(
   buildCandidate([driveStart, youngDriveSetup, youngDriveTimeout]),
   null
@@ -731,7 +864,146 @@ const stableDriveTimeout = buildPlay('stable_drive_timeout', 131_000, {
 })
 assert.equal(
   buildCandidate([driveStart, stableDriveSetup, stableDriveTimeout])?.priority,
-  'TIMEOUT_NEXT_PLAY'
+  'DRIVE_OUTCOME'
+)
+
+const nextFirstDownCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, stableDriveSetup, stableDriveTimeout],
+  anchorPlay: stableDriveTimeout,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 132_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  templateUseCounts: { NFL_DRIVE_OUTCOME: 2 },
+  athletes,
+})
+assert.equal(nextFirstDownCandidate?.priority, 'NEXT_FIRST_DOWN')
+assert.equal(
+  nextFirstDownCandidate?.payload.question,
+  'How will ATL get its next first down on this drive?'
+)
+
+const nextPlayResultCandidate = buildNflQuestionCandidate({
+  plays: [driveStart, stableDriveSetup, stableDriveTimeout],
+  anchorPlay: stableDriveTimeout,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 132_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: ['period:1'],
+  templateUseCounts: {
+    NFL_DRIVE_OUTCOME: 2,
+    NFL_NEXT_FIRST_DOWN_METHOD: 2,
+  },
+  athletes,
+})
+assert.equal(nextPlayResultCandidate?.priority, 'TIMEOUT_NEXT_PLAY')
+assert.deepEqual(buildQuestionChoices(nextPlayResultCandidate!.payload), [
+  { id: 'run', value: 'Run' },
+  { id: 'completed_pass', value: 'Completed pass' },
+  {
+    id: 'unsuccessful_pass',
+    value: 'Incomplete pass, sack, or interception',
+  },
+  { id: 'penalty', value: 'Penalty or no play' },
+  { id: 'kick_or_other', value: 'Kick or something else' },
+])
+
+const nextFirstDownQuestion: NflActiveQuestion = {
+  id: 'question_next_first_down',
+  templateId: nextFirstDownCandidate!.payload.templateId,
+  windowType: 'NFL_DRIVE',
+  createdAtMs: BASE_TIME_MS + 131_000,
+  resolutionContext: nextFirstDownCandidate!.payload.resolutionContext ?? {},
+}
+const lingeringFirstDownTimeout = buildPlay(
+  'lingering_first_down_timeout',
+  140_000,
+  {
+    type: 'Timeout',
+    text: 'Timeout #2 by ATL.',
+    end: {
+      down: 1,
+      distance: 10,
+      yardLine: 50,
+      yardsToEndzone: 50,
+      downDistanceText: '1st & 10',
+      possessionText: 'ATL 50',
+      teamId: '1',
+    },
+  }
+)
+assert.equal(
+  resolveNflQuestionForPlay(nextFirstDownQuestion, lingeringFirstDownTimeout, [
+    stableDriveTimeout,
+    lingeringFirstDownTimeout,
+  ]),
+  null
+)
+const firstDownPass = buildPlay('first_down_pass', 150_000, {
+  type: 'Pass Reception',
+  text: 'Q.Player pass short right to K.Pitts for 12 yards.',
+  statYardage: 12,
+  start: {
+    down: 2,
+    distance: 5,
+    yardLine: 50,
+    yardsToEndzone: 50,
+    downDistanceText: '2nd & 5',
+    possessionText: 'ATL 50',
+    teamId: '1',
+  },
+  end: {
+    down: 1,
+    distance: 10,
+    yardLine: 62,
+    yardsToEndzone: 38,
+    downDistanceText: '1st & 10',
+    possessionText: 'TB 38',
+    teamId: '1',
+  },
+})
+assert.equal(
+  resolveNflQuestionForPlay(nextFirstDownQuestion, firstDownPass, [
+    stableDriveTimeout,
+    firstDownPass,
+  ]),
+  null
+)
+const firstDownConfirmation = buildPlay('first_down_confirmation', 170_000)
+assert.deepEqual(
+  resolveNflQuestionForPlay(nextFirstDownQuestion, firstDownConfirmation, [
+    stableDriveTimeout,
+    firstDownPass,
+    firstDownConfirmation,
+  ]),
+  { state: 'resolved', answer: 'pass', reason: null }
+)
+
+const nextPlayResultQuestion: NflActiveQuestion = {
+  id: 'question_next_play_result',
+  templateId: nextPlayResultCandidate!.payload.templateId,
+  windowType: 'NFL_NEXT_PLAY',
+  createdAtMs: BASE_TIME_MS + 131_000,
+  resolutionContext: nextPlayResultCandidate!.payload.resolutionContext ?? {},
+}
+assert.deepEqual(
+  resolveNflQuestionForPlay(nextPlayResultQuestion, firstDownPass, [
+    stableDriveTimeout,
+    firstDownPass,
+  ]),
+  { state: 'resolved', answer: 'completed_pass', reason: null }
 )
 
 const receiverOneTarget = buildPlay('receiver_one_target', 20_000, {
@@ -907,7 +1179,7 @@ assert.equal(
     periodQuestionKeys: ['team:1', 'player:1'],
     athletes,
   })?.priority,
-  'TIMEOUT_NEXT_PLAY'
+  'DRIVE_OUTCOME'
 )
 
 const multiReceiverQuestion: NflActiveQuestion = {
@@ -1049,6 +1321,11 @@ const periodTeamCandidate = buildNflQuestionCandidate({
   timeoutQuestionDriveIds: [],
   gameQuestionKeys: ['winner'],
   periodQuestionKeys: [],
+  templateUseCounts: {
+    NFL_PERIOD_TEAM_COMPARE_POINTS: 2,
+    NFL_PERIOD_TEAM_COMPARE_RUSHING_YARDS: 2,
+    NFL_PERIOD_TOTAL_POINTS_RANGE: 2,
+  },
   athletes,
 })
 assert.equal(periodTeamCandidate?.priority, 'PERIOD_TEAM')
@@ -1109,6 +1386,53 @@ assert.deepEqual(
   { state: 'resolved', answer: 'ATL', reason: null }
 )
 
+const periodTotalPointsCandidate = buildNflQuestionCandidate({
+  plays: [firstQuarterEnd, secondQuarterPass],
+  anchorPlay: secondQuarterPass,
+  homeTeam: 'ATL',
+  awayTeam: 'TB',
+  nowMs: BASE_TIME_MS + 11_000,
+  redZoneAskedDriveIds: [],
+  redZoneAskedPeriodKeys: [],
+  receiverQuestionKeys: [],
+  completionReceiverHalfKeys: [],
+  timeoutQuestionDriveIds: [],
+  gameQuestionKeys: ['winner'],
+  periodQuestionKeys: [],
+  templateUseCounts: {
+    NFL_PERIOD_TEAM_COMPARE_POINTS: 2,
+    NFL_PERIOD_TEAM_COMPARE_PASSING_YARDS: 2,
+    NFL_PERIOD_TEAM_COMPARE_RUSHING_YARDS: 2,
+  },
+  athletes,
+})
+assert.equal(
+  periodTotalPointsCandidate?.payload.question,
+  'How many total points will be scored in the second quarter?'
+)
+assert.deepEqual(buildQuestionChoices(periodTotalPointsCandidate!.payload), [
+  { id: 'range_0', value: '6 points or fewer' },
+  { id: 'range_1', value: '7-13 points' },
+  { id: 'range_2', value: '14-20 points' },
+  { id: 'range_3', value: '21 points or more' },
+])
+const periodTotalPointsQuestion: NflActiveQuestion = {
+  id: 'question_period_total_points',
+  templateId: periodTotalPointsCandidate!.payload.templateId,
+  windowType: 'PERIOD',
+  createdAtMs: BASE_TIME_MS,
+  resolutionContext:
+    periodTotalPointsCandidate!.payload.resolutionContext ?? {},
+}
+assert.deepEqual(
+  resolveNflQuestionForPlay(
+    periodTotalPointsQuestion,
+    secondQuarterEnd,
+    periodPlays
+  ),
+  { state: 'resolved', answer: 'range_0', reason: null }
+)
+
 const secondQuarterCatchTwo = buildPlay('second_quarter_catch_two', 40_000, {
   period: 2,
   clock: '10:00',
@@ -1120,7 +1444,7 @@ const playerPeriodCandidate = buildNflQuestionCandidate({
   plays: [firstQuarterEnd, secondQuarterPass, secondQuarterCatchTwo],
   anchorPlay: secondQuarterCatchTwo,
   homeTeam: 'ATL',
-  awayTeam: 'TB',
+  awayTeam: 'CAR',
   nowMs: BASE_TIME_MS + 41_000,
   redZoneAskedDriveIds: [],
   redZoneAskedPeriodKeys: [],
@@ -1128,7 +1452,7 @@ const playerPeriodCandidate = buildNflQuestionCandidate({
   completionReceiverHalfKeys: [],
   timeoutQuestionDriveIds: [],
   gameQuestionKeys: ['winner'],
-  periodQuestionKeys: ['team:2'],
+  periodQuestionKeys: [],
   athletes,
 })
 assert.equal(playerPeriodCandidate?.priority, 'PERIOD_PLAYER')

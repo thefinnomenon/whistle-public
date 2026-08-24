@@ -41,7 +41,9 @@ const NFL_OPEN_GAMES_REFRESH_MS = 60_000
 const NFL_OPEN_GAMES_WATCH_RESTART_MS = 30_000
 const NFL_OPEN_GAMES_WATCH_INITIAL_TIMEOUT_MS = 5_000
 const NFL_QUESTION_SOURCE_AGE_POLICY: NflQuestionSourceAgePolicy =
-  process.env.NFL_ENFORCE_QUESTION_SOURCE_AGE === '1' ? 'ENFORCE' : 'OBSERVE'
+  process.env.NFL_ENFORCE_QUESTION_SOURCE_AGE === '0' ? 'OBSERVE' : 'ENFORCE'
+const NFL_ALLOW_SHORT_HORIZON_QUESTIONS =
+  process.env.NFL_ALLOW_SHORT_HORIZON_QUESTIONS === '1'
 
 const NFL_TEAM_CODES = new Set([
   'ARI',
@@ -217,6 +219,8 @@ type NflRuntimeState = {
   timeoutQuestionDriveIds: string[]
   gameQuestionKeys: string[]
   periodQuestionKeys: string[]
+  templateUseCounts: Record<string, number>
+  templateLastUsedAtMs: Record<string, number>
   questionCount: number
   lastQuestionAtMs: number | null
 }
@@ -1170,11 +1174,13 @@ const deriveNflQuestionDedupe = (
   const targetToken = contextString(context, 'targetToken')
   const period = contextNumber(context, 'period')
   if (templateId === 'NFL_GAME_WINNER') return { gameQuestionKey: 'winner' }
-  if (templateId?.startsWith('NFL_PERIOD_TEAM_COMPARE_') && period) {
-    return { periodQuestionKey: `team:${period}` }
-  }
-  if (templateId?.startsWith('NFL_PERIOD_PLAYER_') && period) {
-    return { periodQuestionKey: `player:${period}` }
+  if (
+    (templateId?.startsWith('NFL_PERIOD_TEAM_COMPARE_') ||
+      templateId?.startsWith('NFL_PERIOD_PLAYER_') ||
+      templateId === 'NFL_PERIOD_TOTAL_POINTS_RANGE') &&
+    period
+  ) {
+    return { periodQuestionKey: `period:${period}` }
   }
   if (templateId?.startsWith('NFL_RED_ZONE_')) {
     return {
@@ -1182,7 +1188,10 @@ const deriveNflQuestionDedupe = (
       ...(period ? { redZonePeriodKey: String(period) } : {}),
     }
   }
-  if (templateId === 'NFL_FOURTH_DOWN_CONVERSION') {
+  if (
+    templateId === 'NFL_FOURTH_DOWN_CONVERSION' ||
+    templateId === 'NFL_FOURTH_DOWN_RESULT'
+  ) {
     return {
       ...(driveId ? { timeoutQuestionDriveId: driveId } : {}),
       ...(period ? { periodQuestionKey: `fourth:${period}` } : {}),
@@ -1202,7 +1211,10 @@ const deriveNflQuestionDedupe = (
   if (
     templateId === 'NFL_POSSESSION_FIELD_GOAL' ||
     templateId === 'NFL_NEXT_OFFENSIVE_PLAY_PASS' ||
-    templateId === 'NFL_DRIVE_PLAYER_PASSING_YARDS_RANGE'
+    templateId === 'NFL_NEXT_OFFENSIVE_PLAY_RESULT' ||
+    templateId === 'NFL_DRIVE_PLAYER_PASSING_YARDS_RANGE' ||
+    templateId === 'NFL_DRIVE_OUTCOME' ||
+    templateId === 'NFL_NEXT_FIRST_DOWN_METHOD'
   ) {
     return driveId ? { timeoutQuestionDriveId: driveId } : {}
   }
@@ -1246,6 +1258,8 @@ const loadNflRuntimeState = async (
       timeoutQuestionDriveIds: [],
       gameQuestionKeys: [],
       periodQuestionKeys: [],
+      templateUseCounts: {},
+      templateLastUsedAtMs: {},
       questionCount: questionsSnapshot.size,
       lastQuestionAtMs: null,
     }
@@ -1259,13 +1273,21 @@ const loadNflRuntimeState = async (
 
     for (const questionDoc of questionsSnapshot.docs) {
       const question = questionDoc.data() as StoredNflQuestion
-      const resolutionContext = parseStoredResolutionContext(
-        question.resolutionContext
-      )
       const createdAtMs =
         timestampMillis(question.triggeredAt) ??
         timestampMillis(question.createdAt) ??
         0
+      if (question.engineTag) {
+        runtime.templateUseCounts[question.engineTag] =
+          (runtime.templateUseCounts[question.engineTag] ?? 0) + 1
+        runtime.templateLastUsedAtMs[question.engineTag] = Math.max(
+          runtime.templateLastUsedAtMs[question.engineTag] ?? 0,
+          createdAtMs
+        )
+      }
+      const resolutionContext = parseStoredResolutionContext(
+        question.resolutionContext
+      )
       if (
         runtime.lastQuestionAtMs === null ||
         createdAtMs > runtime.lastQuestionAtMs
@@ -1706,6 +1728,8 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
     let timeoutQuestionDriveIds = runtime.timeoutQuestionDriveIds
     let gameQuestionKeys = runtime.gameQuestionKeys
     let periodQuestionKeys = runtime.periodQuestionKeys
+    let templateUseCounts = runtime.templateUseCounts
+    let templateLastUsedAtMs = runtime.templateLastUsedAtMs
     let questionCount = runtime.questionCount
     let lastQuestionAtMs = runtime.lastQuestionAtMs
     if (
@@ -1725,6 +1749,15 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         })
         activeQuestions.push(toActiveNflQuestion(questionId, payload, nowMs))
         gameQuestionKeys = [...gameQuestionKeys, 'winner'].slice(-20)
+        templateUseCounts = {
+          ...templateUseCounts,
+          [payload.templateId]:
+            (templateUseCounts[payload.templateId] ?? 0) + 1,
+        }
+        templateLastUsedAtMs = {
+          ...templateLastUsedAtMs,
+          [payload.templateId]: nowMs,
+        }
         questionCount += 1
         lastQuestionAtMs = nowMs
         console.log(
@@ -1779,6 +1812,9 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
         gameQuestionKeys,
         periodQuestionKeys,
         athletes: summary.athletes,
+        templateUseCounts,
+        templateLastUsedAtMs,
+        allowShortHorizonQuestions: NFL_ALLOW_SHORT_HORIZON_QUESTIONS,
         sourceAgePolicy: NFL_QUESTION_SOURCE_AGE_POLICY,
       })
       const candidate = candidateDecision.candidate
@@ -1794,7 +1830,6 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
       } else if (candidate) {
         const bypassCadence =
           candidate.priority === 'RED_ZONE' ||
-          candidate.priority === 'FIELD_GOAL' ||
           candidate.priority === 'FOURTH_DOWN' ||
           candidate.priority === 'GAME' ||
           candidate.priority === 'PERIOD_TEAM'
@@ -1825,6 +1860,15 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
           )
           lastQuestionAtMs = nowMs
           questionCount += 1
+          templateUseCounts = {
+            ...templateUseCounts,
+            [candidate.payload.templateId]:
+              (templateUseCounts[candidate.payload.templateId] ?? 0) + 1,
+          }
+          templateLastUsedAtMs = {
+            ...templateLastUsedAtMs,
+            [candidate.payload.templateId]: nowMs,
+          }
           if (candidate.redZoneDriveId) {
             redZoneAskedDriveIds = [
               ...redZoneAskedDriveIds.filter(
@@ -1901,6 +1945,8 @@ const syncOpenNflGame = async (cachedGame: CachedOpenNflGame) => {
     runtime.timeoutQuestionDriveIds = timeoutQuestionDriveIds
     runtime.gameQuestionKeys = gameQuestionKeys
     runtime.periodQuestionKeys = periodQuestionKeys
+    runtime.templateUseCounts = templateUseCounts
+    runtime.templateLastUsedAtMs = templateLastUsedAtMs
     runtime.questionCount = questionCount
     runtime.lastQuestionAtMs = lastQuestionAtMs
 

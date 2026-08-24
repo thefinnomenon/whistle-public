@@ -48,6 +48,8 @@ const run = async (): Promise<void> => {
   let timeoutQuestionDriveIds: string[] = []
   let gameQuestionKeys: string[] = []
   let periodQuestionKeys: string[] = []
+  let templateUseCounts: Record<string, number> = {}
+  let templateLastUsedAtMs: Record<string, number> = {}
   let lastQuestionAtMs: number | null = null
   let questionSequence = 0
   let created = 0
@@ -106,6 +108,8 @@ const run = async (): Promise<void> => {
       gameQuestionKeys,
       periodQuestionKeys,
       athletes: summary.athletes,
+      templateUseCounts,
+      templateLastUsedAtMs,
       sourceAgePolicy,
     })
     if (!candidate) continue
@@ -120,7 +124,6 @@ const run = async (): Promise<void> => {
     )
     const bypassCadence =
       candidate.priority === 'RED_ZONE' ||
-      candidate.priority === 'FIELD_GOAL' ||
       candidate.priority === 'FOURTH_DOWN' ||
       candidate.priority === 'GAME' ||
       candidate.priority === 'PERIOD_TEAM'
@@ -140,6 +143,15 @@ const run = async (): Promise<void> => {
     })
     created += 1
     lastQuestionAtMs = wallclockMs
+    templateUseCounts = {
+      ...templateUseCounts,
+      [candidate.payload.templateId]:
+        (templateUseCounts[candidate.payload.templateId] ?? 0) + 1,
+    }
+    templateLastUsedAtMs = {
+      ...templateLastUsedAtMs,
+      [candidate.payload.templateId]: wallclockMs,
+    }
     if (candidate.redZoneDriveId) {
       redZoneAskedDriveIds = [...redZoneAskedDriveIds, candidate.redZoneDriveId]
     }
@@ -181,7 +193,7 @@ const run = async (): Promise<void> => {
         : ''
     const choices = buildQuestionChoices(candidate.payload)
     console.log(
-      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority}${projectionLog} points=${calculateQuestionPoints(choices.length)} text=${candidate.payload.question} choices=${choices
+      `[sim-nfl] question id=${id} period=${play.period ?? 0} clock=${play.clock ?? 'null'} play=${play.id} priority=${candidate.priority} template=${candidate.payload.templateId}${projectionLog} points=${calculateQuestionPoints(choices.length)} text=${candidate.payload.question} choices=${choices
         .map((choice) => choice.value)
         .join('|')}`
     )
