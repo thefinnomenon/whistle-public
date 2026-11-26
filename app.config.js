@@ -165,8 +165,6 @@ export default {
       domain: process.env.EXPO_PUBLIC_DOMAIN,
       mixpanelToken: process.env.EXPO_PUBLIC_MIXPANEL_TOKEN,
       sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-      resendApiKey: process.env.EXPO_PUBLIC_RESEND_API_KEY,
-      emailFrom: process.env.EMAIL_FROM,
       googleWebClientIdAndroid:
         process.env.EXPO_PUBLIC_ANDROID_GOOGLE_WEB_CLIENT_ID,
       googleWebClientIdIos: process.env.EXPO_PUBLIC_IOS_GOOGLE_WEB_CLIENT_ID,

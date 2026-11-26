@@ -4,16 +4,16 @@ Next.js admin dashboard for managing Whistle games and questions.
 
 ## Getting Started
 
-1. Make sure you have the `.env.local` file with Firebase credentials (already created)
+1. Create an ignored `.env.local` with configuration for your own Firebase project.
 
-2. Install dependencies (already done):
+2. Install dependencies:
 ```bash
-npm install
+yarn install
 ```
 
 3. Run the development server:
 ```bash
-npm run dev
+yarn dev
 ```
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
@@ -78,3 +78,8 @@ MIXPANEL_EXPORT_BASE_URL=https://data.mixpanel.com/api/2.0/export
 - [ ] Add game edit page
 - [ ] Add questions management
 - [ ] Add authentication (Firebase Auth)
+
+
+## Public archive setup
+
+Dependencies and environment files are not included. Install this package with Yarn and provide your own ignored local configuration and Firebase project before running it. No original services have been tested for this archive.

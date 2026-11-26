@@ -20,8 +20,6 @@ export const env = {
   APP_ENV: appEnv,
   MIXPANEL_TOKEN: extra.mixpanelToken ?? process.env.EXPO_PUBLIC_MIXPANEL_TOKEN,
   SENTRY_DSN: extra.sentryDsn ?? process.env.EXPO_PUBLIC_SENTRY_DSN,
-  RESEND_API_KEY: extra.resendApiKey ?? process.env.EXPO_PUBLIC_RESEND_API_KEY,
-  EMAIL_FROM: extra.emailFrom ?? process.env.EMAIL_FROM,
   DOMAIN: extra.domain ?? process.env.EXPO_PUBLIC_DOMAIN,
   GOOGLE_WEB_CLIENT_ID_ANDROID:
     extra.googleWebClientIdAndroid ??

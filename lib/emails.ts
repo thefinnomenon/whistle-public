@@ -1,9 +1,6 @@
 import { render } from '@react-email/render'
 import { ReactElement } from 'react'
 import { Resend } from 'resend'
-import { env } from './env'
-
-const resend = new Resend(env.RESEND_API_KEY)
 
 interface SendEmailOptions {
   to: string | string[]
@@ -16,9 +13,12 @@ export async function sendEmail({
   to,
   subject,
   react,
-  from = env.EMAIL_FROM,
+  from = process.env.EMAIL_FROM,
 }: SendEmailOptions) {
   try {
+    const apiKey = process.env.RESEND_API_KEY
+    if (!apiKey) throw new Error('RESEND_API_KEY is not set on the server')
+    const resend = new Resend(apiKey)
     const html = await render(react)
 
     if (!from) {
